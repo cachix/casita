@@ -48,6 +48,11 @@ impl MetadataReader {
         self.snapshot.roots().try_collect().await.app()
     }
 
+    /// List one named root and its descendants at this reader's revision.
+    pub async fn roots_under(&self, prefix: &RootName) -> Result<Vec<RootRecord>, Error> {
+        self.snapshot.roots_under(prefix).try_collect().await.app()
+    }
+
     /// Read a GC root at the same revision as this reader's application records.
     pub async fn root(&self, name: &RootName) -> Result<Option<ObjectKey>, Error> {
         self.snapshot.root(name).await.app()
@@ -176,6 +181,16 @@ impl RetainedReader {
     /// List roots from the same protected snapshot used for content opening.
     pub async fn roots(&self) -> Result<Vec<RootRecord>, Error> {
         self.hold.snapshot().roots().try_collect().await.app()
+    }
+
+    /// List one named root and its descendants from this protected snapshot.
+    pub async fn roots_under(&self, prefix: &RootName) -> Result<Vec<RootRecord>, Error> {
+        self.hold
+            .snapshot()
+            .roots_under(prefix)
+            .try_collect()
+            .await
+            .app()
     }
 
     /// Revision shared by metadata, root, and content lookups.
@@ -763,6 +778,11 @@ impl Repository {
     /// Use [`Self::retained_reader`] to keep selected content alive for later reads.
     pub async fn roots(&self) -> Result<Vec<RootRecord>, Error> {
         self.metadata_reader().await?.roots().await
+    }
+
+    /// List one named root and its descendants at a stable revision.
+    pub async fn roots_under(&self, prefix: &RootName) -> Result<Vec<RootRecord>, Error> {
+        self.metadata_reader().await?.roots_under(prefix).await
     }
 
     /// Unconditionally create or replace a name after verifying the target graph.

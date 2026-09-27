@@ -302,6 +302,11 @@ harness = false
 required-features = ["native", "experimental"]
 
 [[bench]]
+name = "root_prefix"
+harness = false
+required-features = ["native"]
+
+[[bench]]
 name = "overwrite_pages"
 harness = false
 required-features = ["native", "experimental"]

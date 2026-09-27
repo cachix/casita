@@ -137,7 +137,7 @@ def build_commands(selected, build_dir):
     for suite in selected:
         if suite == "core-primitives":
             names.update(CORE_BENCHES)
-        elif suite in {"online-holds", "retained-readers", "transfer-holds"}:
+        elif suite in {"online-holds", "retained-readers", "transfer-holds", "root-prefix"}:
             names.add(suite.replace("-", "_"))
         elif suite in SUITE_BUILD_SPECS:
             names.add(SUITE_BUILD_SPECS[suite].artifact_name)
@@ -149,7 +149,7 @@ def build_commands(selected, build_dir):
         names.add("casita-lib-test")
     prefix = ["cargo", "--config", f'build.build-dir="{build_dir}"']
     commands = []
-    benches = sorted(names & {*CORE_BENCHES, "gix_odb", "online_holds", "retained_readers", "transfer_holds"})
+    benches = sorted(names & {*CORE_BENCHES, "gix_odb", "online_holds", "retained_readers", "transfer_holds", "root_prefix"})
     examples = sorted(names - {*benches, "casita", "casita-lib-test"})
     if benches:
         commands.append(prefix + ["bench", "--all-features", "--no-run", "--message-format=json"] +
@@ -184,7 +184,7 @@ def build_binaries(output, build_dir, selected=None):
                     continue
                 target = artifact["target"]
                 name = "casita-lib-test" if target["kind"] == ["lib"] else target["name"]
-                if name not in {"casita", "casita-lib-test", *CORE_BENCHES, "online_holds", "retained_readers", "transfer_holds", "gix_odb", "pack_index_rustfs", "pack_gc_rustfs", "s3_path_transfer", "git_fetch_s3", "git_pack_cached", "pack_cache_network"}:
+                if name not in {"casita", "casita-lib-test", *CORE_BENCHES, "online_holds", "retained_readers", "transfer_holds", "root_prefix", "gix_odb", "pack_index_rustfs", "pack_gc_rustfs", "s3_path_transfer", "git_fetch_s3", "git_pack_cached", "pack_cache_network"}:
                     continue
                 path = destination / name
                 if name in artifacts:
@@ -405,6 +405,23 @@ def main(argv=None):
                             or any(row["correctness"] != "passed" for row in rows)):
                         raise common.BenchmarkError("transfer holds must pass all sixteen transport/scope/size/GC cases")
                 record.update(status="passed" if all(run["status"] == "passed" for run in runs) else "failed", runs=runs)
+                continue
+            if suite == "root-prefix":
+                environment = {**run_environment, "CASITA_BENCH_ROOT_PREFIX_ITERATIONS": "1" if args.profile == "smoke" else "5"}
+                runs, samples = [], []
+                for repetition in range(args.repetitions):
+                    log = output / f"root-prefix-{repetition}.log"
+                    run = execute([str(binary_dir / "root_prefix")], log, args.timeout, environment)
+                    runs.append(run)
+                    rows = [json.loads(line) for line in log.read_text().splitlines() if line.startswith("{")]
+                    expected = {(256, 255), (258, 257), (4097, 8), (4097, 257)}
+                    observed = {(row["total_roots"], row["matched_roots"]) for row in rows}
+                    if run["status"] == "passed" and (len(rows) != 4 or observed != expected
+                            or any(row["correctness"] != "passed" for row in rows)):
+                        raise common.BenchmarkError("root prefix must pass all four size and density cases")
+                    samples.extend({**row, "repetition": repetition} for row in rows)
+                record.update(status="passed" if all(run["status"] == "passed" for run in runs) else "failed", runs=runs)
+                save(output / "root-prefix.json", {"schema_version": 1, "samples": samples})
                 continue
             if suite == "retained-readers":
                 environment = {**run_environment, "CASITA_BENCH_RETAINED_ITERATIONS": "3" if args.profile == "smoke" else "30"}

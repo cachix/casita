@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use auto_impl::auto_impl;
+use futures::TryStreamExt;
 use futures::stream::{self, BoxStream};
 use imbl::{OrdMap, OrdSet};
 
@@ -507,6 +508,23 @@ pub trait MetadataSnapshot: Send + Sync {
 
     /// Stream every named root in name order.
     fn roots(&self) -> BoxStream<'static, Result<RootRecord, MetadataError>>;
+
+    /// Stream one root and its descendants in name order. Backends without a
+    /// range index can filter the complete root stream.
+    fn roots_under(
+        &self,
+        prefix: &RootName,
+    ) -> BoxStream<'static, Result<RootRecord, MetadataError>> {
+        let prefix = prefix.clone();
+        let mut roots = self.roots();
+        Box::pin(async_stream::try_stream! {
+            while let Some(root) = roots.try_next().await? {
+                if root.name().is_under(&prefix) {
+                    yield root;
+                }
+            }
+        })
+    }
 }
 
 /// Writes an edit returns for [`VerificationFacts::edit`]: the entry to store

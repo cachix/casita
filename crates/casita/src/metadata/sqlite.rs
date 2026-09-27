@@ -592,6 +592,57 @@ impl MetadataSnapshot for TursoSnapshot {
             }
         })
     }
+
+    fn roots_under(
+        &self,
+        prefix: &RootName,
+    ) -> BoxStream<'static, Result<RootRecord, MetadataError>> {
+        let snapshot = self.clone();
+        let prefix = prefix.clone();
+        Box::pin(async_stream::try_stream! {
+            if let Some(target) = snapshot.root(&prefix).await? {
+                yield RootRecord::new(prefix.clone(), target);
+            }
+            // Every descendant begins with a slash. The ASCII '0' is the
+            // exclusive upper bound regardless of the root name's UTF-8 text.
+            let lower = format!("{}/", prefix.as_str());
+            let upper = format!("{}0", prefix.as_str());
+            let mut after: Option<String> = None;
+            loop {
+                let start = after.clone().unwrap_or_else(|| lower.clone());
+                let upper = upper.clone();
+                let strict = after.is_some();
+                let roots = snapshot
+                    .read(move |connection| Box::pin(async move {
+                        let statement = if strict {
+                            "SELECT name, namespace, native_id FROM named_roots \
+                             WHERE name > ?1 AND name < ?2 ORDER BY name LIMIT 256"
+                        } else {
+                            "SELECT name, namespace, native_id FROM named_roots \
+                             WHERE name >= ?1 AND name < ?2 ORDER BY name LIMIT 256"
+                        };
+                        let mut rows = connection.prepare_cached(statement).await?.query([start, upper]).await?;
+                        let mut roots = Vec::new();
+                        while let Some(row) = rows.next().await? {
+                            let name: String = row.get(0)?;
+                            let name = RootName::try_from(name).map_err(|error| {
+                                MetadataError::Corruption(format!("invalid stored root name: {error}"))
+                            })?;
+                            roots.push(RootRecord::new(name, decode_key(row.get(1)?, row.get(2)?)?));
+                        }
+                        Ok(roots)
+                    }))
+                    .await?;
+                if roots.is_empty() {
+                    break;
+                }
+                after = roots.last().map(|root| root.name().as_str().to_owned());
+                for root in roots {
+                    yield root;
+                }
+            }
+        })
+    }
 }
 
 /// Locally verified facts in the shared repository database, beside the

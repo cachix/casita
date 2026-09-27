@@ -1314,6 +1314,22 @@
       ]
     },
     {
+      "id": "root-prefix",
+      "suite_id": "repository-e2e",
+      "title": "Indexed named-root prefix reads across page and density boundaries",
+      "kind": "command",
+      "target": [
+        "cargo",
+        "bench",
+        "--bench",
+        "root_prefix"
+      ],
+      "profiles": [
+        "smoke",
+        "standard"
+      ]
+    },
+    {
       "id": "retained-readers",
       "suite_id": "repository-e2e",
       "title": "Process-owned retained sessions versus durable holds, reader fanout and GC",

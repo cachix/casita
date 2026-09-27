@@ -2682,3 +2682,9 @@ runs retain their evidence and cannot be normalized as completed comparisons.
 
 See [the current-main comparison](reports/casitar-current-main-20260925/README.md)
 for exact source, binary, dependency, and result provenance.
+
+## Named-root prefix reads
+
+The [root-prefix](root-prefix.md) suite checks indexed named-root ranges at
+255 and 257 matches, plus sparse and dense prefixes in a 4,096-root store.
+It is registered in `manifest.json` and included in `benchmark all`.

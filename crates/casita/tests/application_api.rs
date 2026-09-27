@@ -15,6 +15,50 @@ fn name(value: &str) -> RootName {
     value.try_into().unwrap()
 }
 
+#[tokio::test]
+async fn root_prefix_reads_exact_descendants_and_retained_revision() {
+    let directory = tempfile::tempdir().unwrap();
+    for repository in [
+        Repository::memory().unwrap(),
+        Repository::local(directory.path()).await.unwrap(),
+    ] {
+        let target = repository
+            .import(casita::import::BlobImport::new(
+                &b"payload"[..],
+                name("payload"),
+            ))
+            .await
+            .unwrap();
+        let mut changes = vec![MetadataChange::SetRoot {
+            name: name("refs/开发"),
+            target: target.clone(),
+        }];
+        for index in 0..300 {
+            changes.push(MetadataChange::SetRoot {
+                name: name(&format!("refs/开发/{index:03}")),
+                target: target.clone(),
+            });
+        }
+        changes.push(MetadataChange::SetRoot {
+            name: name("refs/开发x/other"),
+            target: target.clone(),
+        });
+        repository.commit(Vec::new(), changes).await.unwrap();
+
+        let held = repository.retained_reader().await.unwrap();
+        let prefix = name("refs/开发");
+        let roots = held.roots_under(&prefix).await.unwrap();
+        assert_eq!(roots.len(), 301);
+        assert_eq!(roots.first().unwrap().name(), &prefix);
+        assert_eq!(roots.last().unwrap().name(), &name("refs/开发/299"));
+        assert_eq!(repository.roots_under(&prefix).await.unwrap(), roots);
+
+        repository.remove_root(&prefix, &target).await.unwrap();
+        assert_eq!(held.roots_under(&prefix).await.unwrap(), roots);
+        assert_eq!(repository.roots_under(&prefix).await.unwrap().len(), 300);
+    }
+}
+
 async fn flush_with_live_snapshot(repository: &Repository, local: bool) {
     let result = repository.flush().await;
     if local {
