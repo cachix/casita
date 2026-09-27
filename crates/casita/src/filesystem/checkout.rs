@@ -1,6 +1,5 @@
 //! Materialize a verified canonical directory graph on the filesystem.
 
-use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -193,12 +192,12 @@ impl CheckoutStage {
 
         for _ in 0..128 {
             let sequence = NEXT_CHECKOUT_STAGE.fetch_add(1, Ordering::Relaxed);
-            let mut name = OsString::from(".");
-            name.push(file_name);
-            name.push(format!(
-                ".casita-checkout-{}-{sequence}",
-                std::process::id()
-            ));
+            // Do not extend the destination's basename: it may already be
+            // near the filesystem's per-component length limit.
+            let name = format!(".casita-checkout-{}-{sequence}", std::process::id());
+            if file_name == std::ffi::OsStr::new(&name) {
+                continue;
+            }
             let temporary = parent.join(name);
             match tokio::fs::create_dir(&temporary).await {
                 Ok(()) => {
@@ -440,6 +439,46 @@ mod tests {
                 entries: BTreeMap::from([(root_id, root), (child_id, child)]),
             },
         )
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn checkout_accepts_a_long_destination_name() {
+        for existing in [false, true] {
+            let temporary = tempfile::tempdir().unwrap();
+            let destination = temporary.path().join("x".repeat(240));
+            // Establish that the destination name is valid on this filesystem.
+            std::fs::create_dir(&destination).unwrap();
+            if !existing {
+                std::fs::remove_dir(&destination).unwrap();
+            }
+            let child = Directory::new();
+            let child_id = child.digest();
+            let root = Directory::try_from_iter([(
+                PathComponent::try_from("nested").unwrap(),
+                Node::Directory {
+                    digest: child_id,
+                    size: 0,
+                },
+            )])
+            .unwrap();
+            let root_id = root.digest();
+            let directories = Directories {
+                entries: BTreeMap::from([(root_id, root), (child_id, child)]),
+            };
+
+            checkout(
+                &MemoryBlobStore::new(),
+                &directories,
+                &root_id,
+                &destination,
+            )
+            .await
+            .unwrap();
+
+            assert!(destination.join("nested").is_dir());
+            assert_eq!(std::fs::read_dir(temporary.path()).unwrap().count(), 1);
+        }
     }
 
     #[tokio::test]
