@@ -155,7 +155,7 @@ class AllSuiteTests(unittest.TestCase):
     def test_every_cargo_benchmark_has_a_registered_runner(self):
         cargo = tomllib.loads((cli.ROOT / "crates/casita/Cargo.toml").read_text())
         declared = {target["name"] for target in cargo["bench"]}
-        self.assertEqual(declared, set(runner.CORE_BENCHES) | {"gix_odb", "online_holds", "retained_readers", "transfer_holds"})
+        self.assertEqual(declared, set(runner.CORE_BENCHES) | {"gix_odb", "online_holds", "retained_readers", "transfer_holds", "root_prefix"})
         holds = next(entry for entry in cli.entrypoints() if entry["id"] == "online-holds")
         self.assertEqual(holds["target"][-2:], ["--bench", "online_holds"])
         core = next(entry for entry in cli.entrypoints() if entry["id"] == "core-primitives")
@@ -164,10 +164,10 @@ class AllSuiteTests(unittest.TestCase):
         self.assertEqual(selected, set(runner.CORE_BENCHES))
 
     def test_every_suite_has_a_bounded_configuration(self):
-        self.assertEqual(set(runner.SMOKE) | {"core-primitives", "online-holds", "retained-readers", "transfer-holds", "remote-pin-cost"}, {entry["id"] for entry in cli.entrypoints()})
+        self.assertEqual(set(runner.SMOKE) | {"core-primitives", "online-holds", "retained-readers", "transfer-holds", "remote-pin-cost", "root-prefix"}, {entry["id"] for entry in cli.entrypoints()})
         for entry in cli.entrypoints():
             identifier = entry["id"]
-            if identifier in {"core-primitives", "online-holds", "retained-readers", "transfer-holds", "remote-pin-cost"}:
+            if identifier in {"core-primitives", "online-holds", "retained-readers", "transfer-holds", "remote-pin-cost", "root-prefix"}:
                 continue
             args = runner.suite_arguments(identifier, pathlib.Path("/binaries"), "smoke", 1)
             module = importlib.import_module(entry["target"])
