@@ -473,33 +473,11 @@ where
             "only one HTTP/1.1 request line is accepted".into(),
         ));
     }
-    let mut content_length = None;
-    let mut expect_continue = false;
-    for line in lines.filter(|line| !line.is_empty()) {
-        let (name, value) = line
-            .split_once(':')
-            .ok_or_else(|| GitHttpError::InvalidRequest("malformed header".into()))?;
-        let value = value.trim();
-        if name.eq_ignore_ascii_case("content-length") {
-            if content_length.is_some() {
-                return Err(GitHttpError::InvalidRequest(
-                    "duplicate Content-Length".into(),
-                ));
-            }
-            content_length = Some(
-                value
-                    .parse::<usize>()
-                    .map_err(|_| GitHttpError::InvalidRequest("invalid Content-Length".into()))?,
-            );
-        } else if name.eq_ignore_ascii_case("transfer-encoding") {
-            return Err(GitHttpError::InvalidRequest(
-                "Transfer-Encoding is not supported".into(),
-            ));
-        } else if name.eq_ignore_ascii_case("expect") && value.eq_ignore_ascii_case("100-continue")
-        {
-            expect_continue = true;
-        }
-    }
+    let BodyHeaders {
+        framing,
+        coding,
+        expect_continue,
+    } = parse_body_headers(lines)?;
 
     if method == "GET" {
         let expected = format!("{route}/info/refs?service=git-upload-pack");
@@ -554,21 +532,33 @@ where
             status: 404,
         });
     }
-    let content_length = content_length
-        .ok_or_else(|| GitHttpError::InvalidRequest("POST requires Content-Length".into()))?;
-    if content_length > service.limits().max_request_bytes {
+    let max_request_bytes = service.limits().max_request_bytes;
+    let rejection = match (framing, coding) {
+        (BodyFraming::Missing, _) => {
+            return Err(GitHttpError::InvalidRequest(
+                "POST requires Content-Length or chunked Transfer-Encoding".into(),
+            ));
+        }
+        (BodyFraming::Unsupported, _) => Some((501, b"unsupported Transfer-Encoding\n".as_slice())),
+        (_, BodyCoding::Unsupported) => Some((415, b"unsupported Content-Encoding\n".as_slice())),
+        (BodyFraming::Length(length), _) if length > max_request_bytes => {
+            Some((413, b"upload-pack request too large\n".as_slice()))
+        }
+        _ => None,
+    };
+    if let Some((status, body)) = rejection {
         write_response(
             &mut stream,
-            413,
+            status,
             "text/plain; charset=utf-8",
-            b"upload-pack request too large\n",
+            body,
             options,
         )
         .await?;
         return Ok(ServedRequest {
             method,
             target,
-            status: 413,
+            status,
         });
     }
     if expect_continue {
@@ -579,15 +569,15 @@ where
         )
         .await?;
     }
-    let already = request.len() - header_end;
-    if already > content_length {
-        return Err(GitHttpError::InvalidRequest(
-            "request carries bytes beyond Content-Length".into(),
-        ));
-    }
-    let body_permits = u32::try_from(content_length)
+    // Only an identity body of declared length has a known size up front.
+    // Chunked or gzip bodies reserve the whole decoded limit instead.
+    let budget = match (framing, coding) {
+        (BodyFraming::Length(length), BodyCoding::Identity) => length,
+        _ => max_request_bytes,
+    };
+    let body_permits = u32::try_from(budget)
         .map_err(|_| GitHttpError::InvalidRequest("request body length exceeds u32".into()))?;
-    let _body_budget = timeout(options.request_body_timeout, async {
+    let received = timeout(options.request_body_timeout, async {
         let permit = if body_permits == 0 {
             None
         } else {
@@ -600,27 +590,57 @@ where
                     })?,
             )
         };
-        request.resize(header_end + content_length, 0);
-        let mut received = already;
-        while received < content_length {
-            let read = timeout(
-                options.idle_timeout,
-                stream.read(&mut request[header_end + received..header_end + content_length]),
-            )
-            .await
-            .map_err(|_| GitHttpError::Timeout(GitHttpTimeout::Idle))??;
-            if read == 0 {
-                return Err(GitHttpError::InvalidRequest(
-                    "connection ended before request body".into(),
-                ));
-            }
-            received += read;
-        }
-        Ok::<_, GitHttpError>(permit)
+        let body = read_request_body(
+            &mut stream,
+            &request[header_end..],
+            framing,
+            coding,
+            max_request_bytes,
+            options.idle_timeout,
+        )
+        .await?;
+        Ok::<_, BodyError>((permit, body))
     })
     .await
-    .map_err(|_| GitHttpError::Timeout(GitHttpTimeout::RequestBody))??;
-    match service.prepare_upload_pack(&request[header_end..]).await {
+    .map_err(|_| GitHttpError::Timeout(GitHttpTimeout::RequestBody))?;
+    let (_body_budget, body) = match received {
+        Ok(received) => received,
+        Err(BodyError::TooLarge) => {
+            write_response(
+                &mut stream,
+                413,
+                "text/plain; charset=utf-8",
+                b"upload-pack request too large\n",
+                options,
+            )
+            .await?;
+            return Ok(ServedRequest {
+                method,
+                target,
+                status: 413,
+            });
+        }
+        Err(BodyError::Http(error)) => return Err(error),
+    };
+    if body == b"0000" {
+        // Before streaming a request larger than `http.postBuffer`, Git
+        // probes the endpoint with a lone flush packet and expects the empty
+        // success that upload-pack gives a request without wants.
+        write_response(
+            &mut stream,
+            200,
+            "application/x-git-upload-pack-result",
+            b"",
+            options,
+        )
+        .await?;
+        return Ok(ServedRequest {
+            method,
+            target,
+            status: 200,
+        });
+    }
+    match service.prepare_upload_pack(&body).await {
         Ok(prepared) => {
             let pack_deadline = prepared
                 .done()
@@ -790,7 +810,9 @@ async fn write_response_header(
         403 => "Forbidden",
         404 => "Not Found",
         413 => "Content Too Large",
+        415 => "Unsupported Media Type",
         431 => "Request Header Fields Too Large",
+        501 => "Not Implemented",
         _ => "Internal Server Error",
     };
     let framing = content_length.map_or_else(
@@ -812,6 +834,670 @@ async fn write_all_timed(
         .await
         .map_err(|_| GitHttpError::Timeout(GitHttpTimeout::ResponseWrite))??;
     Ok(())
+}
+
+/// How the request headers delimit the message body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BodyFraming {
+    /// Neither Content-Length nor Transfer-Encoding was sent.
+    Missing,
+    /// Exactly this many raw bytes follow the headers.
+    Length(usize),
+    /// Exactly the `chunked` transfer coding.
+    Chunked,
+    /// Any other transfer coding list.
+    Unsupported,
+}
+
+/// Content coding applied to the upload-pack request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BodyCoding {
+    Identity,
+    Gzip,
+    Unsupported,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct BodyHeaders {
+    framing: BodyFraming,
+    coding: BodyCoding,
+    expect_continue: bool,
+}
+
+/// Interpret the header fields which govern body framing. Ambiguous framing
+/// fails the request outright, because a proxy in front of this listener may
+/// have delimited the body differently (request smuggling).
+fn parse_body_headers<'a>(
+    lines: impl Iterator<Item = &'a str>,
+) -> Result<BodyHeaders, GitHttpError> {
+    let mut content_length = None;
+    let mut transfer_encoding = None;
+    let mut content_encoding = None;
+    let mut expect_continue = false;
+    for line in lines.filter(|line| !line.is_empty()) {
+        let (name, value) = line
+            .split_once(':')
+            .ok_or_else(|| GitHttpError::InvalidRequest("malformed header".into()))?;
+        let value = value.trim();
+        if name.eq_ignore_ascii_case("content-length") {
+            if content_length.is_some() {
+                return Err(GitHttpError::InvalidRequest(
+                    "duplicate Content-Length".into(),
+                ));
+            }
+            if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(GitHttpError::InvalidRequest(
+                    "invalid Content-Length".into(),
+                ));
+            }
+            content_length = Some(
+                value
+                    .parse::<usize>()
+                    .map_err(|_| GitHttpError::InvalidRequest("invalid Content-Length".into()))?,
+            );
+        } else if name.eq_ignore_ascii_case("transfer-encoding") {
+            if transfer_encoding.is_some() {
+                return Err(GitHttpError::InvalidRequest(
+                    "duplicate Transfer-Encoding".into(),
+                ));
+            }
+            transfer_encoding = Some(value);
+        } else if name.eq_ignore_ascii_case("content-encoding") {
+            if content_encoding.is_some() {
+                return Err(GitHttpError::InvalidRequest(
+                    "duplicate Content-Encoding".into(),
+                ));
+            }
+            content_encoding = Some(value);
+        } else if name.eq_ignore_ascii_case("expect") && value.eq_ignore_ascii_case("100-continue")
+        {
+            expect_continue = true;
+        }
+    }
+    let framing = match (content_length, transfer_encoding) {
+        (Some(_), Some(_)) => {
+            return Err(GitHttpError::InvalidRequest(
+                "Content-Length and Transfer-Encoding are mutually exclusive".into(),
+            ));
+        }
+        (Some(length), None) => BodyFraming::Length(length),
+        (None, Some(coding)) if coding.eq_ignore_ascii_case("chunked") => BodyFraming::Chunked,
+        (None, Some(_)) => BodyFraming::Unsupported,
+        (None, None) => BodyFraming::Missing,
+    };
+    let coding = match content_encoding {
+        None => BodyCoding::Identity,
+        Some(coding) if coding.eq_ignore_ascii_case("identity") => BodyCoding::Identity,
+        Some(coding)
+            if coding.eq_ignore_ascii_case("gzip") || coding.eq_ignore_ascii_case("x-gzip") =>
+        {
+            BodyCoding::Gzip
+        }
+        Some(_) => BodyCoding::Unsupported,
+    };
+    Ok(BodyHeaders {
+        framing,
+        coding,
+        expect_continue,
+    })
+}
+
+const BODY_READ_BYTES: usize = 64 * 1024;
+const MAX_CHUNK_SIZE_DIGITS: usize = 16;
+
+#[derive(Debug)]
+enum BodyError {
+    /// The raw or decoded body exceeds the request limit.
+    TooLarge,
+    Http(GitHttpError),
+}
+
+impl From<GitHttpError> for BodyError {
+    fn from(error: GitHttpError) -> Self {
+        Self::Http(error)
+    }
+}
+
+impl From<std::io::Error> for BodyError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Http(GitHttpError::Io(error))
+    }
+}
+
+fn invalid_body(message: &str) -> BodyError {
+    BodyError::Http(GitHttpError::InvalidRequest(message.into()))
+}
+
+/// Decoded request body which refuses to grow past its limit.
+struct BoundedBody {
+    bytes: Vec<u8>,
+    limit: usize,
+    exceeded: bool,
+}
+
+impl std::io::Write for BoundedBody {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if buf.len() > self.limit - self.bytes.len() {
+            self.exceeded = true;
+            return Err(std::io::Error::other("request body exceeds limit"));
+        }
+        self.bytes.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Streaming content decoder. Gzip output is bounded as it is inflated, so a
+/// small compressed body cannot expand past the request limit in memory.
+enum BodyDecoder {
+    Identity(BoundedBody),
+    Gzip(Box<flate2::write::GzDecoder<BoundedBody>>),
+}
+
+impl BodyDecoder {
+    fn new(coding: BodyCoding, limit: usize, capacity: usize) -> Result<Self, BodyError> {
+        let body = BoundedBody {
+            bytes: Vec::with_capacity(capacity.min(limit)),
+            limit,
+            exceeded: false,
+        };
+        match coding {
+            BodyCoding::Identity => Ok(Self::Identity(body)),
+            BodyCoding::Gzip => Ok(Self::Gzip(Box::new(flate2::write::GzDecoder::new(body)))),
+            BodyCoding::Unsupported => Err(invalid_body("unsupported Content-Encoding")),
+        }
+    }
+
+    fn write(&mut self, bytes: &[u8]) -> Result<(), BodyError> {
+        use std::io::Write;
+        let result = match self {
+            Self::Identity(body) => body.write_all(bytes),
+            Self::Gzip(decoder) => decoder.write_all(bytes),
+        };
+        result.map_err(|_| self.error())
+    }
+
+    fn finish(self) -> Result<Vec<u8>, BodyError> {
+        match self {
+            Self::Identity(body) => Ok(body.bytes),
+            Self::Gzip(mut decoder) => {
+                if decoder.try_finish().is_err() {
+                    return Err(Self::Gzip(decoder).error());
+                }
+                Ok(std::mem::take(&mut decoder.get_mut().bytes))
+            }
+        }
+    }
+
+    fn error(&self) -> BodyError {
+        let exceeded = match self {
+            Self::Identity(body) => body.exceeded,
+            Self::Gzip(decoder) => decoder.get_ref().exceeded,
+        };
+        if exceeded {
+            BodyError::TooLarge
+        } else {
+            invalid_body("invalid gzip request body")
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChunkState {
+    Size,
+    Data(u64),
+    DataCr,
+    DataLf,
+    LastCr,
+    LastLf,
+    Done,
+}
+
+/// Strict `chunked` transfer decoder: hexadecimal sizes of at most sixteen
+/// digits, no chunk extensions, no trailer fields, and CRLF line endings.
+struct ChunkedDecoder {
+    state: ChunkState,
+    size_line: Vec<u8>,
+}
+
+impl ChunkedDecoder {
+    fn new() -> Self {
+        Self {
+            state: ChunkState::Size,
+            size_line: Vec::with_capacity(MAX_CHUNK_SIZE_DIGITS + 1),
+        }
+    }
+
+    fn done(&self) -> bool {
+        self.state == ChunkState::Done
+    }
+
+    /// Feed raw bytes and return how many belong to the chunked body.
+    fn feed(&mut self, input: &[u8], output: &mut BodyDecoder) -> Result<usize, BodyError> {
+        let mut consumed = 0;
+        while consumed < input.len() {
+            let byte = input[consumed];
+            self.state = match self.state {
+                ChunkState::Done => break,
+                ChunkState::Size => {
+                    consumed += 1;
+                    if byte == b'\n' {
+                        let size = self.parse_size()?;
+                        if size == 0 {
+                            ChunkState::LastCr
+                        } else {
+                            ChunkState::Data(size)
+                        }
+                    } else if self.size_line.len() > MAX_CHUNK_SIZE_DIGITS {
+                        return Err(invalid_body("invalid chunk size"));
+                    } else {
+                        self.size_line.push(byte);
+                        ChunkState::Size
+                    }
+                }
+                ChunkState::Data(remaining) => {
+                    let available = input.len() - consumed;
+                    let take = usize::try_from(remaining)
+                        .map_or(available, |remaining| remaining.min(available));
+                    output.write(&input[consumed..consumed + take])?;
+                    consumed += take;
+                    let remaining = remaining - take as u64;
+                    if remaining == 0 {
+                        ChunkState::DataCr
+                    } else {
+                        ChunkState::Data(remaining)
+                    }
+                }
+                ChunkState::DataCr | ChunkState::LastCr if byte != b'\r' => {
+                    return Err(invalid_body("chunk is not terminated by CRLF"));
+                }
+                ChunkState::DataLf | ChunkState::LastLf if byte != b'\n' => {
+                    return Err(invalid_body("chunk is not terminated by CRLF"));
+                }
+                ChunkState::DataCr => {
+                    consumed += 1;
+                    ChunkState::DataLf
+                }
+                ChunkState::DataLf => {
+                    consumed += 1;
+                    ChunkState::Size
+                }
+                ChunkState::LastCr => {
+                    consumed += 1;
+                    ChunkState::LastLf
+                }
+                ChunkState::LastLf => {
+                    consumed += 1;
+                    ChunkState::Done
+                }
+            };
+        }
+        Ok(consumed)
+    }
+
+    fn parse_size(&mut self) -> Result<u64, BodyError> {
+        let digits = self
+            .size_line
+            .strip_suffix(b"\r")
+            .filter(|digits| {
+                !digits.is_empty()
+                    && digits.len() <= MAX_CHUNK_SIZE_DIGITS
+                    && digits.iter().all(u8::is_ascii_hexdigit)
+            })
+            .ok_or_else(|| invalid_body("invalid chunk size"))?;
+        let size = digits.iter().fold(0u64, |size, digit| {
+            (size << 4) | u64::from(char::from(*digit).to_digit(16).unwrap_or_default())
+        });
+        self.size_line.clear();
+        Ok(size)
+    }
+}
+
+/// Read and decode one request body. `received` holds the body bytes which
+/// arrived with the headers. Both the raw bytes after the headers and the
+/// decoded body are held to `limit`.
+async fn read_request_body<R>(
+    stream: &mut R,
+    received: &[u8],
+    framing: BodyFraming,
+    coding: BodyCoding,
+    limit: usize,
+    idle_timeout: Duration,
+) -> Result<Vec<u8>, BodyError>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut read_timed = async |buffer: &mut [u8]| {
+        let read = timeout(idle_timeout, stream.read(buffer))
+            .await
+            .map_err(|_| GitHttpError::Timeout(GitHttpTimeout::Idle))??;
+        if read == 0 {
+            return Err(invalid_body("connection ended before request body"));
+        }
+        Ok::<_, BodyError>(read)
+    };
+    match framing {
+        BodyFraming::Length(length) => {
+            if length > limit {
+                return Err(BodyError::TooLarge);
+            }
+            if received.len() > length {
+                return Err(invalid_body("request carries bytes beyond Content-Length"));
+            }
+            let capacity = if coding == BodyCoding::Identity {
+                length
+            } else {
+                0
+            };
+            let mut decoder = BodyDecoder::new(coding, limit, capacity)?;
+            decoder.write(received)?;
+            let mut remaining = length - received.len();
+            let mut buffer = vec![0u8; remaining.min(BODY_READ_BYTES)];
+            while remaining > 0 {
+                let window = remaining.min(buffer.len());
+                let read = read_timed(&mut buffer[..window]).await?;
+                decoder.write(&buffer[..read])?;
+                remaining -= read;
+            }
+            decoder.finish()
+        }
+        BodyFraming::Chunked => {
+            if received.len() > limit {
+                return Err(BodyError::TooLarge);
+            }
+            let mut decoder = BodyDecoder::new(coding, limit, 0)?;
+            let mut chunked = ChunkedDecoder::new();
+            let mut raw = received.len();
+            let mut surplus = received.len() - chunked.feed(received, &mut decoder)?;
+            let mut buffer = vec![0u8; BODY_READ_BYTES];
+            while !chunked.done() {
+                let read = read_timed(&mut buffer).await?;
+                raw += read;
+                if raw > limit {
+                    return Err(BodyError::TooLarge);
+                }
+                surplus = read - chunked.feed(&buffer[..read], &mut decoder)?;
+            }
+            if surplus > 0 {
+                return Err(invalid_body(
+                    "request carries bytes beyond the chunked body",
+                ));
+            }
+            decoder.finish()
+        }
+        BodyFraming::Missing | BodyFraming::Unsupported => {
+            Err(invalid_body("request body framing is not supported"))
+        }
+    }
+}
+
+#[cfg(test)]
+mod body_tests {
+    use std::io::Write;
+
+    use super::*;
+
+    const LIMIT: usize = 64 * 1024;
+
+    fn headers(fields: &[&str]) -> Result<BodyHeaders, GitHttpError> {
+        parse_body_headers(fields.iter().copied())
+    }
+
+    fn gzip(bytes: &[u8]) -> Vec<u8> {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn chunked(bytes: &[u8], chunk: usize) -> Vec<u8> {
+        let mut framed = Vec::new();
+        for part in bytes.chunks(chunk) {
+            framed.extend_from_slice(format!("{:x}\r\n", part.len()).as_bytes());
+            framed.extend_from_slice(part);
+            framed.extend_from_slice(b"\r\n");
+        }
+        framed.extend_from_slice(b"0\r\n\r\n");
+        framed
+    }
+
+    fn payload() -> Vec<u8> {
+        (0..10_000u32)
+            .flat_map(|value| value.to_le_bytes())
+            .collect()
+    }
+
+    /// Deliver `raw` split between bytes that arrived with the headers and
+    /// bytes still waiting on the socket.
+    async fn read(
+        raw: &[u8],
+        split: usize,
+        framing: BodyFraming,
+        coding: BodyCoding,
+    ) -> Result<Vec<u8>, BodyError> {
+        let (received, mut rest) = raw.split_at(split.min(raw.len()));
+        read_request_body(
+            &mut rest,
+            received,
+            framing,
+            coding,
+            LIMIT,
+            Duration::from_secs(60),
+        )
+        .await
+    }
+
+    fn assert_invalid(result: Result<Vec<u8>, BodyError>) {
+        assert!(
+            matches!(
+                result,
+                Err(BodyError::Http(GitHttpError::InvalidRequest(_)))
+            ),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn header_framing_and_coding_are_recognised() {
+        assert_eq!(
+            headers(&["Content-Length: 12", "Content-Encoding: gzip"]).unwrap(),
+            BodyHeaders {
+                framing: BodyFraming::Length(12),
+                coding: BodyCoding::Gzip,
+                expect_continue: false,
+            }
+        );
+        assert_eq!(
+            headers(&["Transfer-Encoding: Chunked", "Expect: 100-continue"]).unwrap(),
+            BodyHeaders {
+                framing: BodyFraming::Chunked,
+                coding: BodyCoding::Identity,
+                expect_continue: true,
+            }
+        );
+        let parsed = headers(&["Transfer-Encoding: gzip, chunked"]).unwrap();
+        assert_eq!(parsed.framing, BodyFraming::Unsupported);
+        let parsed = headers(&["Content-Length: 1", "Content-Encoding: br"]).unwrap();
+        assert_eq!(parsed.coding, BodyCoding::Unsupported);
+        let parsed = headers(&["Content-Length: 1", "Content-Encoding: gzip, gzip"]).unwrap();
+        assert_eq!(parsed.coding, BodyCoding::Unsupported);
+        assert_eq!(headers(&[]).unwrap().framing, BodyFraming::Missing);
+    }
+
+    #[test]
+    fn ambiguous_framing_headers_are_rejected() {
+        for fields in [
+            &["Content-Length: 4", "Transfer-Encoding: chunked"][..],
+            &["Transfer-Encoding: chunked", "Content-Length: 4"],
+            &["Transfer-Encoding: chunked", "Transfer-Encoding: chunked"],
+            &["Content-Length: 4", "Content-Length: 4"],
+            &["Content-Length: +4"],
+            &["Content-Length: 4, 4"],
+            &["Content-Length:"],
+            &["Content-Encoding: gzip", "Content-Encoding: gzip"],
+        ] {
+            assert!(
+                matches!(headers(fields), Err(GitHttpError::InvalidRequest(_))),
+                "{fields:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn gzip_length_body_is_decoded() {
+        let payload = payload();
+        let raw = gzip(&payload);
+        for split in [0, 7, raw.len()] {
+            let body = read(
+                &raw,
+                split,
+                BodyFraming::Length(raw.len()),
+                BodyCoding::Gzip,
+            )
+            .await
+            .unwrap();
+            assert_eq!(body, payload);
+        }
+    }
+
+    #[tokio::test]
+    async fn chunked_body_is_decoded() {
+        let payload = payload();
+        for chunk in [64, 1000, payload.len()] {
+            let raw = chunked(&payload, chunk);
+            for split in [0, 3, raw.len()] {
+                let body = read(&raw, split, BodyFraming::Chunked, BodyCoding::Identity)
+                    .await
+                    .unwrap();
+                assert_eq!(body, payload);
+            }
+        }
+        let empty = read(b"0\r\n\r\n", 0, BodyFraming::Chunked, BodyCoding::Identity)
+            .await
+            .unwrap();
+        assert!(empty.is_empty());
+        let uppercase = read(
+            b"00A\r\n0123456789\r\n0\r\n\r\n",
+            0,
+            BodyFraming::Chunked,
+            BodyCoding::Identity,
+        )
+        .await
+        .unwrap();
+        assert_eq!(uppercase, b"0123456789");
+    }
+
+    #[tokio::test]
+    async fn chunked_gzip_body_is_decoded() {
+        let payload = payload();
+        let raw = chunked(&gzip(&payload), 333);
+        let body = read(&raw, 10, BodyFraming::Chunked, BodyCoding::Gzip)
+            .await
+            .unwrap();
+        assert_eq!(body, payload);
+    }
+
+    #[tokio::test]
+    async fn gzip_bomb_is_rejected_at_the_decoded_limit() {
+        let bomb = gzip(&vec![0u8; 64 * LIMIT]);
+        assert!(bomb.len() < LIMIT / 8, "the bomb must be small on the wire");
+        let result = read(&bomb, 0, BodyFraming::Length(bomb.len()), BodyCoding::Gzip).await;
+        assert!(matches!(result, Err(BodyError::TooLarge)), "{result:?}");
+        let raw = chunked(&bomb, 4096);
+        let result = read(&raw, 0, BodyFraming::Chunked, BodyCoding::Gzip).await;
+        assert!(matches!(result, Err(BodyError::TooLarge)), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn limits_include_their_boundary() {
+        let raw = gzip(&vec![7u8; LIMIT]);
+        let body = read(&raw, 0, BodyFraming::Length(raw.len()), BodyCoding::Gzip)
+            .await
+            .unwrap();
+        assert_eq!(body.len(), LIMIT);
+        let raw = gzip(&vec![7u8; LIMIT + 1]);
+        let result = read(&raw, 0, BodyFraming::Length(raw.len()), BodyCoding::Gzip).await;
+        assert!(matches!(result, Err(BodyError::TooLarge)), "{result:?}");
+
+        // One chunk of four hex digits adds thirteen framing bytes, which
+        // count against the raw limit.
+        let payload = vec![7u8; LIMIT - 13];
+        let raw = chunked(&payload, LIMIT);
+        assert_eq!(raw.len(), LIMIT);
+        let body = read(&raw, 0, BodyFraming::Chunked, BodyCoding::Identity)
+            .await
+            .unwrap();
+        assert_eq!(body, payload);
+        let raw = chunked(&vec![7u8; LIMIT - 12], LIMIT);
+        let result = read(&raw, 0, BodyFraming::Chunked, BodyCoding::Identity).await;
+        assert!(matches!(result, Err(BodyError::TooLarge)), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn oversized_raw_chunked_stream_is_rejected() {
+        // One byte chunks carry five framing bytes each, so the raw limit
+        // stops this stream long before the decoded body reaches it.
+        let mut raw = Vec::new();
+        while raw.len() <= LIMIT {
+            raw.extend_from_slice(b"1\r\na\r\n");
+        }
+        let result = read(&raw, 0, BodyFraming::Chunked, BodyCoding::Identity).await;
+        assert!(matches!(result, Err(BodyError::TooLarge)), "{result:?}");
+        let result = read(
+            &[0u8; 16],
+            0,
+            BodyFraming::Length(LIMIT + 1),
+            BodyCoding::Identity,
+        )
+        .await;
+        assert!(matches!(result, Err(BodyError::TooLarge)), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn malformed_chunked_framing_is_rejected() {
+        for raw in [
+            &b"\r\n"[..],
+            b"g\r\nx\r\n0\r\n\r\n",
+            b"1 \r\nx\r\n0\r\n\r\n",
+            b" 1\r\nx\r\n0\r\n\r\n",
+            b"+1\r\nx\r\n0\r\n\r\n",
+            b"-1\r\nx\r\n0\r\n\r\n",
+            b"0x1\r\nx\r\n0\r\n\r\n",
+            b"1;name=value\r\nx\r\n0\r\n\r\n",
+            b"1\nx\r\n0\r\n\r\n",
+            b"00000000000000001\r\nx\r\n0\r\n\r\n",
+            b"ffffffffffffffffff\r\n",
+            b"1\r\nxy\r\n0\r\n\r\n",
+            b"1\r\nx\n0\r\n\r\n",
+            b"1\r\nx\r\n0\r\nTrailer: value\r\n\r\n",
+            b"1\r\nx\r\n0\r\n\n",
+            b"1\r\nx\r\n0\r\n\r\nextra",
+            b"1\r\nx\r\n",
+            b"5\r\nabc",
+        ] {
+            for split in [0, raw.len()] {
+                assert_invalid(read(raw, split, BodyFraming::Chunked, BodyCoding::Identity).await);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_gzip_is_rejected() {
+        let payload = payload();
+        let valid = gzip(&payload);
+        let truncated = &valid[..valid.len() - 4];
+        let mut trailing = valid.clone();
+        trailing.extend_from_slice(b"0000");
+        let mut corrupt_crc = valid.clone();
+        let crc = corrupt_crc.len() - 8;
+        corrupt_crc[crc] ^= 1;
+        for raw in [&b""[..], b"0000", truncated, &trailing, &corrupt_crc] {
+            assert_invalid(read(raw, 0, BodyFraming::Length(raw.len()), BodyCoding::Gzip).await);
+        }
+        assert_invalid(read(b"0000", 4, BodyFraming::Length(2), BodyCoding::Identity).await);
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -1190,6 +1876,174 @@ mod tests {
         );
         let format = git(&checkout, &["rev-parse", "--show-object-format"]);
         assert_eq!(String::from_utf8_lossy(&format.stdout).trim(), "sha256");
+    }
+
+    /// Stock Git gzips upload-pack bodies above 1 KiB and streams them with
+    /// chunked framing once they exceed `http.postBuffer`, which Git never
+    /// lowers below one 64 KiB packet. Many advertised branches produce one
+    /// want line each, so fetching a subset exercises gzip and a full clone
+    /// with the smallest post buffer exercises chunked framing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unmodified_git_client_sends_gzip_and_chunked_request_bodies() {
+        const BRANCHES: usize = 1_500;
+        let git = |directory: &std::path::Path, args: &[&str], input: Option<&[u8]>| {
+            let mut child = Command::new("git")
+                .current_dir(directory)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .args(args)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            let mut stdin = child.stdin.take().unwrap();
+            if let Some(input) = input {
+                std::io::Write::write_all(&mut stdin, input).unwrap();
+            }
+            drop(stdin);
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            output
+        };
+        let source = tempfile::tempdir().unwrap();
+        git(source.path(), &["init", "-q", "-b", "main"], None);
+        let mut stream = String::new();
+        for index in 0..BRANCHES {
+            let content = format!("{index}\n");
+            stream.push_str(&format!(
+                "commit refs/heads/b{index:04}\nmark :{}\ncommitter test <test@example.com> 0 +0000\ndata 1\nx\n",
+                index + 1
+            ));
+            if index > 0 {
+                stream.push_str(&format!("from :{index}\n"));
+            }
+            stream.push_str(&format!(
+                "M 644 inline file\ndata {}\n{content}\n",
+                content.len()
+            ));
+        }
+        stream.push_str(&format!("reset refs/heads/main\nfrom :{BRANCHES}\n\n"));
+        git(
+            source.path(),
+            &["fast-import", "--quiet"],
+            Some(stream.as_bytes()),
+        );
+
+        let repository = Repository::memory().unwrap();
+        repository
+            .import_native_git_view(
+                source.path(),
+                &NativeGitImportOptions {
+                    view_name: "branches".into(),
+                    refs: Vec::new(),
+                    ..NativeGitImportOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+        let service = GitFetchService::bind(&repository, "branches", GitFetchLimits::default())
+            .await
+            .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(serve_git_smart_http(
+            listener,
+            "/branches.git".into(),
+            service,
+        ));
+        let url = format!("http://{address}/branches.git");
+
+        // One hundred wants encode to about 5 KiB: gzip with Content-Length.
+        let client = tempfile::tempdir().unwrap();
+        git(client.path(), &["init", "-q", "--bare"], None);
+        git(
+            client.path(),
+            &[
+                "fetch",
+                "--quiet",
+                &url,
+                "+refs/heads/b00*:refs/remotes/origin/b00*",
+            ],
+            None,
+        );
+        let fetched = git(
+            client.path(),
+            &[
+                "for-each-ref",
+                "--format=%(refname)",
+                "refs/remotes/origin/",
+            ],
+            None,
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&fetched.stdout).lines().count(),
+            100
+        );
+
+        // Every branch as a want encodes to about 75 KiB, which exceeds the
+        // smallest post buffer Git accepts: chunked framing without gzip.
+        let checkout_parent = tempfile::tempdir().unwrap();
+        let checkout = checkout_parent.path().join("clone");
+        git(
+            checkout_parent.path(),
+            &[
+                "-c",
+                "http.postBuffer=1024",
+                "clone",
+                "--quiet",
+                "--mirror",
+                &url,
+                checkout.to_str().unwrap(),
+            ],
+            None,
+        );
+
+        // Unsupported codings are refused before any body byte is read, and
+        // the lone flush probe Git sends ahead of a chunked request succeeds.
+        for (headers, body, status) in [
+            ("Content-Length: 0\r\nContent-Encoding: br\r\n", "", "415"),
+            ("Transfer-Encoding: gzip\r\n", "", "501"),
+            ("Content-Length: 4\r\n", "0000", "200"),
+        ] {
+            let mut connection = TcpStream::connect(address).await.unwrap();
+            connection
+                .write_all(
+                    format!(
+                        "POST /branches.git/git-upload-pack HTTP/1.1\r\nHost: test\r\n{headers}\r\n{body}"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let mut response = Vec::new();
+            connection.read_to_end(&mut response).await.unwrap();
+            let response = String::from_utf8_lossy(&response);
+            assert!(
+                response.starts_with(&format!("HTTP/1.1 {status} ")),
+                "{headers:?}: {response}"
+            );
+        }
+        server.abort();
+        let _ = server.await;
+        let cloned = git(
+            &checkout,
+            &["for-each-ref", "--format=%(refname)", "refs/heads/"],
+            None,
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&cloned.stdout).lines().count(),
+            BRANCHES + 1
+        );
+        git(
+            &checkout,
+            &["fsck", "--full", "--strict", "--no-progress"],
+            None,
+        );
     }
 
     /// Exercise the full smart-HTTP update path at the scale which exposed
