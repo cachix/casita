@@ -524,12 +524,22 @@ where
             .open_payload(&key)
             .await?
             .ok_or_else(|| RepositoryError::Absent(key.to_string()))?;
+        // Read one byte past the bound so an oversize target is refused
+        // rather than silently cut to a different, valid looking link.
         let mut bytes = Vec::new();
         reader
-            .take(4096)
+            .take(crate::path::MAX_TARGET_LEN as u64 + 1)
             .read_to_end(&mut bytes)
             .await
             .map_err(RepositoryError::Io)?;
+        if bytes.len() > crate::path::MAX_TARGET_LEN {
+            return Err(RepositoryError::LimitExceeded(format!(
+                "Git symlink target at {} exceeds {} bytes",
+                path.display(),
+                crate::path::MAX_TARGET_LEN
+            ))
+            .into());
+        }
         let link = crate::SymlinkTarget::try_from(bytes::Bytes::from(bytes))
             .map_err(|error| RepositoryError::InvalidInput(error.to_string()))?;
         create_git_symlink(&target, &link, &path).await?;
@@ -1603,6 +1613,67 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(directory_names(&target), vec![".gitignore", ".gitmodules"]);
+    }
+
+    #[tokio::test]
+    async fn git_checkout_refuses_oversize_symlink_targets() {
+        let repository =
+            Repository::new(MemoryBlobStore::new(), MemoryMetadataStore::new().unwrap());
+        let blob_key = |body: &[u8]| {
+            git_object_key_for_body(GitObjectFormat::Sha1, GitObjectKind::Blob, body).unwrap()
+        };
+        let largest = vec![b'x'; crate::path::MAX_TARGET_LEN];
+        let oversize = vec![b'x'; crate::path::MAX_TARGET_LEN + 1];
+        let file = b"data".to_vec();
+        // The regular file is written before any symlink, so the refusal
+        // happens after checkout has already produced content.
+        let rejected = git_tree_body(&[
+            ("100644", b"a", &blob_key(&file)),
+            ("120000", b"link", &blob_key(&oversize)),
+        ]);
+        let accepted = git_tree_body(&[("120000", b"link", &blob_key(&largest))]);
+        let keys = stage_git_objects(
+            &repository,
+            &[
+                (GitObjectKind::Blob, file),
+                (GitObjectKind::Blob, largest.clone()),
+                (GitObjectKind::Blob, oversize),
+                (GitObjectKind::Tree, rejected),
+                (GitObjectKind::Tree, accepted),
+            ],
+        )
+        .await;
+
+        let parent = tempfile::tempdir().unwrap();
+        let target = parent.path().join("rejected");
+        let error = checkout_git_tree(&repository, &keys[3], &target, GitlinkCheckoutPolicy::Skip)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                GitViewError::Repository(RepositoryError::LimitExceeded(_))
+            ),
+            "{error}"
+        );
+        assert!(!target.exists());
+        assert!(directory_names(parent.path()).is_empty());
+
+        // Linux accepts a target of exactly the stored bound; other platforms
+        // may have a shorter native limit or need privileges for links.
+        #[cfg(target_os = "linux")]
+        {
+            let target = parent.path().join("accepted");
+            checkout_git_tree(&repository, &keys[4], &target, GitlinkCheckoutPolicy::Skip)
+                .await
+                .unwrap();
+            assert_eq!(
+                std::fs::read_link(target.join("link")).unwrap(),
+                std::path::PathBuf::from(String::from_utf8(largest).unwrap())
+            );
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = largest;
     }
 
     #[cfg(all(feature = "git", unix))]
