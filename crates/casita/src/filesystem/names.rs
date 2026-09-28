@@ -86,6 +86,30 @@ pub(crate) fn check_windows_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate stored name bytes materialized below `directory` on Windows,
+/// returning the name as text.
+#[cfg(windows)]
+pub(crate) fn check_windows_stored_name<'a>(
+    name: &'a [u8],
+    directory: &std::path::Path,
+) -> Result<&'a str, Error> {
+    let name = std::str::from_utf8(name).map_err(|_| -> Error {
+        format!(
+            "stored name {} is not valid UTF-8, which Windows cannot materialize",
+            bstr::BStr::new(name)
+        )
+        .into()
+    })?;
+    check_windows_name(name).map_err(|reason| -> Error {
+        format!(
+            "cannot materialize `{name}` under {}: {reason}",
+            directory.display()
+        )
+        .into()
+    })?;
+    Ok(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

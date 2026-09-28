@@ -14,6 +14,7 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::RwLock;
 
 use crate::BlobStore;
+use crate::filesystem::checkout::{CheckoutStage, checkout_path_error};
 use crate::git::{GIT_VIEW_NAMESPACE, GitError, GitObjectFormat, GitViewBody, git_key_parts};
 use crate::metadata::MetadataStore;
 use crate::object::{ObjectKey, RepositoryRevision, RootName};
@@ -380,7 +381,7 @@ where
     PS: BlobStore,
     SS: MetadataStore,
 {
-    use crate::git::{GitObjectKind, GitTreeMode, git_object_key, parse_git_tree};
+    use crate::git::GitObjectKind;
 
     let (format, kind, _) = git_key_parts(tree)?;
     if kind != GitObjectKind::Tree {
@@ -399,20 +400,43 @@ where
             .into());
         }
     }
+    // Staged exactly like the canonical checkout: the tree is written into a
+    // fresh sibling and renamed into place only once complete, so a failure
+    // leaves the target as it was.
+    let stage = CheckoutStage::create(target.as_ref())
+        .await
+        .map_err(RepositoryError::Payload)?;
+    checkout_git_tree_staged(repository, &hold, format, tree, stage.path(), gitlinks).await?;
+    stage
+        .publish()
+        .await
+        .map_err(|error| RepositoryError::Payload(error.into()))?
+        .map_err(RepositoryError::Payload)?;
+    Ok(())
+}
+
+/// Materialize one verified Git tree below an already created staging root.
+/// [`CheckoutStage`] owns cleanup until its caller publishes it.
+async fn checkout_git_tree_staged<PS, SS>(
+    repository: &Repository<PS, SS>,
+    hold: &crate::RetentionHold<'_, PS, SS>,
+    format: GitObjectFormat,
+    tree: &ObjectKey,
+    staging: &std::path::Path,
+    gitlinks: GitlinkCheckoutPolicy,
+) -> Result<(), GitViewError>
+where
+    PS: BlobStore,
+    SS: MetadataStore,
+{
+    use crate::git::{GitObjectKind, GitTreeMode, git_object_key, parse_git_tree};
+
     // Handle-rooted, like the canonical checkout: every write below resolves
     // against this handle, so a swapped component cannot redirect it out of the
     // selected tree.
-    let target = crate::filesystem::root::FsRoot::open_write(target)
+    let target = crate::filesystem::root::FsRoot::open_write(staging)
         .await
         .map_err(RepositoryError::Payload)?;
-    if !target.is_empty().await.map_err(RepositoryError::Payload)? {
-        return Err(
-            RepositoryError::Payload(crate::error::Error::TargetNotEmpty {
-                path: target.path().to_path_buf(),
-            })
-            .into(),
-        );
-    }
 
     let mut pending = vec![(tree.clone(), std::path::PathBuf::new())];
     let mut files = Vec::new();
@@ -438,25 +462,15 @@ where
             let component = crate::filesystem::names::os_str_from_bytes(&entry.name)
                 .map_err(RepositoryError::Payload)?;
             #[cfg(windows)]
-            {
-                let name = std::str::from_utf8(&entry.name).map_err(|_| {
-                    RepositoryError::InvalidInput(
-                        "Git tree name is not UTF-8 on this platform".into(),
-                    )
-                })?;
-                crate::filesystem::names::check_windows_name(name).map_err(|reason| {
-                    RepositoryError::InvalidInput(format!(
-                        "cannot materialize Git name `{name}`: {reason}"
-                    ))
-                })?;
-            }
+            crate::filesystem::names::check_windows_stored_name(&entry.name, &directory_path)
+                .map_err(|error| RepositoryError::InvalidInput(error.to_string()))?;
             let path = directory_path.join(component);
             match entry.mode {
                 GitTreeMode::Tree => {
                     target
                         .create_dir(&path)
                         .await
-                        .map_err(RepositoryError::Payload)?;
+                        .map_err(|error| checkout_git_path_error(&path, error))?;
                     pending.push((
                         git_object_key(format, GitObjectKind::Tree, entry.oid)?,
                         path,
@@ -475,7 +489,7 @@ where
                     GitlinkCheckoutPolicy::Error => {
                         return Err(RepositoryError::InvalidInput(format!(
                             "Git tree contains gitlink at {}",
-                            target.path().join(&path).display()
+                            path.display()
                         ))
                         .into());
                     }
@@ -483,7 +497,7 @@ where
                         target
                             .create_dir(&path)
                             .await
-                            .map_err(RepositoryError::Payload)?;
+                            .map_err(|error| checkout_git_path_error(&path, error))?;
                     }
                 },
             }
@@ -491,7 +505,7 @@ where
     }
 
     for (key, executable, path) in files {
-        write_git_file(&hold, &target, &key, executable, &path).await?;
+        write_git_file(hold, &target, &key, executable, &path).await?;
     }
     for (key, path) in symlinks {
         let (_, reader) = hold
@@ -529,11 +543,17 @@ where
     let mut file = root
         .create_file(path, executable)
         .await
-        .map_err(RepositoryError::Payload)?;
+        .map_err(|error| checkout_git_path_error(path, error))?;
     tokio::io::copy(&mut reader, &mut file)
         .await
         .map_err(RepositoryError::Io)?;
     Ok(())
+}
+
+/// A fresh staging root holds no caller files, so a collision while creating
+/// an entry means the target filesystem equates two distinct Git names.
+fn checkout_git_path_error(path: &std::path::Path, error: crate::error::Error) -> RepositoryError {
+    RepositoryError::Payload(checkout_path_error(path, error))
 }
 
 #[cfg(unix)]
@@ -546,7 +566,7 @@ async fn create_git_symlink(
         .map_err(RepositoryError::Payload)?;
     root.symlink(path, std::path::Path::new(&target), false)
         .await
-        .map_err(RepositoryError::Payload)?;
+        .map_err(|error| checkout_git_path_error(path, error))?;
     Ok(())
 }
 
@@ -566,7 +586,7 @@ async fn create_git_symlink(
     let is_dir = root.is_directory(&resolved).await;
     root.symlink(path, &native, is_dir)
         .await
-        .map_err(RepositoryError::Payload)?;
+        .map_err(|error| checkout_git_path_error(path, error))?;
     Ok(())
 }
 
@@ -1408,6 +1428,99 @@ mod tests {
                 .is_some()
         );
         assert!(snapshot.object(&second_target).await.unwrap().is_some());
+    }
+
+    type MemoryRepository = Repository<MemoryBlobStore, MemoryMetadataStore>;
+
+    /// Publish native Git objects unrooted, children before parents, and return
+    /// their keys in input order.
+    async fn stage_git_objects(
+        repository: &MemoryRepository,
+        objects: &[(GitObjectKind, Vec<u8>)],
+    ) -> Vec<ObjectKey> {
+        let mutation = repository.mutation_session().await.unwrap();
+        let mut keys = Vec::new();
+        let mut staged = Vec::new();
+        for (kind, body) in objects {
+            let key = git_object_key_for_body(GitObjectFormat::Sha1, *kind, body).unwrap();
+            staged.push(mutation.stage_object(key.clone(), body).await.unwrap());
+            keys.push(key);
+        }
+        mutation.publish_unrooted(staged).await.unwrap();
+        keys
+    }
+
+    /// Encode a native tree body from entries already in canonical Git order.
+    fn git_tree_body(entries: &[(&str, &[u8], &ObjectKey)]) -> Vec<u8> {
+        let mut body = Vec::new();
+        for (mode, name, key) in entries {
+            body.extend_from_slice(mode.as_bytes());
+            body.push(b' ');
+            body.extend_from_slice(name);
+            body.push(0);
+            body.extend_from_slice(key.native_id());
+        }
+        body
+    }
+
+    fn directory_names(path: &std::path::Path) -> Vec<std::ffi::OsString> {
+        let mut names = std::fs::read_dir(path)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    #[tokio::test]
+    async fn failed_git_checkout_leaves_no_partial_target() {
+        let repository =
+            Repository::new(MemoryBlobStore::new(), MemoryMetadataStore::new().unwrap());
+        let blob =
+            git_object_key_for_body(GitObjectFormat::Sha1, GitObjectKind::Blob, b"data").unwrap();
+        let module =
+            git_object_key(GitObjectFormat::Sha1, GitObjectKind::Commit, vec![7; 20]).unwrap();
+        // The gitlink sits below a directory that is created before the walk
+        // reaches it, so the refusal happens after checkout has begun writing.
+        let nested = git_tree_body(&[("100644", b"file", &blob), ("160000", b"vendor", &module)]);
+        let nested_key =
+            git_object_key_for_body(GitObjectFormat::Sha1, GitObjectKind::Tree, &nested).unwrap();
+        let root = git_tree_body(&[("100644", b"a.txt", &blob), ("40000", b"sub", &nested_key)]);
+        let keys = stage_git_objects(
+            &repository,
+            &[
+                (GitObjectKind::Blob, b"data".to_vec()),
+                (GitObjectKind::Tree, nested),
+                (GitObjectKind::Tree, root),
+            ],
+        )
+        .await;
+        let tree = &keys[2];
+
+        let parent = tempfile::tempdir().unwrap();
+        let absent = parent.path().join("absent");
+        let error = checkout_git_tree(&repository, tree, &absent, GitlinkCheckoutPolicy::Error)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("gitlink"), "{error}");
+        assert!(!absent.exists());
+
+        let empty = parent.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        checkout_git_tree(&repository, tree, &empty, GitlinkCheckoutPolicy::Error)
+            .await
+            .unwrap_err();
+        assert!(directory_names(&empty).is_empty());
+        // No staging sibling survives either failure.
+        assert_eq!(directory_names(parent.path()), vec!["empty"]);
+
+        let published = parent.path().join("published");
+        checkout_git_tree(&repository, tree, &published, GitlinkCheckoutPolicy::Skip)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(published.join("sub/file")).unwrap(), b"data");
+        assert!(published.join("sub/vendor").is_dir());
+        assert_eq!(directory_names(parent.path()), vec!["empty", "published"]);
     }
 
     #[cfg(all(feature = "git", unix))]
