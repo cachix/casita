@@ -459,6 +459,18 @@ where
             .into());
         }
         for entry in parse_git_tree(format, &body)? {
+            // Refused here rather than while parsing: these trees are valid
+            // objects that import unchanged, but writing one would plant Git
+            // metadata (for example hooks) in a future worktree.
+            if crate::git::is_git_admin_alias(&entry.name) {
+                return Err(RepositoryError::InvalidInput(format!(
+                    "refusing to check out Git tree entry `{}`: it names the `.git` directory",
+                    directory_path
+                        .join(String::from_utf8_lossy(&entry.name).as_ref())
+                        .display()
+                ))
+                .into());
+            }
             let component = crate::filesystem::names::os_str_from_bytes(&entry.name)
                 .map_err(RepositoryError::Payload)?;
             #[cfg(windows)]
@@ -1521,6 +1533,76 @@ mod tests {
         assert_eq!(std::fs::read(published.join("sub/file")).unwrap(), b"data");
         assert!(published.join("sub/vendor").is_dir());
         assert_eq!(directory_names(parent.path()), vec!["empty", "published"]);
+    }
+
+    #[tokio::test]
+    async fn git_checkout_refuses_dot_git_entries_without_partial_target() {
+        let repository =
+            Repository::new(MemoryBlobStore::new(), MemoryMetadataStore::new().unwrap());
+        let tree_key = |body: &[u8]| {
+            git_object_key_for_body(GitObjectFormat::Sha1, GitObjectKind::Tree, body).unwrap()
+        };
+        let hook = b"#!/bin/sh\nexit 0\n".to_vec();
+        let hook_key =
+            git_object_key_for_body(GitObjectFormat::Sha1, GitObjectKind::Blob, &hook).unwrap();
+        let hooks = git_tree_body(&[("100755", b"pre-commit", &hook_key)]);
+        let dot_git = git_tree_body(&[("40000", b"hooks", &tree_key(&hooks))]);
+        let dot_git_key = tree_key(&dot_git);
+        let nested_dot_git = git_tree_body(&[("40000", b".Git", &dot_git_key)]);
+        let nested_short_name = git_tree_body(&[("100644", b"git~1", &hook_key)]);
+        let roots = [
+            git_tree_body(&[
+                ("40000", b".git", &dot_git_key),
+                ("100644", b"a", &hook_key),
+            ]),
+            git_tree_body(&[("100644", b".GIT", &hook_key)]),
+            git_tree_body(&[
+                ("100644", b"a", &hook_key),
+                ("40000", b"sub", &tree_key(&nested_dot_git)),
+            ]),
+            git_tree_body(&[("40000", b"sub", &tree_key(&nested_short_name))]),
+        ];
+        let allowed = git_tree_body(&[
+            ("100644", b".gitignore", &hook_key),
+            ("100644", b".gitmodules", &hook_key),
+        ]);
+        let mut objects = vec![
+            (GitObjectKind::Blob, hook),
+            (GitObjectKind::Tree, hooks),
+            (GitObjectKind::Tree, dot_git),
+            (GitObjectKind::Tree, nested_dot_git),
+            (GitObjectKind::Tree, nested_short_name),
+            (GitObjectKind::Tree, allowed.clone()),
+        ];
+        objects.extend(roots.iter().map(|root| (GitObjectKind::Tree, root.clone())));
+        stage_git_objects(&repository, &objects).await;
+
+        let parent = tempfile::tempdir().unwrap();
+        for (index, root) in roots.iter().enumerate() {
+            let target = parent.path().join(format!("rejected-{index}"));
+            let error = checkout_git_tree(
+                &repository,
+                &tree_key(root),
+                &target,
+                GitlinkCheckoutPolicy::Skip,
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains("`.git`"), "{error}");
+            assert!(!target.exists(), "tree {index} left a partial target");
+        }
+        assert!(directory_names(parent.path()).is_empty());
+
+        let target = parent.path().join("allowed");
+        checkout_git_tree(
+            &repository,
+            &tree_key(&allowed),
+            &target,
+            GitlinkCheckoutPolicy::Skip,
+        )
+        .await
+        .unwrap();
+        assert_eq!(directory_names(&target), vec![".gitignore", ".gitmodules"]);
     }
 
     #[cfg(all(feature = "git", unix))]

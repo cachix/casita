@@ -312,6 +312,60 @@ fn validate_tree_name(name: &[u8]) -> Result<(), GitError> {
     Ok(())
 }
 
+/// Whether writing a tree entry with this name would create, or on some
+/// filesystem alias, the `.git` administrative directory.
+///
+/// This mirrors the component checks of Git's `verify_path` with both
+/// `core.protectNTFS` and `core.protectHFS` enabled, whatever the host
+/// platform, because a checkout may later be copied to or shared with another
+/// filesystem. It matches `.git` in any case, the spellings NTFS resolves to it
+/// (trailing dots or spaces, a `:` stream suffix such as `::$INDEX_ALLOCATION`,
+/// the `git~1` short name, or a `\` separator), and the spellings HFS+ folds to
+/// it by ignoring certain Unicode codepoints.
+///
+/// [`parse_git_tree`] deliberately accepts such names: they are well formed,
+/// Git only reports them from `fsck`, and repositories containing them exist,
+/// so the exact objects must still import, verify, and transfer unchanged.
+/// Only materializing them onto a filesystem is refused.
+pub(crate) fn is_git_admin_alias(name: &[u8]) -> bool {
+    is_ntfs_dot_git(name) || is_hfs_dot_git(name)
+}
+
+fn is_ntfs_dot_git(name: &[u8]) -> bool {
+    let strip = |prefix: &[u8]| {
+        name.get(..prefix.len())
+            .filter(|head| head.eq_ignore_ascii_case(prefix))
+            .map(|_| &name[prefix.len()..])
+    };
+    let Some(rest) = strip(b".git").or_else(|| strip(b"git~1")) else {
+        return false;
+    };
+    let rest = &rest[rest
+        .iter()
+        .position(|byte| *byte != b'.' && *byte != b' ')
+        .unwrap_or(rest.len())..];
+    matches!(rest.first(), None | Some(b'\\' | b':'))
+}
+
+fn is_hfs_dot_git(name: &[u8]) -> bool {
+    // HFS+ stores names as Unicode and drops these codepoints when comparing,
+    // so `.g\u{200c}it` names the same entry as `.git`. Git ignores exactly
+    // this set; bytes that are not UTF-8 are escaped rather than folded.
+    let Ok(name) = std::str::from_utf8(name) else {
+        return false;
+    };
+    let mut characters = name.chars().filter(|character| {
+        !matches!(
+            character,
+            '\u{200c}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{206a}'..='\u{206f}' | '\u{feff}'
+        )
+    });
+    ['.', 'g', 'i', 't']
+        .into_iter()
+        .all(|expected| characters.next().map(|c| c.to_ascii_lowercase()) == Some(expected))
+        && characters.next().is_none()
+}
+
 fn git_tree_name_cmp(left: &GitTreeEntry, right: &GitTreeEntry) -> Ordering {
     let shared = left.name.len().min(right.name.len());
     let prefix = left.name[..shared].cmp(&right.name[..shared]);
@@ -1465,5 +1519,52 @@ mod tests {
             objects: BTreeSet::new(),
         };
         assert!(matches!(cyclic.encode(), Err(GitError::SymbolicCycle(_))));
+    }
+
+    #[test]
+    fn git_admin_aliases_follow_git_verify_path() {
+        for name in [
+            ".git",
+            ".GIT",
+            ".Git",
+            ".git.",
+            ".git. .",
+            ".git ",
+            ".git::$INDEX_ALLOCATION",
+            ".GIT::$index_allocation",
+            ".git:stream",
+            ".git\\hooks",
+            "git~1",
+            "GIT~1",
+            "git~1.. ",
+            ".g\u{200c}it",
+            "\u{feff}.GI\u{202e}T\u{206f}",
+        ] {
+            assert!(is_git_admin_alias(name.as_bytes()), "{name:?}");
+        }
+        for name in [
+            "git",
+            ".gi",
+            ".gitx",
+            ".gitignore",
+            ".gitmodules",
+            ".git.x",
+            "x.git",
+            "git~2",
+            "git~10",
+            ".g\u{00ef}t",
+            ".git\u{200b}",
+        ] {
+            assert!(!is_git_admin_alias(name.as_bytes()), "{name:?}");
+        }
+        assert!(!is_git_admin_alias(b".git\xff"));
+        // Well formed trees naming `.git` still parse: refusal is a checkout
+        // decision, so such objects import and transfer unchanged.
+        let mut tree = b"100644 .GIT\0".to_vec();
+        tree.extend_from_slice(&[1; 20]);
+        assert_eq!(
+            parse_git_tree(GitObjectFormat::Sha1, &tree).unwrap()[0].name,
+            b".GIT"
+        );
     }
 }
