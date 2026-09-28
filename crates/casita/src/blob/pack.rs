@@ -503,7 +503,14 @@ impl CatalogShardCache {
     }
 }
 
-#[derive(Default)]
+/// Test pause between taking the staging batch and installing it in flight.
+#[cfg(test)]
+struct FlushHandoffHook {
+    reached: tokio::sync::oneshot::Sender<()>,
+    resume: tokio::sync::oneshot::Receiver<()>,
+}
+
+#[derive(Clone, Default)]
 struct Batch {
     chunks: Vec<(ChunkMeta, Bytes)>,
     digests: HashSet<ChunkId>,
@@ -1466,8 +1473,11 @@ pub(crate) struct PackedChunks {
     base: Path,
     target_size: u64,
     index: RwLock<Index>,
+    // Lock order: `staging` before `inflight`. Every move of a chunk between
+    // the two, and every lookup across both, holds `staging`, so a staged chunk
+    // is always visible in one of them until its pack is in `index`.
     staging: Mutex<Batch>,
-    inflight: Mutex<Option<Batch>>,
+    inflight: Mutex<Option<Arc<Batch>>>,
     flush_lock: Mutex<()>,
     rebuild_lock: Mutex<()>,
     checkpoint_lock: Mutex<()>,
@@ -1477,6 +1487,8 @@ pub(crate) struct PackedChunks {
     catalog_prepared: AtomicBool,
     #[cfg(test)]
     prepared_index_catalog: StdMutex<Option<PreparedIndexCatalog>>,
+    #[cfg(test)]
+    flush_handoff_hook: StdMutex<Option<FlushHandoffHook>>,
     index_dirty: AtomicBool,
     state_catalog_mode: AtomicBool,
     dirty_packs: Mutex<HashSet<PackId>>,
@@ -1640,6 +1652,8 @@ impl PackedChunks {
             catalog_prepared: AtomicBool::new(false),
             #[cfg(test)]
             prepared_index_catalog: StdMutex::new(None),
+            #[cfg(test)]
+            flush_handoff_hook: StdMutex::new(None),
             index_dirty: AtomicBool::new(false),
             state_catalog_mode: AtomicBool::new(state_catalog_mode),
             dirty_packs: Mutex::new(HashSet::new()),
@@ -1693,6 +1707,11 @@ impl PackedChunks {
         digest: &ChunkId,
         pins: &crate::metadata::WritePins,
     ) -> io::Result<bool> {
+        // Check in the order chunks move (staging, inflight, index) so a
+        // concurrent flush cannot slip a chunk past this probe.
+        if self.is_staged(digest).await {
+            return Ok(true);
+        }
         if let Some(location) = self.location(digest).await? {
             if !pins.is_empty() {
                 let path = pack_path(&self.base, &location.pack);
@@ -1722,15 +1741,7 @@ impl PackedChunks {
                 }
             }
         }
-        if self.staging.lock().await.digests.contains(digest) {
-            return Ok(true);
-        }
-        Ok(self
-            .inflight
-            .lock()
-            .await
-            .as_ref()
-            .is_some_and(|batch| batch.digests.contains(digest)))
+        Ok(false)
     }
 
     /// Record that a whole-payload manifest is visible. The membership set is
@@ -3132,23 +3143,29 @@ impl PackedChunks {
             if staging.is_empty() {
                 return Ok(());
             }
-            std::mem::take(&mut *staging)
+            let batch = Arc::new(std::mem::take(&mut *staging));
+            #[cfg(test)]
+            self.pause_at_flush_handoff().await;
+            // Install before releasing `staging` so readers never observe the
+            // batch in neither place.
+            *self.inflight.lock().await = Some(Arc::clone(&batch));
+            batch
         };
-        *self.inflight.lock().await = Some(batch);
-        let sealed = {
-            let inflight = self.inflight.lock().await;
-            seal(inflight.as_ref().expect("inflight batch installed"))?
+        let result = match seal(&batch) {
+            Ok(sealed) => put_object(
+                &self.object_store,
+                &pack_path(&self.base, &sealed.id),
+                sealed.bytes.clone(),
+                true,
+            )
+            .await
+            .map_err(io::Error::other)
+            .map(|()| sealed),
+            Err(error) => Err(error),
         };
-        let result = put_object(
-            &self.object_store,
-            &pack_path(&self.base, &sealed.id),
-            sealed.bytes.clone(),
-            true,
-        )
-        .await
-        .map_err(io::Error::other);
+        drop(batch);
         match result {
-            Ok(()) => {
+            Ok(sealed) => {
                 // Cache independent frames so reads share one budget regardless of
                 // whether the bytes came from publication or a remote fetch.
                 let evictions = {
@@ -3179,18 +3196,22 @@ impl PackedChunks {
                     self.record_pack_mutation(sealed.id);
                 }
                 self.index_dirty.store(true, Ordering::Release);
+                // The pack is indexed above, so clearing here leaves no gap.
                 *self.inflight.lock().await = None;
                 Ok(())
             }
             Err(error) => {
-                let failed = self.inflight.lock().await.take().expect("inflight batch");
                 let mut staging = self.staging.lock().await;
-                for (meta, bytes) in failed.chunks.into_iter().rev() {
-                    if !staging.digests.contains(&meta.digest) {
-                        staging.chunks.insert(0, (meta.clone(), bytes));
-                        staging.digests.insert(meta.digest);
-                    }
-                }
+                let failed = self.inflight.lock().await.take().expect("inflight batch");
+                let failed = Arc::try_unwrap(failed).unwrap_or_else(|shared| Batch::clone(&shared));
+                let staging = &mut *staging;
+                let mut chunks: Vec<_> = failed
+                    .chunks
+                    .into_iter()
+                    .filter(|(meta, _)| staging.digests.insert(meta.digest))
+                    .collect();
+                chunks.append(&mut staging.chunks);
+                staging.chunks = chunks;
                 staging.bytes = staging
                     .chunks
                     .iter()
@@ -3844,8 +3865,29 @@ impl PackedChunks {
         Ok(())
     }
 
+    #[cfg(test)]
+    async fn pause_at_flush_handoff(&self) {
+        let hook = self.flush_handoff_hook.lock().unwrap().take();
+        if let Some(hook) = hook {
+            let _ = hook.reached.send(());
+            let _ = hook.resume.await;
+        }
+    }
+
+    async fn is_staged(&self, digest: &ChunkId) -> bool {
+        let staging = self.staging.lock().await;
+        staging.digests.contains(digest)
+            || self
+                .inflight
+                .lock()
+                .await
+                .as_ref()
+                .is_some_and(|batch| batch.digests.contains(digest))
+    }
+
     async fn staged(&self, digest: &ChunkId) -> Option<(u64, Bytes)> {
-        if let Some(found) = self.staging.lock().await.get(digest) {
+        let staging = self.staging.lock().await;
+        if let Some(found) = staging.get(digest) {
             return Some(found);
         }
         self.inflight
@@ -6691,6 +6733,7 @@ mod tests {
         delete_fail_at: Arc<AtomicU64>,
         catalog_deletes: Arc<AtomicU64>,
         delete_resume: Arc<tokio::sync::Notify>,
+        fail_pack_puts: AtomicBool,
     }
 
     impl FailingCatalogPutStore {
@@ -6702,6 +6745,7 @@ mod tests {
                 delete_fail_at: Arc::new(AtomicU64::new(u64::MAX)),
                 catalog_deletes: Arc::new(AtomicU64::new(0)),
                 delete_resume: Arc::new(tokio::sync::Notify::new()),
+                fail_pack_puts: AtomicBool::new(false),
             }
         }
 
@@ -6742,6 +6786,14 @@ mod tests {
             payload: PutPayload,
             options: PutOptions,
         ) -> object_store::Result<PutResult> {
+            if self.fail_pack_puts.load(Ordering::SeqCst)
+                && location.parts().any(|part| part.as_ref() == PACKS_KIND)
+            {
+                return Err(object_store::Error::Generic {
+                    store: "pack-put-test",
+                    source: "injected pack PUT failure".into(),
+                });
+            }
             if location.as_ref().contains("/pack-indexes/") {
                 let ordinal = self.catalog_puts.fetch_add(1, Ordering::SeqCst) + 1;
                 if self.fail_at.load(Ordering::SeqCst) == 0 {
@@ -6837,6 +6889,79 @@ mod tests {
             },
             compressed.into(),
         )
+    }
+
+    #[tokio::test]
+    async fn staged_chunk_stays_visible_across_flush_handoff() {
+        let packed = PackedChunks::open_with_state_catalog(
+            Arc::new(InMemory::new()),
+            Path::from("flush-handoff"),
+            u64::MAX,
+            0,
+            &PackedChunks::empty_state_catalog().unwrap(),
+        )
+        .await
+        .unwrap();
+        let (meta, bytes) = chunk(b"read while its batch changes hands");
+        packed.put(meta.clone(), bytes.clone()).await.unwrap();
+        let (reached_tx, reached) = tokio::sync::oneshot::channel();
+        let (resume, resume_rx) = tokio::sync::oneshot::channel();
+        *packed.flush_handoff_hook.lock().unwrap() = Some(FlushHandoffHook {
+            reached: reached_tx,
+            resume: resume_rx,
+        });
+        let flush = tokio::spawn({
+            let packed = packed.clone();
+            async move { packed.flush().await }
+        });
+        reached.await.unwrap();
+        // The flush task is parked in the handoff and, on this single threaded
+        // runtime, only advances once the reads below yield. They therefore
+        // observe the handoff state itself, or wait for it to complete.
+        resume.send(()).unwrap();
+        let probed = packed.probe(&meta.digest).await.unwrap();
+        let read = packed.get(&meta.digest).await.unwrap();
+        flush.await.unwrap().unwrap();
+        assert!(probed, "probe missed a chunk mid flush");
+        assert_eq!(read, Some(bytes.clone()), "read missed a chunk mid flush");
+        assert_eq!(packed.get(&meta.digest).await.unwrap(), Some(bytes));
+    }
+
+    #[tokio::test]
+    async fn failed_pack_upload_requeues_batch_in_order() {
+        let fault = Arc::new(FailingCatalogPutStore::new());
+        let objects: Arc<dyn ObjectStore> = fault.clone();
+        let writer = PackedChunks::open(objects, Path::from("failed-pack-upload"), u64::MAX)
+            .await
+            .unwrap();
+        let chunks: Vec<_> = (0..3)
+            .map(|index| chunk(format!("requeued chunk {index}").as_bytes()))
+            .collect();
+        for (meta, bytes) in &chunks {
+            writer.put(meta.clone(), bytes.clone()).await.unwrap();
+        }
+        fault.fail_pack_puts.store(true, Ordering::SeqCst);
+        let error = writer.flush().await.unwrap_err();
+        assert!(error.to_string().contains("injected pack PUT failure"));
+        {
+            let staging = writer.staging.lock().await;
+            let order: Vec<_> = staging.chunks.iter().map(|(meta, _)| meta.digest).collect();
+            let expected: Vec<_> = chunks.iter().map(|(meta, _)| meta.digest).collect();
+            assert_eq!(order, expected);
+            assert_eq!(staging.digests.len(), chunks.len());
+            let bytes: u64 = chunks.iter().map(|(_, bytes)| bytes.len() as u64).sum();
+            assert_eq!(staging.bytes, bytes);
+        }
+        assert!(writer.inflight.lock().await.is_none());
+        for (meta, bytes) in &chunks {
+            assert_eq!(writer.get(&meta.digest).await.unwrap(), Some(bytes.clone()));
+        }
+        fault.fail_pack_puts.store(false, Ordering::SeqCst);
+        writer.flush().await.unwrap();
+        assert!(writer.staging.lock().await.is_empty());
+        for (meta, bytes) in &chunks {
+            assert_eq!(writer.get(&meta.digest).await.unwrap(), Some(bytes.clone()));
+        }
     }
 
     #[tokio::test]
@@ -8220,10 +8345,9 @@ mod tests {
             "the lazily opened base must not be replaced by a checkpoint of the materialized index"
         );
 
-        let reopened =
-            PackedChunks::open_with_state_catalog(objects, base, u64::MAX, 0, &next)
-                .await
-                .unwrap();
+        let reopened = PackedChunks::open_with_state_catalog(objects, base, u64::MAX, 0, &next)
+            .await
+            .unwrap();
         assert_eq!(reopened.get(&meta.digest).await.unwrap(), Some(compressed));
         assert_eq!(
             reopened.sidecar(blob, None).await.unwrap(),
