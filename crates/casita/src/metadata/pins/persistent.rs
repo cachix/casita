@@ -198,8 +198,7 @@ impl FilePinStore {
             temporary.write_all(bytes).map_err(backend)?;
             temporary.as_file().sync_all().map_err(backend)?;
             let temporary = temporary.into_temp_path();
-            crate::durable_rename::rename_write_through(&temporary, &self.path)
-                .map_err(backend)?;
+            crate::durable_rename::rename_write_through(&temporary, &self.path).map_err(backend)?;
             // The rename consumed the temporary name.
             let _ = temporary.keep();
             // Windows wrote the rename through; it cannot open directories.
