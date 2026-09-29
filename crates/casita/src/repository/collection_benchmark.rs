@@ -9,7 +9,6 @@ use std::time::Instant;
 /// to delete pays nothing. Garbage counts span a single payload to many
 /// deletion batches, so the probe reports how flush cost grows with garbage.
 /// Fixture construction is outside timing.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "performance probe; run through benchmark run deletion-ordering"]
 async fn benchmark_collection_deletion_ordering() {
