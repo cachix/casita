@@ -75,6 +75,9 @@ bao-tree = { version = "0.16", optional = true }
 iroh-io = { version = "0.6", optional = true }
 # Zlib encoding for native Git pack serving.
 flate2 = { version = "1", optional = true }
+hyper = { version = "1", default-features = false, features = ["http1", "server"], optional = true }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"], optional = true }
+http-body-util = { version = "0.1", optional = true }
 # Strict Git pkt-line framing for the native fetch service. The protocol
 # negotiation remains Casita-owned because gix-protocol is client-side.
 gix-packetline = { version = "0.21", default-features = false, features = ["blocking-io"], optional = true }
@@ -169,7 +172,7 @@ git-fetch = [
 ]
 # read-only native Git smart-HTTP serving; kept separate so embedded importers
 # do not pull Tokio networking into deployments that never listen on sockets.
-git-http = ["git", "git-fetch", "tokio/net"]
+git-http = ["git", "git-fetch", "tokio/net", "dep:hyper", "dep:hyper-util", "dep:http-body-util"]
 # authenticated machine-to-machine transfer through the system OpenSSH client.
 ssh = ["native", "tokio/process"]
 # Object-store-authoritative repository state.  The wal3 implementation is
