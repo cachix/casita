@@ -198,6 +198,10 @@ impl FilePinStore {
             temporary.write_all(bytes).map_err(backend)?;
             temporary.as_file().sync_all().map_err(backend)?;
             temporary.persist(&self.path).map_err(backend)?;
+            // Windows cannot open a directory as a file (access denied), and
+            // Rust exposes no portable directory flush there. The data file is
+            // still flushed before its atomic rename.
+            #[cfg(unix)]
             std::fs::File::open(self.parent())
                 .and_then(|directory| directory.sync_all())
                 .map_err(backend)?;
