@@ -197,10 +197,12 @@ impl FilePinStore {
             let mut temporary = tempfile::NamedTempFile::new_in(self.parent()).map_err(backend)?;
             temporary.write_all(bytes).map_err(backend)?;
             temporary.as_file().sync_all().map_err(backend)?;
-            temporary.persist(&self.path).map_err(backend)?;
-            // Windows cannot open a directory as a file (access denied), and
-            // Rust exposes no portable directory flush there. The data file is
-            // still flushed before its atomic rename.
+            let temporary = temporary.into_temp_path();
+            crate::durable_rename::rename_write_through(&temporary, &self.path)
+                .map_err(backend)?;
+            // The rename consumed the temporary name.
+            let _ = temporary.keep();
+            // Windows wrote the rename through; it cannot open directories.
             #[cfg(unix)]
             std::fs::File::open(self.parent())
                 .and_then(|directory| directory.sync_all())

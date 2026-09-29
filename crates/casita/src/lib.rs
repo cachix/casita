@@ -154,6 +154,8 @@ mod conformance;
 mod coordination;
 mod digest;
 mod directory;
+#[cfg(feature = "native")]
+mod durable_rename;
 mod encode;
 mod error;
 #[cfg(feature = "native")]

@@ -392,7 +392,7 @@ fn commit_prepared(root: &FsPath, prepared: Vec<PreparedLocalPut>) -> io::Result
             .ok_or_else(|| io::Error::other("durable object path has no parent"))?;
         #[cfg(test)]
         super::crash_tests::file_checkpoint("before-rename", &object.destination);
-        std::fs::rename(&object.temporary, &object.destination)?;
+        crate::durable_rename::rename_write_through(&object.temporary, &object.destination)?;
         #[cfg(test)]
         super::crash_tests::file_checkpoint("after-rename", &object.destination);
         parents.push(parent.to_path_buf());
@@ -529,8 +529,8 @@ fn sync_directory_chains(
             ));
         }
     }
-    // Rust does not expose portable directory-handle flushing on non-Unix
-    // platforms. Every data file is still flushed before its atomic rename.
+    // Windows cannot open directories to flush them. Its renames are written
+    // through instead, and every data file is flushed before its rename.
     Ok(())
 }
 

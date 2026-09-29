@@ -108,6 +108,9 @@ fs4 = { version = "1.1", default-features = false, optional = true }
 libc = { version = "0.2", optional = true }
 rustix = { version = "1.1", features = ["fs"], optional = true }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"], optional = true }
+
 [features]
 default = ["cli"]
 # Unstable backend, format, tuning, and transport APIs under casita::experimental.
@@ -135,6 +138,7 @@ native = [
   "dep:astral-tokio-tar",
   "dep:libc",
   "dep:rustix",
+  "dep:windows-sys",
   "dep:getrandom",
   "dep:imbl",
   "dep:fs4",
