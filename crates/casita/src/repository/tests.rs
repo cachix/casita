@@ -6017,3 +6017,51 @@ async fn batched_existing_protection_invalidates_a_stale_collection_plan() {
         &record
     );
 }
+
+#[tokio::test]
+async fn metadata_reclaim_defers_while_a_catalog_publication_is_prepared() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = Repository::local(temporary.path()).await.unwrap();
+    let first = repository.mutation_session().await.unwrap();
+    let initial = first.stage_blob(b"initial").await.unwrap();
+    let initial_key = initial.record().key().clone();
+    first
+        .publish_rooted(
+            vec![initial],
+            RootName::try_from("initial").unwrap(),
+            initial_key,
+        )
+        .await
+        .unwrap();
+    drop(first);
+
+    let writer = repository.mutation_session().await.unwrap();
+    let plan = repository
+        .collection_plan(
+            repository.coordination.clone().lock_owned().await,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+    let staged = writer.stage_blob(b"new publication").await.unwrap();
+    let guard = repository.publication.lock().await;
+    let prepared = repository
+        .payloads()
+        .publication()
+        .prepare_state_commit()
+        .await
+        .unwrap();
+    assert!(prepared.catalog().is_some());
+    let marker = temporary.path().join("blobs/pack-index-reclaim-needed");
+    std::fs::write(&marker, b"catalog garbage may be present\n").unwrap();
+
+    let result = repository.reclaim_payload_metadata(&plan, true).await;
+    let deferred = marker.exists();
+    prepared.abort().unwrap();
+    drop(guard);
+    drop(staged);
+    drop(writer);
+    assert!(result.is_ok(), "metadata reclaim failed: {result:?}");
+    assert!(deferred, "busy reclaim must leave cleanup pending");
+}

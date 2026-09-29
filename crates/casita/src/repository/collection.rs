@@ -787,6 +787,14 @@ where
         // Maintenance keeps its admission hold through catalog publication or
         // discard. Exclusive collection therefore fences its inputs and output.
         if force_reclaim {
+            // A new publication may prepare its catalog after collection's
+            // catalog commit. Defer reclamation while that publication owns
+            // the lock, leaving the reclaim marker for the next attempt.
+            let _publication_guard = match self.publication.try_lock() {
+                Ok(guard) => guard,
+                Err(RepositoryError::Busy(_)) => return Ok(()),
+                Err(error) => return Err(error),
+            };
             let owned_claims = plan.claims.lock().unwrap().clone();
             self.payloads
                 .reclaim_metadata_pinned(self.state.pin_store().await?, owned_claims)

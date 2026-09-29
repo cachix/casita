@@ -8220,10 +8220,9 @@ mod tests {
             "the lazily opened base must not be replaced by a checkpoint of the materialized index"
         );
 
-        let reopened =
-            PackedChunks::open_with_state_catalog(objects, base, u64::MAX, 0, &next)
-                .await
-                .unwrap();
+        let reopened = PackedChunks::open_with_state_catalog(objects, base, u64::MAX, 0, &next)
+            .await
+            .unwrap();
         assert_eq!(reopened.get(&meta.digest).await.unwrap(), Some(compressed));
         assert_eq!(
             reopened.sidecar(blob, None).await.unwrap(),
