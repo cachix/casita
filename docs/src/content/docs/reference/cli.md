@@ -63,8 +63,9 @@ casita [--repository PATH] init
 ```
 
 Without `--repository`, creates or reuses the current directory's `.casita`
-workspace marker after opening the global profile. With `--repository`, creates
-or opens that local profile and prints its path and current repository revision.
+workspace marker after opening the global profile. A new marker and its
+directory are synced before `init` succeeds. With `--repository`, creates or
+opens that local profile and prints its path and current repository revision.
 
 ### `import`
 
@@ -269,6 +270,12 @@ By default, successful checkout also registers an `auto/checkout/...` root
 derived from the canonical destination path. That root retains the materialized
 closure until explicitly removed. `--no-root` skips this step.
 
+Checkout does not flush the materialized tree to stable storage. A power loss
+or operating-system crash soon after checkout can leave `DIR` absent,
+incomplete, or holding truncated files, and can leave a `.casita-checkout-*`
+staging directory beside it. The repository keeps the graph while a root
+retains it: remove both directories and check out again.
+
 ## Named roots
 
 Roots retain the complete forward closure of one exact object.
@@ -420,11 +427,11 @@ closure through one source snapshot, deduplicates their union, then writes
 payloads and records in canonical order. Equal root sets and logical closures
 produce equal archive bytes regardless of selector order or traversal spill.
 
-File output is staged, synced, and atomically published. It refuses an existing
-destination by default, including one created concurrently; `--force` selects
-atomic replacement. `--output -` writes only archive bytes to stdout and sends
-the human report to stderr. `--json` and `--force` are rejected for stdout
-output.
+File output is staged, synced, and atomically published, and its directory is
+synced before the command succeeds. It refuses an existing destination by
+default, including one created concurrently; `--force` selects atomic
+replacement. `--output -` writes only archive bytes to stdout and sends the
+human report to stderr. `--json` and `--force` are rejected for stdout output.
 
 ### `archive inspect`
 

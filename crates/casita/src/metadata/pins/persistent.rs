@@ -324,7 +324,7 @@ impl FilePinStore {
                 .map_err(backend)?;
             file.write_all(bytes).map_err(backend)?;
             let _phase = LedgerPhase::new("payload_sync");
-            file.sync_all().map_err(backend)
+            crate::blob::sync_ordered(file).map_err(backend)
         }
 
         // Keep both slots large enough for the new inventory plus bounded
@@ -349,7 +349,7 @@ impl FilePinStore {
             write_slot(initial.as_file_mut(), &previous, capacity)?;
             initial.persist(&self.path).map_err(backend)?;
             std::fs::File::open(self.parent())
-                .and_then(|file| file.sync_all())
+                .and_then(|file| crate::blob::sync_ordered(&file))
                 .map_err(backend)?;
         } else {
             let mut active = std::fs::File::options()
@@ -359,7 +359,7 @@ impl FilePinStore {
             grow_slot(&mut active, capacity)?;
             // Keep the other slot's reserve durable before exchanging names.
             let _phase = LedgerPhase::new("capacity_sync");
-            active.sync_all().map_err(backend)?;
+            crate::blob::sync_ordered(&active).map_err(backend)?;
         }
         let mut spare_name = self
             .path
@@ -378,6 +378,8 @@ impl FilePinStore {
         write_slot(&mut spare, bytes, capacity)?;
         let _phase = LedgerPhase::new("exchange_directory_sync");
         self.exchange_checkpoint(&spare_path).map_err(backend)?;
+        // The only flush that waits for the drive: it persists every slot
+        // write, reserve and name synced before it (see `sync_ordered`).
         std::fs::File::open(self.parent())
             .and_then(|file| file.sync_all())
             .map_err(backend)

@@ -232,7 +232,8 @@ where
     }
 
     /// Materialize a verified canonical-directory graph while a retention hold
-    /// prevents its payloads from being collected.
+    /// prevents its payloads from being collected. The materialized tree is not
+    /// flushed to stable storage.
     #[tracing::instrument(name = "repository.checkout", skip_all)]
     pub async fn checkout(
         &self,

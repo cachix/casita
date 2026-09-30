@@ -234,7 +234,8 @@ where
     }
 
     /// Export selected complete graphs to a temporary sibling and atomically
-    /// publish the completed file at `destination`.
+    /// publish the completed file at `destination`. Success is reported only
+    /// after the file and its directory have been flushed to storage.
     ///
     /// A failure or cancelled future removes the temporary file and never
     /// exposes a partial archive at `destination`. This compatibility method
@@ -716,8 +717,9 @@ impl AtomicOutput {
             .take()
             .expect("an unpublished Casitar output owns its temporary file");
         file.flush().await?;
-        file.sync_all().await?;
-        drop(file);
+        // Ordered before the name is published; the directory flush below
+        // persists both (see `blob::sync_ordered`).
+        crate::blob::sync_ordered(&file.into_std().await)?;
         match self.policy {
             CasitarExportFilePolicy::CreateNew => {
                 std::fs::hard_link(&self.temporary, &self.destination)?;
@@ -733,6 +735,13 @@ impl AtomicOutput {
                 self.published = true;
             }
         }
+        // Flush the new name, and the removed temporary name, before
+        // reporting success. The temporary was created in that directory.
+        let directory = self
+            .temporary
+            .parent()
+            .expect("the Casitar temporary file has a parent directory");
+        crate::blob::sync_directory(directory)?;
         Ok(())
     }
 }
@@ -1100,6 +1109,38 @@ mod tests {
         ));
         assert_eq!(std::fs::read(&destination).unwrap(), b"existing archive");
         assert_no_temporary_files(directory.path());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn filesystem_export_flushes_the_published_directory_entry() {
+        let (repository, first_name, _, _, _) = graph_repository().await;
+        let temporary = tempfile::tempdir().unwrap();
+        for policy in [
+            CasitarExportFilePolicy::Replace,
+            CasitarExportFilePolicy::CreateNew,
+        ] {
+            let directory = temporary.path().join(format!("{policy:?}"));
+            std::fs::create_dir(&directory).unwrap();
+            crate::blob::SYNCED_DIRECTORIES.with_borrow_mut(|record| *record = Some(Vec::new()));
+            repository
+                .export_casitar_file_with_policy(
+                    [CasitarExportTarget::NamedRoot(first_name.clone())],
+                    directory.join("release.casitar"),
+                    CasitarStreamLimits::default(),
+                    policy,
+                )
+                .await
+                .unwrap();
+            let synced =
+                crate::blob::SYNCED_DIRECTORIES.with_borrow_mut(|record| record.take().unwrap());
+            assert!(
+                synced.contains(&directory),
+                "{policy:?} export must flush {} before success: {synced:?}",
+                directory.display()
+            );
+            assert_no_temporary_files(&directory);
+        }
     }
 
     #[derive(Clone)]

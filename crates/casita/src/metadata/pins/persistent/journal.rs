@@ -510,7 +510,9 @@ impl FilePinStore {
                     file.write_all(&zeros[..count]).map_err(io)?;
                     remaining -= count as u64;
                 }
-                file.sync_all().map_err(io)?;
+                // The append or checkpoint that needs this capacity ends with
+                // a full flush, which persists the growth too.
+                crate::blob::sync_ordered(&file).map_err(io)?;
             }
         }
         Ok(())
@@ -585,7 +587,8 @@ impl FilePinStore {
         file.write_all(&[0; HEADER]).map_err(io)?;
         #[cfg(test)]
         self.ledger_checkpoint("checkpoint-before-sync")?;
-        file.sync_all().map_err(io)?;
+        // Ordered before the exchange; the directory flush below persists both.
+        crate::blob::sync_ordered(&file).map_err(io)?;
         #[cfg(test)]
         self.ledger_checkpoint("checkpoint-before-exchange")?;
         self.exchange_checkpoint(&spare).map_err(io)?;

@@ -124,7 +124,10 @@ impl Workspace {
             Ok(mut file) => {
                 if let Err(error) = (|| -> std::io::Result<()> {
                     file.write_all(contents.as_bytes())?;
-                    file.sync_all()
+                    file.sync_all()?;
+                    // The marker is the workspace identity: without its
+                    // directory entry, a power loss would orphan its roots.
+                    crate::cli::sync_directory(&root)
                 })() {
                     let _ = std::fs::remove_file(&marker);
                     return Err(error.into());
@@ -209,6 +212,13 @@ mod tests {
         let first = Workspace::create_at(temporary.path()).unwrap();
         let second = Workspace::create_at(temporary.path()).unwrap();
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn creation_flushes_the_directory_holding_the_new_marker() {
+        let temporary = tempfile::tempdir().unwrap();
+        let workspace = Workspace::create_at(temporary.path()).unwrap();
+        assert!(crate::cli::was_synced(workspace.root()));
     }
 
     #[test]

@@ -100,6 +100,22 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Changed
 
+- On macOS, a durable local publication waits for the drive cache once instead
+  of once per synced file and directory. Every sync but the last issues an I/O
+  barrier (`F_BARRIERFSYNC`), so nothing can reach storage out of order, and
+  the last flushes the drive (`F_FULLFSYNC`), persisting them all. Durable
+  catalog objects publish about 2.5× faster, 64-object catalog batches about
+  4×, collections that delete payloads about 1.5×, and pin-ledger slot
+  exchanges 2×. Filesystems without barriers keep the full flush on every
+  sync; Linux and Windows are unchanged.
+- `casita archive create`, `experimental::Repository::export_casitar_file` and
+  `export_casitar_file_with_policy`, and `casita init` sync the directory that
+  receives their file before reporting success. They already synced the file,
+  but not its new directory entry, so a power loss could lose an exported
+  archive or a workspace marker (and with it access to the workspace's roots)
+  after the command had succeeded. Checkout and IPC restores do not flush what
+  they materialize, since the repository still holds it; the CLI and IPC
+  references now say so.
 - On macOS, repositories whose state is a `TursoMetadataStore`, including
   `Repository::local` and custom compositions, flush the drive cache
   (`F_FULLFSYNC`) before each deletion batch. Commits sync only to the drive's

@@ -109,6 +109,12 @@ fs4 = { version = "1.1", default-features = false, optional = true }
 libc = { version = "0.2", optional = true }
 rustix = { version = "1.1", features = ["fs"], optional = true }
 
+# Apple I/O barriers (`F_BARRIERFSYNC`), which neither std nor rustix exposes.
+# A publication that syncs several files and directories then waits for the
+# drive cache only once (see `blob/local_durability.rs`).
+[target.'cfg(target_vendor = "apple")'.dependencies]
+nix = { version = "0.31", default-features = false, features = ["fs"], optional = true }
+
 [features]
 default = ["cli"]
 # Unstable backend, format, tuning, and transport APIs under casita::experimental.
@@ -136,6 +142,7 @@ native = [
   "dep:astral-tokio-tar",
   "dep:libc",
   "dep:rustix",
+  "dep:nix",
   "dep:getrandom",
   "dep:imbl",
   "dep:fs4",

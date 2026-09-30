@@ -13,10 +13,37 @@ use object_store::path::Path;
 
 #[cfg(test)]
 thread_local! {
-    static SYNCED_DIRECTORIES: std::cell::RefCell<Option<Vec<PathBuf>>> = const { std::cell::RefCell::new(None) };
+    pub(crate) static SYNCED_DIRECTORIES: std::cell::RefCell<Option<Vec<PathBuf>>> = const { std::cell::RefCell::new(None) };
+    /// The directories among [`SYNCED_DIRECTORIES`] whose sync waited for the drive.
+    static PERSISTED_DIRECTORIES: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 static TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Flush `file` so that it reaches storage before any write issued after this
+/// call, without waiting for it to persist.
+///
+/// On Apple platforms a plain `fsync` hands data to the drive, whose volatile
+/// cache may persist later writes first, and `sync_all` (`F_FULLFSYNC`) waits
+/// until the drive has emptied that whole cache. A publication that syncs a
+/// file and then its directories needs that wait only once. So every sync but
+/// the last issues an I/O barrier (`F_BARRIERFSYNC`), which no later write can
+/// overtake, and the last is a `sync_all`, which persists everything before
+/// it. Filesystems without barriers get the full flush. Elsewhere `fsync`
+/// already persists the data, so this is `sync_all`.
+pub(crate) fn sync_ordered(file: &File) -> io::Result<()> {
+    #[cfg(target_vendor = "apple")]
+    {
+        use nix::errno::Errno;
+        use nix::fcntl::{FcntlArg, fcntl};
+        match fcntl(file, FcntlArg::F_BARRIERFSYNC) {
+            Ok(_) => return Ok(()),
+            Err(Errno::ENOTSUP | Errno::EINVAL | Errno::ENOTTY) => {}
+            Err(errno) => return Err(errno.into()),
+        }
+    }
+    file.sync_all()
+}
 
 /// The concrete filesystem handle retained alongside the erased object store.
 ///
@@ -329,7 +356,7 @@ fn durable_put_file(root: &FsPath, destination: &FsPath, source: File) -> io::Re
         }
         #[cfg(test)]
         super::crash_tests::file_checkpoint("before-file-sync", destination);
-        output.sync_all()?;
+        sync_ordered(&output)?;
         #[cfg(test)]
         super::crash_tests::file_checkpoint("after-file-sync", destination);
         Ok::<_, io::Error>(())
@@ -361,7 +388,7 @@ fn prepare_put(destination: PathBuf, bytes: &[u8]) -> io::Result<PreparedLocalPu
     if let Err(error) = file.write_all(bytes).and_then(|()| {
         #[cfg(test)]
         super::crash_tests::file_checkpoint("before-file-sync", &destination);
-        file.sync_all()
+        sync_ordered(&file)
     }) {
         drop(file);
         let _ = std::fs::remove_file(&temporary);
@@ -463,6 +490,15 @@ fn create_temporary(destination: &FsPath) -> io::Result<(PathBuf, File)> {
     ))
 }
 
+/// Flush `directory` so an entry just renamed or linked into it survives power
+/// loss. Like catalog publication's directory flushes, this is a no-op on
+/// non-Unix platforms.
+///
+/// Used by the `casita` CLI; not an application compatibility surface.
+pub fn sync_directory(directory: &FsPath) -> io::Result<()> {
+    sync_directory_chain(directory, directory)
+}
+
 #[cfg(unix)]
 fn sync_directory_chain(root: &FsPath, parent: &FsPath) -> io::Result<()> {
     sync_directory_chains(root, [parent.to_path_buf()])
@@ -495,11 +531,22 @@ fn sync_directory_chains(
         }
     }
     let mut directories = directories.into_iter().collect::<Vec<_>>();
+    // Deepest first, so the root, which every chain contains, comes last. Its
+    // flush waits for the drive and so persists the files and directories
+    // synced before it (see `sync_ordered`).
     directories.sort_unstable_by_key(|path| std::cmp::Reverse(path.components().count()));
-    for directory in directories {
+    let last = directories.len().saturating_sub(1);
+    for (index, directory) in directories.into_iter().enumerate() {
         #[cfg(test)]
         super::crash_tests::checkpoint("before-directory-component-sync");
-        File::open(&directory)?.sync_all()?;
+        let handle = File::open(&directory)?;
+        if index == last {
+            handle.sync_all()?;
+            #[cfg(test)]
+            PERSISTED_DIRECTORIES.with_borrow_mut(|persisted| persisted.push(directory.clone()));
+        } else {
+            sync_ordered(&handle)?;
+        }
         #[cfg(test)]
         SYNCED_DIRECTORIES.with_borrow_mut(|record| {
             if let Some(paths) = record {
@@ -567,6 +614,27 @@ mod tests {
         let synced = SYNCED_DIRECTORIES.with_borrow_mut(|record| record.take().unwrap());
         assert!(synced.contains(&left.parent().unwrap().to_path_buf()));
         assert!(synced.contains(&root.to_path_buf()));
+    }
+
+    /// Every directory of a new chain is synced, deepest first, and only the
+    /// last flush, of the root, waits for the drive. That flush is what makes
+    /// the whole publication durable, so it must come after every other sync.
+    #[cfg(unix)]
+    #[test]
+    fn a_publication_waits_for_the_drive_once_after_every_other_sync() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let object = root.join("pack-indexes/b3/ab/object");
+        SYNCED_DIRECTORIES.with_borrow_mut(|record| *record = Some(Vec::new()));
+        PERSISTED_DIRECTORIES.with_borrow_mut(Vec::clear);
+        durable_put(root, &object, b"catalog shard").unwrap();
+        let synced = SYNCED_DIRECTORIES.with_borrow_mut(|record| record.take().unwrap());
+        let parents = ["pack-indexes/b3/ab", "pack-indexes/b3", "pack-indexes"];
+        let mut chain = parents.map(|parent| root.join(parent)).to_vec();
+        chain.push(root.to_path_buf());
+        assert_eq!(synced, chain);
+        assert_eq!(PERSISTED_DIRECTORIES.take(), [root.to_path_buf()]);
+        assert_eq!(std::fs::read(&object).unwrap(), b"catalog shard");
     }
 
     #[tokio::test]
