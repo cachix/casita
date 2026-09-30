@@ -125,11 +125,11 @@ impl MetadataStore for CatalogState {
     }
     async fn snapshot(&self) -> Result<Arc<dyn MetadataSnapshot>, MetadataError> {
         let snapshot = self.inner.snapshot().await?;
-        if let Some(gate) = &self.snapshot_gate {
-            if gate.pause.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                gate.entered.notify_one();
-                gate.resume.notified().await;
-            }
+        if let Some(gate) = &self.snapshot_gate
+            && gate.pause.swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            gate.entered.notify_one();
+            gate.resume.notified().await;
         }
         Ok(snapshot)
     }
