@@ -98,6 +98,18 @@ impl Changes {
                 .or_insert(before.is_some());
         }
     }
+    /// Pins and deletion claims this frame replaces, removes or extends.
+    pub fn touched(
+        &self,
+    ) -> (
+        impl Iterator<Item = &PinToken>,
+        impl Iterator<Item = &PinToken>,
+    ) {
+        (
+            self.pins.keys().chain(self.extensions.keys()),
+            self.deletions.keys(),
+        )
+    }
     pub fn frame(&self) -> &'static [u8; 8] {
         if self.extensions.is_empty() {
             FRAME

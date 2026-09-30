@@ -17,6 +17,7 @@ use bytes::Bytes;
 use chroma_storage::{ETag, GetOptions, PutMode, PutOptions, Storage, StorageError};
 
 use crate::Digest;
+use crate::invariant::{self, Violation};
 use crate::metadata::MetadataError;
 use crate::object::{ObjectKey, ObjectRecord, RootName, RootRecord};
 
@@ -91,6 +92,16 @@ pub(super) struct EncodedRootShard {
     pub(super) bytes: Bytes,
 }
 
+/// A content-addressed shard name holds only the bytes that hash to it.
+/// Finding other bytes there is corruption or a BLAKE3 collision; referencing
+/// them from a checkpoint would publish state nobody wrote.
+fn validate_existing_shard(name: Digest, existing: &[u8]) -> Result<(), Violation> {
+    let found = Digest::from(blake3::hash(existing));
+    invariant::ensure("wal3.shard", found == name, || {
+        format!("shard name {name} holds bytes hashing to {found}")
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BarrierMode {
     Idle = 0,
@@ -108,8 +119,76 @@ struct BarrierState {
 #[derive(Clone, Debug)]
 pub(super) struct ShardBarrierLease {
     generation: u64,
+    mode: BarrierMode,
     token: [u8; 32],
     etag: Option<ETag>,
+}
+
+/// Acquisition advances the generation by exactly one, so a lease from any
+/// earlier acquisition stops owning the barrier. It installs a held state
+/// (a mode with a token, which `decode_barrier` requires) and preempts a
+/// held barrier only when forced: a checkpoint never fences a collector.
+fn validate_barrier_acquire(
+    prev: &BarrierState,
+    next: &BarrierState,
+    force: bool,
+) -> Result<(), Violation> {
+    const POINT: &str = "wal3.barrier";
+    invariant::ensure(
+        POINT,
+        prev.generation.checked_add(1) == Some(next.generation),
+        || {
+            format!(
+                "acquisition moves generation {} to {}",
+                prev.generation, next.generation
+            )
+        },
+    )?;
+    invariant::ensure(
+        POINT,
+        next.mode != BarrierMode::Idle && next.token != [0; 32],
+        || format!("acquisition installs {:?} without a token", next.mode),
+    )?;
+    invariant::ensure(POINT, force || prev.mode == BarrierMode::Idle, || {
+        format!("unforced acquisition preempts a {:?} barrier", prev.mode)
+    })
+}
+
+/// Only the lease's owner releases the barrier, and release keeps the
+/// generation, so the next acquisition still advances past this lease.
+/// `held` is the state the conditional release replaces; the owner's is the
+/// held state its acquisition installed.
+fn validate_barrier_release(
+    lease: &ShardBarrierLease,
+    held: &BarrierState,
+    next: &BarrierState,
+) -> Result<(), Violation> {
+    const POINT: &str = "wal3.barrier";
+    invariant::ensure(
+        POINT,
+        held.mode != BarrierMode::Idle
+            && held.mode == lease.mode
+            && held.generation == lease.generation
+            && held.token == lease.token,
+        || {
+            format!(
+                "{:?} lease for generation {} releases {:?} barrier generation {} it does not own",
+                lease.mode, lease.generation, held.mode, held.generation
+            )
+        },
+    )?;
+    invariant::ensure(
+        POINT,
+        next.mode == BarrierMode::Idle
+            && next.token == [0; 32]
+            && next.generation == held.generation,
+        || {
+            format!(
+                "release of generation {} writes {:?} generation {}",
+                held.generation, next.mode, next.generation
+            )
+        },
+    )
 }
 
 /// Cumulative immutable-state shard work for one WAL3 handle.
@@ -285,6 +364,15 @@ impl ObjectShardStorage {
                 mode: BarrierMode::Idle,
                 token: [0; 32],
             };
+            invariant::check(|| {
+                // The ETag names the state this lease installed.
+                let held = BarrierState {
+                    generation: lease.generation,
+                    mode: lease.mode,
+                    token: lease.token,
+                };
+                validate_barrier_release(lease, &held, &idle)
+            })?;
             return match self
                 .put_barrier(&idle, PutMode::IfMatch(etag.clone()))
                 .await
@@ -303,6 +391,7 @@ impl ObjectShardStorage {
                 mode: BarrierMode::Idle,
                 token: [0; 32],
             };
+            invariant::check(|| validate_barrier_release(lease, &state, &idle))?;
             match self.put_barrier(&idle, PutMode::IfMatch(etag)).await {
                 Ok(_) => return Ok(()),
                 Err(MetadataError::Transient(_)) => continue,
@@ -336,10 +425,12 @@ impl ObjectShardStorage {
                 mode,
                 token,
             };
+            invariant::check(|| validate_barrier_acquire(&current, &next, force))?;
             match self.put_barrier(&next, PutMode::IfMatch(etag)).await {
                 Ok(etag) => {
                     return Ok(ShardBarrierLease {
                         generation,
+                        mode,
                         token,
                         etag,
                     });
@@ -477,46 +568,88 @@ impl ObjectShardStorage {
         let path = self.path(shard.reference.digest);
         let _pin = self.pin_write(&path).await?;
         let options = PutOptions::default().with_mode(PutMode::IfNotExist);
-        match boxed_storage_future(self.storage.put_bytes(&path, shard.bytes.to_vec(), options))
-            .await
+        let created = match boxed_storage_future(self.storage.put_bytes(
+            &path,
+            shard.bytes.to_vec(),
+            options,
+        ))
+        .await
         {
-            Ok(_)
-            | Err(StorageError::AlreadyExists { .. })
-            | Err(StorageError::Precondition { .. }) => {
-                self.metrics.put_requests.fetch_add(1, Ordering::Relaxed);
-                self.cache
-                    .lock()
-                    .map_err(|_| MetadataError::Poisoned)?
-                    .insert(shard.reference.digest, Arc::new(shard.bytes.to_vec()));
-                Ok(())
+            Ok(_) => true,
+            Err(StorageError::AlreadyExists { .. }) | Err(StorageError::Precondition { .. }) => {
+                false
             }
-            Err(error) => Err(MetadataError::Backend(format!(
-                "write logical object shard {path}: {error}"
-            ))),
+            Err(error) => {
+                return Err(MetadataError::Backend(format!(
+                    "write logical object shard {path}: {error}"
+                )));
+            }
+        };
+        self.metrics.put_requests.fetch_add(1, Ordering::Relaxed);
+        if !created {
+            self.check_existing_shard(&path, shard.reference.digest)
+                .await?;
         }
+        self.cache
+            .lock()
+            .map_err(|_| MetadataError::Poisoned)?
+            .insert(shard.reference.digest, Arc::new(shard.bytes.to_vec()));
+        Ok(())
     }
 
     pub(super) async fn put_root(&self, shard: &EncodedRootShard) -> Result<(), MetadataError> {
         let path = self.root_path(shard.reference.digest);
         let _pin = self.pin_write(&path).await?;
         let options = PutOptions::default().with_mode(PutMode::IfNotExist);
-        match boxed_storage_future(self.storage.put_bytes(&path, shard.bytes.to_vec(), options))
-            .await
+        let created = match boxed_storage_future(self.storage.put_bytes(
+            &path,
+            shard.bytes.to_vec(),
+            options,
+        ))
+        .await
         {
-            Ok(_)
-            | Err(StorageError::AlreadyExists { .. })
-            | Err(StorageError::Precondition { .. }) => {
-                self.metrics.put_requests.fetch_add(1, Ordering::Relaxed);
-                self.cache
-                    .lock()
-                    .map_err(|_| MetadataError::Poisoned)?
-                    .insert(shard.reference.digest, Arc::new(shard.bytes.to_vec()));
-                Ok(())
+            Ok(_) => true,
+            Err(StorageError::AlreadyExists { .. }) | Err(StorageError::Precondition { .. }) => {
+                false
             }
-            Err(error) => Err(MetadataError::Backend(format!(
-                "write logical root shard {path}: {error}"
-            ))),
+            Err(error) => {
+                return Err(MetadataError::Backend(format!(
+                    "write logical root shard {path}: {error}"
+                )));
+            }
+        };
+        self.metrics.put_requests.fetch_add(1, Ordering::Relaxed);
+        if !created {
+            self.check_existing_shard(&path, shard.reference.digest)
+                .await?;
         }
+        self.cache
+            .lock()
+            .map_err(|_| MetadataError::Poisoned)?
+            .insert(shard.reference.digest, Arc::new(shard.bytes.to_vec()));
+        Ok(())
+    }
+
+    /// A create that finds its content-addressed name taken treats the object
+    /// as already written, so the bytes there must be the ones it names. The
+    /// check costs a GET, which only checking builds pay. It is left out of
+    /// the request metrics, which describe the protocol's own requests and
+    /// back its request budgets.
+    async fn check_existing_shard(&self, path: &str, name: Digest) -> Result<(), MetadataError> {
+        if !invariant::ENABLED {
+            return Ok(());
+        }
+        // An unverifiable name must not be referenced either; the write pin
+        // excludes deletion, so a failed GET here is a store fault.
+        let existing = boxed_storage_future(self.storage.get(path, GetOptions::default()))
+            .await
+            .map_err(|error| {
+                MetadataError::Backend(format!(
+                    "verify existing logical state shard {path}: {error}"
+                ))
+            })?;
+        invariant::check(|| validate_existing_shard(name, &existing))?;
+        Ok(())
     }
 
     async fn get(&self, reference: &ObjectShardRef) -> Result<Arc<Vec<u8>>, MetadataError> {
@@ -1857,6 +1990,98 @@ mod tests {
             })),
             Err(MetadataError::Corruption(_))
         ));
+    }
+
+    fn held(generation: u64, mode: BarrierMode, token: u8) -> BarrierState {
+        BarrierState {
+            generation,
+            mode,
+            token: [token; 32],
+        }
+    }
+
+    fn idle(generation: u64) -> BarrierState {
+        BarrierState {
+            generation,
+            mode: BarrierMode::Idle,
+            token: [0; 32],
+        }
+    }
+
+    #[test]
+    fn barrier_acquisition_advances_the_generation_by_exactly_one() {
+        use BarrierMode::{Checkpoint, GarbageCollection};
+        let next = held(8, GarbageCollection, 1);
+        assert_eq!(validate_barrier_acquire(&idle(7), &next, false), Ok(()));
+        assert_eq!(
+            validate_barrier_acquire(&held(7, Checkpoint, 2), &next, true),
+            Ok(())
+        );
+        for generation in [0, 7, 9] {
+            let next = held(generation, GarbageCollection, 1);
+            assert!(validate_barrier_acquire(&idle(7), &next, false).is_err());
+        }
+        let wrapped = held(0, Checkpoint, 1);
+        assert!(validate_barrier_acquire(&idle(u64::MAX), &wrapped, true).is_err());
+        // A held barrier needs a mode and a token, or it no longer decodes.
+        assert!(validate_barrier_acquire(&idle(7), &idle(8), false).is_err());
+        let tokenless = held(8, Checkpoint, 0);
+        assert!(validate_barrier_acquire(&idle(7), &tokenless, false).is_err());
+        // A checkpoint must not preempt a collector.
+        let collector = held(7, GarbageCollection, 2);
+        let checkpoint = held(8, Checkpoint, 1);
+        assert!(validate_barrier_acquire(&collector, &checkpoint, false).is_err());
+    }
+
+    #[test]
+    fn only_the_barrier_owner_releases_it_and_keeps_the_generation() {
+        use BarrierMode::{Checkpoint, GarbageCollection};
+        let lease = ShardBarrierLease {
+            generation: 8,
+            mode: GarbageCollection,
+            token: [1; 32],
+            etag: None,
+        };
+        let mine = held(8, GarbageCollection, 1);
+        assert_eq!(validate_barrier_release(&lease, &mine, &idle(8)), Ok(()));
+        for other in [
+            held(8, GarbageCollection, 2),
+            held(9, GarbageCollection, 1),
+            held(8, Checkpoint, 1),
+            idle(8),
+        ] {
+            assert!(validate_barrier_release(&lease, &other, &idle(8)).is_err());
+        }
+        for next in [
+            idle(7),
+            idle(9),
+            mine.clone(),
+            BarrierState {
+                token: [1; 32],
+                ..idle(8)
+            },
+        ] {
+            assert!(validate_barrier_release(&lease, &mine, &next).is_err());
+        }
+    }
+
+    #[test]
+    fn an_existing_shard_must_hash_to_its_name() {
+        let object = encode_object_shard(&[(record(1), true, 1)]).unwrap();
+        let roots = encode_root_shard(&[root(1)]).unwrap();
+        assert_eq!(
+            validate_existing_shard(object.reference.digest, &object.bytes),
+            Ok(())
+        );
+        assert_eq!(
+            validate_existing_shard(roots.reference.digest, &roots.bytes),
+            Ok(())
+        );
+        let mut corrupt = object.bytes.to_vec();
+        let last = corrupt.len() - 1;
+        corrupt[last] ^= 1;
+        assert!(validate_existing_shard(object.reference.digest, &corrupt).is_err());
+        assert!(validate_existing_shard(object.reference.digest, &roots.bytes).is_err());
     }
 
     #[test]

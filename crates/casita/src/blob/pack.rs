@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex, RwLock};
+use std::sync::{Arc, Mutex as StdMutex, PoisonError, RwLock};
 use std::time::Instant;
 
 #[derive(Clone)]
@@ -39,6 +39,18 @@ struct PayloadShardMarks {
 struct PayloadPinMark {
     ledger: CatalogPinMark,
     retained: HashSet<Path>,
+}
+
+/// Retired payload deleted under a payload mark: no path is one the mark
+/// retained for a pin or for a payload a pinned catalog still names.
+fn validate_retired_deletions(paths: &[Path], retained: &HashSet<Path>) -> Result<(), Violation> {
+    match paths.iter().find(|path| retained.contains(*path)) {
+        Some(path) => Err(Violation::new(
+            "pack.retire",
+            format!("{path} is deleted although the payload mark retains it"),
+        )),
+        None => Ok(()),
+    }
 }
 
 const PAYLOAD_DELETE_BATCH: usize = 1_000;
@@ -70,9 +82,14 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
 use super::ChunkMeta;
-use super::chunked::{delete_object, digest_from_location, kind_prefix, put_object, sharded_path};
+use super::chunked::{
+    check_content_address, delete_object, digest_from_location, kind_prefix, put_object,
+    sharded_path, validate_content_address,
+};
 use super::local_durability::{LocalCatalogLock, LocalDurability, PreparedLocalPut};
+use super::pinned_store::{validate_deletion_claim, validate_deletion_finish};
 use crate::digest::{BlobId, ChunkId, DIGEST_LEN, Digest, PackId};
+use crate::invariant::{self, Violation};
 
 mod delta;
 mod read;
@@ -1212,6 +1229,110 @@ struct IndexCatalogWitness {
     prepared_map: Option<ShardedIndexBase>,
 }
 
+/// A pack catalog pointer about to replace the witnessed `previous` one,
+/// checked before the pointer CAS or before the metadata commit that carries
+/// it as a state catalog:
+///
+/// - `pointer` decodes, to exactly the `built` root;
+/// - its generation advances past the witnessed pointer's;
+/// - no pack it retires stays referenced: neither a pack whose payload
+///   `retired` hands to deletion nor one that `delta` removes or supersedes
+///   is present in `candidate` or re-added by `delta`;
+/// - given the debug-only `written` witness, every catalog object the pointer
+///   names directly is named by `previous` or was durably written by this
+///   handle, so no reader follows it to an object that was never stored.
+fn validate_catalog_pointer(
+    previous: &IndexCatalogWitness,
+    built: &DeltaCatalog,
+    pointer: &[u8],
+    delta: Option<&[u8]>,
+    candidate: &Index,
+    retired: &HashSet<PackId>,
+    written: Option<&HashSet<Digest>>,
+) -> Result<(), Violation> {
+    const POINT: &str = "pack.pointer";
+    let next = decode_delta_catalog(pointer).map_err(|error| {
+        Violation::new(POINT, format!("the new pointer does not decode: {error}"))
+    })?;
+    invariant::ensure(POINT, next == *built, || {
+        "the new pointer decodes to a different root than was built".into()
+    })?;
+    let floor = previous.root.as_ref().map_or(previous.generation, |root| {
+        root.generation.max(previous.generation)
+    });
+    invariant::ensure(POINT, next.generation > floor, || {
+        format!(
+            "generation {} does not advance past the witnessed {floor}",
+            next.generation
+        )
+    })?;
+    let delta = delta.map(decode_index_delta).transpose().map_err(|error| {
+        Violation::new(
+            POINT,
+            format!("the published delta does not decode: {error}"),
+        )
+    })?;
+    let dropped = delta.iter().flat_map(|delta| {
+        delta
+            .removed_packs
+            .iter()
+            .chain(delta.patch.superseded.iter())
+    });
+    for pack in retired.iter().chain(dropped) {
+        let referenced = candidate.packs.contains_key(pack)
+            || delta
+                .as_ref()
+                .is_some_and(|delta| delta.patch.packs.contains_key(pack));
+        invariant::ensure(POINT, !referenced, || {
+            format!("retired pack {pack} is still referenced")
+        })?;
+    }
+    if let Some(written) = written {
+        let known: HashSet<Digest> = previous
+            .root
+            .iter()
+            .flat_map(catalog_root_references)
+            .collect();
+        for reference in catalog_root_references(&next) {
+            invariant::ensure(
+                POINT,
+                known.contains(&reference) || written.contains(&reference),
+                || {
+                    format!(
+                        "catalog object {reference} is neither named by the witnessed pointer \
+                         nor written by this handle"
+                    )
+                },
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// The catalog objects a root names directly: its checkpoint or shard map,
+/// and its immutable runs. Shards are named by the map, not by the root.
+fn catalog_root_references(root: &DeltaCatalog) -> impl Iterator<Item = Digest> + '_ {
+    let base = match &root.base {
+        CatalogBase::Inline(_) => None,
+        CatalogBase::Checkpoint(digest) | CatalogBase::Sharded { root: digest, .. } => {
+            Some(*digest)
+        }
+    };
+    base.into_iter()
+        .chain(root.runs.values().map(|run| run.digest))
+}
+
+/// The packs whose payload a publication's retirements hand to deletion.
+fn retired_packs(base: &Path, retirements: &HashSet<Path>) -> HashSet<PackId> {
+    let prefix = kind_prefix(base, PACKS_KIND);
+    retirements
+        .iter()
+        .filter(|path| path.prefix_matches(&prefix))
+        .filter_map(|path| digest_from_location(path).ok())
+        .map(PackId::new)
+        .collect()
+}
+
 #[derive(Clone)]
 struct ShardedIndexBase {
     map: Arc<ShardMap>,
@@ -1418,6 +1539,8 @@ struct CatalogObjectPublication<'a> {
     packed: &'a PackedChunks,
     pending: FuturesUnordered<BoxFuture<'static, io::Result<PreparedLocalPut>>>,
     prepared: Vec<PreparedLocalPut>,
+    /// Objects of the local batch, recorded as written once it commits.
+    staged: Vec<Digest>,
 }
 
 impl CatalogObjectPublication<'_> {
@@ -1431,15 +1554,23 @@ impl CatalogObjectPublication<'_> {
             .index_put_bytes
             .fetch_add(bytes.len() as u64, Ordering::Relaxed);
         let path = sharded_path(&self.packed.base, INDEXES_KIND, &digest);
+        // A local batch becomes durable at `LocalDurability::commit`, which
+        // sees only temporary files, so its objects are checked here too.
+        check_content_address(&path, &bytes)?;
         let Some(local) = &self.packed.local_durability else {
-            return put_object(&self.packed.object_store, &path, bytes, true)
+            put_object(&self.packed.object_store, &path, bytes, true)
                 .await
-                .map_err(io::Error::other);
+                .map_err(io::Error::other)?;
+            self.packed.record_catalog_objects_written([digest]);
+            return Ok(());
         };
 
         let local = local.clone();
         self.pending
             .push(async move { local.prepare(&path, bytes).await }.boxed());
+        if crate::invariant::DEBUG {
+            self.staged.push(digest);
+        }
         if self.pending.len() >= MAX_CONCURRENT_CATALOG_SYNCS {
             self.collect_one().await?;
         }
@@ -1459,6 +1590,7 @@ impl CatalogObjectPublication<'_> {
         }
         if let Some(local) = &self.packed.local_durability {
             local.commit(self.prepared).await?;
+            self.packed.record_catalog_objects_written(self.staged);
         }
         Ok(())
     }
@@ -1501,6 +1633,10 @@ pub(crate) struct PackedChunks {
     catalog_run_indexes: Arc<StdMutex<HashMap<Digest, Arc<CatalogRunQueryIndex>>>>,
     catalog_rebase_run_bytes: AtomicU64,
     background_catalog_rebase: StdMutex<CatalogBackgroundRebaseState>,
+    /// Catalog objects this handle durably wrote and has not reclaimed since:
+    /// the in-memory witness that a new pointer names only stored objects.
+    /// Filled in debug builds only, where `validate_catalog_pointer` reads it.
+    catalog_objects_written: StdMutex<HashSet<Digest>>,
     read_counters: Arc<PackReadCounters>,
 }
 
@@ -1666,7 +1802,47 @@ impl PackedChunks {
             catalog_run_indexes: Arc::new(StdMutex::new(HashMap::new())),
             catalog_rebase_run_bytes: AtomicU64::new(CATALOG_REBASE_RUN_BYTES),
             background_catalog_rebase: StdMutex::new(CatalogBackgroundRebaseState::default()),
+            catalog_objects_written: StdMutex::new(HashSet::new()),
             read_counters: Arc::default(),
+        })
+    }
+
+    /// Debug builds only: the witness grows with every catalog object this
+    /// handle writes, and only the pointer invariant reads it.
+    fn record_catalog_objects_written(&self, digests: impl IntoIterator<Item = Digest>) {
+        if crate::invariant::DEBUG {
+            self.catalog_objects_written
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .extend(digests);
+        }
+    }
+
+    /// Check a catalog pointer before it replaces `previous`; see
+    /// [`validate_catalog_pointer`].
+    fn check_catalog_pointer(
+        &self,
+        previous: &IndexCatalogWitness,
+        built: &DeltaCatalog,
+        pointer: &[u8],
+        delta: Option<&[u8]>,
+        candidate: &Index,
+        retired: &HashSet<Path>,
+    ) -> Result<(), Violation> {
+        invariant::check(|| {
+            let written = self
+                .catalog_objects_written
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            validate_catalog_pointer(
+                previous,
+                built,
+                pointer,
+                delta,
+                candidate,
+                &retired_packs(&self.base, retired),
+                crate::invariant::DEBUG.then_some(&*written),
+            )
         })
     }
 
@@ -2227,6 +2403,20 @@ impl PackedChunks {
         Ok(())
     }
 
+    /// Delete retired payload representations, under a payload mark when
+    /// collection runs online. The mark's `retained` set must exclude them.
+    async fn delete_payload_batch(
+        &self,
+        paths: Vec<Path>,
+        mark: Option<&PayloadPinMark>,
+    ) -> io::Result<()> {
+        if let Some(mark) = mark {
+            invariant::check(|| validate_retired_deletions(&paths, &mark.retained))?;
+        }
+        self.delete_catalog_batch(paths, mark.map(|mark| &mark.ledger))
+            .await
+    }
+
     async fn delete_retired_payload(
         &self,
         path: &Path,
@@ -2236,7 +2426,7 @@ impl PackedChunks {
             if mark.retained.contains(path) {
                 return Ok(false);
             }
-            self.delete_catalog_batch(vec![path.clone()], Some(&mark.ledger))
+            self.delete_payload_batch(vec![path.clone()], Some(mark))
                 .await?;
         } else {
             delete_object(&self.object_store, path).await?;
@@ -2329,8 +2519,7 @@ impl PackedChunks {
                 }
             }
             if !deletes.is_empty() {
-                self.delete_catalog_batch(deletes, mark.map(|mark| &mark.ledger))
-                    .await?;
+                self.delete_payload_batch(deletes, mark).await?;
             }
             retired.finish_batch(retained);
         }
@@ -2427,18 +2616,14 @@ impl PackedChunks {
                 if !retained && mark.is_none_or(|mark| !mark.retained.contains(&object.location)) {
                     deletes.push(object.location);
                     if deletes.len() == PAYLOAD_DELETE_BATCH {
-                        self.delete_catalog_batch(
-                            std::mem::take(&mut deletes),
-                            mark.map(|mark| &mark.ledger),
-                        )
-                        .await?;
+                        self.delete_payload_batch(std::mem::take(&mut deletes), mark)
+                            .await?;
                     }
                 }
             }
         }
         if !deletes.is_empty() {
-            self.delete_catalog_batch(deletes, mark.map(|mark| &mark.ledger))
-                .await?;
+            self.delete_payload_batch(deletes, mark).await?;
         }
         Ok(())
     }
@@ -2500,18 +2685,14 @@ impl PackedChunks {
                 if mark.is_none_or(|mark| !mark.retained.contains(&path)) {
                     deletes.push(path);
                     if deletes.len() == PAYLOAD_DELETE_BATCH {
-                        self.delete_catalog_batch(
-                            std::mem::take(&mut deletes),
-                            mark.map(|mark| &mark.ledger),
-                        )
-                        .await?;
+                        self.delete_payload_batch(std::mem::take(&mut deletes), mark)
+                            .await?;
                     }
                 }
             }
         }
         if !deletes.is_empty() {
-            self.delete_catalog_batch(deletes, mark.map(|mark| &mark.ledger))
-                .await?;
+            self.delete_payload_batch(deletes, mark).await?;
         }
         Ok(())
     }
@@ -2878,6 +3059,23 @@ impl PackedChunks {
             .ok_or_else(|| io::Error::other("missing prepared catalog root"))?;
         root.sidecars = sidecar_root;
         let catalog = encode_delta_catalog(root)?;
+        // A state catalog may deliberately reintroduce identical pack bytes a
+        // pending retirement still names (see `flush_locked`), and deletion
+        // re-checks catalog membership, so only the delta's own removals and
+        // supersessions count as retired for this candidate.
+        let published_delta = if background_install.is_none() {
+            delta.as_deref()
+        } else {
+            None
+        };
+        self.check_catalog_pointer(
+            &previous,
+            root,
+            &catalog,
+            published_delta,
+            &candidate,
+            &HashSet::new(),
+        )?;
         witness.pointer_digest = Some(blake3::hash(&catalog).into());
         if let Some(start) = &mut background_start
             && let Some(root) = &witness.root
@@ -3151,18 +3349,16 @@ impl PackedChunks {
             *self.inflight.lock().await = Some(Arc::clone(&batch));
             batch
         };
-        let result = match seal(&batch) {
-            Ok(sealed) => put_object(
-                &self.object_store,
-                &pack_path(&self.base, &sealed.id),
-                sealed.bytes.clone(),
-                true,
-            )
-            .await
-            .map_err(io::Error::other)
-            .map(|()| sealed),
-            Err(error) => Err(error),
-        };
+        let result = async {
+            let sealed = seal(&batch)?;
+            let path = pack_path(&self.base, &sealed.id);
+            check_content_address(&path, &sealed.bytes)?;
+            put_object(&self.object_store, &path, sealed.bytes.clone(), true)
+                .await
+                .map_err(io::Error::other)?;
+            Ok::<_, io::Error>(sealed)
+        }
+        .await;
         drop(batch);
         match result {
             Ok(sealed) => {
@@ -3712,8 +3908,23 @@ impl PackedChunks {
             .fetch_add(reference.encoded_bytes, Ordering::Relaxed);
         if let Some(local) = &self.local_durability {
             let mut source = prepared.file.as_file().try_clone()?;
+            if crate::invariant::DEBUG {
+                // Debug builds only: re-reading the staged run doubles its
+                // hashing. Clones share the file offset; `source` seeks after.
+                let mut staged = source.try_clone()?;
+                let digest = tokio::task::spawn_blocking(move || {
+                    std::io::Seek::seek(&mut staged, std::io::SeekFrom::Start(0))?;
+                    let mut hasher = blake3::Hasher::new();
+                    std::io::copy(&mut staged, &mut hasher)?;
+                    Ok::<_, io::Error>(Digest::from(hasher.finalize()))
+                })
+                .await
+                .map_err(io::Error::other)??;
+                invariant::check(|| validate_content_address(&path, &digest))?;
+            }
             std::io::Seek::seek(&mut source, std::io::SeekFrom::Start(0))?;
             local.put_file(&path, source).await?;
+            self.record_catalog_objects_written([reference.digest]);
             return Ok(reference);
         }
 
@@ -3724,9 +3935,11 @@ impl PackedChunks {
                 .map_err(|_| io::Error::other("catalog run is too large for a single PUT"))?;
             let mut bytes = Vec::with_capacity(capacity);
             source.read_to_end(&mut bytes).await?;
+            check_content_address(&path, &bytes)?;
             put_object(&self.object_store, &path, Bytes::from(bytes), true)
                 .await
                 .map_err(io::Error::other)?;
+            self.record_catalog_objects_written([reference.digest]);
             return Ok(reference);
         }
 
@@ -3759,6 +3972,8 @@ impl PackedChunks {
         };
         let mut upload = WriteMultipart::new_with_chunk_size(upload, MULTIPART_BYTES);
         let mut buffer = vec![0_u8; COPY_BUFFER_BYTES];
+        // Debug builds only: hashing the streamed run doubles its hashing.
+        let mut hasher = crate::invariant::DEBUG.then(blake3::Hasher::new);
         loop {
             let read = match source.read(&mut buffer).await {
                 Ok(read) => read,
@@ -3775,8 +3990,20 @@ impl PackedChunks {
                 return Err(io::Error::other(error));
             }
             upload.write(&buffer[..read]);
+            if let Some(hasher) = &mut hasher {
+                hasher.update(&buffer[..read]);
+            }
+        }
+        // Completing the upload is what makes the run visible.
+        if let Some(hasher) = hasher {
+            let digest = Digest::from(hasher.finalize());
+            if let Err(violation) = invariant::check(|| validate_content_address(&path, &digest)) {
+                let _ = upload.abort().await;
+                return Err(violation.into());
+            }
         }
         upload.finish().await.map_err(io::Error::other)?;
+        self.record_catalog_objects_written([reference.digest]);
         Ok(reference)
     }
 
@@ -4331,6 +4558,7 @@ impl PackedChunks {
                 .publish_index_catalog(
                     &candidate,
                     delta.as_deref(),
+                    &mutations.retirements,
                     force,
                     &witness,
                     &lazy,
@@ -4402,10 +4630,15 @@ impl PackedChunks {
         Err(io::Error::other("pack index catalog remained contended"))
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the pointer check needs the retirements published beside the delta"
+    )]
     async fn publish_index_catalog(
         &self,
         candidate: &Index,
         delta: Option<&[u8]>,
+        retirements: &HashSet<Path>,
         force: bool,
         witness: &IndexCatalogWitness,
         lazy: &LazyCatalogOverlay,
@@ -4418,6 +4651,15 @@ impl PackedChunks {
             .await?;
         #[cfg(test)]
         self.record_index_build(build_started);
+        // Both CAS paths below: the shared store's conditional PUT and
+        // `LocalCatalogLock::compare_and_put`.
+        if let Some(root) = &next.root {
+            self.check_catalog_pointer(witness, root, &catalog, delta, candidate, retirements)
+                .map_err(|violation| object_store::Error::Generic {
+                    store: "pack index catalog",
+                    source: Box::new(violation),
+                })?;
+        }
         self.read_counters
             .index_put_requests
             .fetch_add(1, Ordering::Relaxed);
@@ -4693,13 +4935,16 @@ impl PackedChunks {
             .index_put_bytes
             .fetch_add(bytes.len() as u64, Ordering::Relaxed);
         let path = sharded_path(&self.base, INDEXES_KIND, &digest);
+        check_content_address(&path, &bytes)?;
         if let Some(local) = &self.local_durability {
-            local.put(&path, bytes).await
+            local.put(&path, bytes).await?;
         } else {
             put_object(&self.object_store, &path, bytes, true)
                 .await
-                .map_err(io::Error::other)
+                .map_err(io::Error::other)?;
         }
+        self.record_catalog_objects_written([digest]);
+        Ok(())
     }
 
     fn catalog_object_publication(&self) -> CatalogObjectPublication<'_> {
@@ -4707,6 +4952,7 @@ impl PackedChunks {
             packed: self,
             pending: FuturesUnordered::new(),
             prepared: Vec::new(),
+            staged: Vec::new(),
         }
     }
 
@@ -4863,6 +5109,13 @@ impl PackedChunks {
             }
             stats.deleted_objects = stats.deleted_objects.saturating_add(1);
             stats.deleted_bytes = stats.deleted_bytes.saturating_add(object.size);
+            if crate::invariant::DEBUG {
+                // A reclaimed object no longer witnesses a later pointer.
+                self.catalog_objects_written
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .remove(&digest);
+            }
             // Bound the durable claim by encoded size as well as object count;
             // long repository prefixes must still fit the local GC reserve.
             let resource_bytes = object.location.as_ref().len().saturating_add(9);
@@ -4959,8 +5212,16 @@ impl PackedChunks {
         let (send, receive) = tokio::sync::oneshot::channel();
         crate::metadata::spawn_lease_task(async move {
             let result = async {
-                let token = if let Some(mark) = &mark {
-                    loop {
+                let requested: BTreeSet<_> = if mark.is_some() {
+                    paths
+                        .iter()
+                        .map(|path| crate::metadata::PinResource::StorageObject(path.to_string()))
+                        .collect()
+                } else {
+                    BTreeSet::new()
+                };
+                let claim = if let Some(mark) = &mark {
+                    Some(loop {
                         let inventory = mark.store.inventory().await.map_err(io::Error::other)?;
                         if inventory.collector != mark.inventory.collector {
                             return Err(io::Error::new(
@@ -4980,12 +5241,6 @@ impl PackedChunks {
                                 "catalog pins changed during reclamation",
                             ));
                         }
-                        let resources: BTreeSet<_> = paths
-                            .iter()
-                            .map(|path| {
-                                crate::metadata::PinResource::StorageObject(path.to_string())
-                            })
-                            .collect();
                         let covered: BTreeSet<_> = inventory
                             .deletions
                             .iter()
@@ -4993,9 +5248,9 @@ impl PackedChunks {
                             .flat_map(|(_, resources)| resources.iter().cloned())
                             .collect();
                         let resources: BTreeSet<_> =
-                            resources.difference(&covered).cloned().collect();
+                            requested.difference(&covered).cloned().collect();
                         if resources.is_empty() {
-                            break None;
+                            break (None, inventory, resources);
                         }
                         if !mark.store.allows_deletion(&inventory)
                             || inventory
@@ -5011,26 +5266,40 @@ impl PackedChunks {
                                 "catalog deletion conflicts with a pin or deletion",
                             ));
                         }
+                        // Kept only to check the claim against the deletions it covers.
+                        let claimed = if invariant::ENABLED {
+                            resources.clone()
+                        } else {
+                            BTreeSet::new()
+                        };
                         if let Some(token) = mark
                             .store
                             .claim_deletions(inventory.revision, resources)
                             .await
                             .map_err(io::Error::other)?
                         {
-                            break Some(token);
+                            break (Some(token), inventory, claimed);
                         }
                         // Concurrent disjoint compactions also advance this
                         // ledger. Retry admission against their settled state.
-                    }
+                    })
                 } else {
                     None
                 };
+                if let (Some(mark), Some((_, inventory, claimed))) = (&mark, &claim) {
+                    invariant::check(|| {
+                        validate_deletion_claim(inventory, &mark.owned_claims, claimed, &requested)
+                    })?;
+                }
+                let issued = paths.len();
+                let mut settled = 0_usize;
                 if let Some(local) = local {
                     if paths.len() == 1 {
                         local.delete(&paths[0]).await?;
                     } else {
                         local.delete_many(paths).await?;
                     }
+                    settled = issued;
                 } else {
                     let locations =
                         futures::stream::iter(paths.into_iter().map(Ok::<_, object_store::Error>))
@@ -5038,14 +5307,21 @@ impl PackedChunks {
                     let mut deletes = objects.delete_stream(locations);
                     while let Some(result) = deletes.next().await {
                         match result {
-                            Ok(_) | Err(object_store::Error::NotFound { .. }) => {}
+                            Ok(_) | Err(object_store::Error::NotFound { .. }) => settled += 1,
                             Err(error) => return Err(io::Error::other(error)),
                         }
                     }
                 }
-                if let (Some(mark), Some(token)) = (&mark, token) {
+                if let (Some(mark), Some((Some(token), _, claimed))) = (&mark, &claim) {
+                    invariant::check(|| {
+                        validate_deletion_finish(
+                            claimed,
+                            &requested,
+                            issued.saturating_sub(settled),
+                        )
+                    })?;
                     mark.store
-                        .finish_deletions(&token)
+                        .finish_deletions(token)
                         .await
                         .map_err(io::Error::other)?;
                 }
@@ -5982,7 +6258,11 @@ impl PackedChunks {
         ))
     }
 
-    async fn put_replacement_marker(&self, old: PackId, new: Option<PackId>) -> io::Result<()> {
+    async fn put_replacement_marker(
+        &self,
+        old: PackId,
+        new: Option<PackId>,
+    ) -> io::Result<ReplacementMarker> {
         let marker = encode_replacement(old, new);
         let marker_id = Digest::from(blake3::hash(&marker));
         let path = sharded_path(&self.base, REPLACEMENTS_KIND, &marker_id);
@@ -5993,12 +6273,13 @@ impl PackedChunks {
             .gc_marker_put_bytes
             .fetch_add(marker.len() as u64, Ordering::Relaxed);
         if let Some(local) = &self.local_durability {
-            local.put(&path, marker).await
+            local.put(&path, marker.clone()).await?;
         } else {
-            put_object(&self.object_store, &path, marker, true)
+            put_object(&self.object_store, &path, marker.clone(), true)
                 .await
-                .map_err(io::Error::other)
+                .map_err(io::Error::other)?;
         }
+        Ok(ReplacementMarker(marker))
     }
 
     #[tracing::instrument(name = "blob.pack.compact", skip_all)]
@@ -6133,7 +6414,8 @@ impl PackedChunks {
                 .await?;
             drop(retire);
             let marker_write = CollectionPhase::new("compact_pack_marker_write");
-            self.put_replacement_marker(old, None).await?;
+            let marker = self.put_replacement_marker(old, None).await?;
+            invariant::check(|| validate_replacement_reference(&marker, old, None))?;
             drop(marker_write);
             {
                 let mut index = self.index.write().unwrap();
@@ -6166,19 +6448,17 @@ impl PackedChunks {
             self.read_counters
                 .gc_replacement_put_bytes
                 .fetch_add(pack_len, Ordering::Relaxed);
-            put_object(
-                &self.object_store,
-                &pack_path(&self.base, &sealed.id),
-                sealed.bytes,
-                true,
-            )
-            .await
-            .map_err(io::Error::other)?;
+            let path = pack_path(&self.base, &sealed.id);
+            check_content_address(&path, &sealed.bytes)?;
+            put_object(&self.object_store, &path, sealed.bytes, true)
+                .await
+                .map_err(io::Error::other)?;
             Some((sealed.id, pack_len, sealed.entries))
         };
         let marker_write = CollectionPhase::new("compact_pack_marker_write");
         let replacement_id = replacement.as_ref().map(|(id, _, _)| *id);
-        self.put_replacement_marker(old, replacement_id).await?;
+        let marker = self.put_replacement_marker(old, replacement_id).await?;
+        invariant::check(|| validate_replacement_reference(&marker, old, replacement_id))?;
 
         drop(marker_write);
         {
@@ -6519,6 +6799,31 @@ fn decode_replacement(bytes: &[u8]) -> io::Result<(PackId, Option<PackId>)> {
         _ => return Err(io::Error::other("invalid pack replacement record length")),
     };
     Ok((old, new))
+}
+
+/// A pack replacement record whose write has completed: production code gets
+/// one only from `PackedChunks::put_replacement_marker`.
+struct ReplacementMarker(Bytes);
+
+/// Removing `old` from the index, and installing `new` in its place, needs
+/// the durable record that names exactly that replacement first: a catalog
+/// rebuilt from storage treats `old` as superseded only through it, and
+/// `reclaim_retired_packs` replays the deletion of `old` from it.
+fn validate_replacement_reference(
+    marker: &ReplacementMarker,
+    old: PackId,
+    new: Option<PackId>,
+) -> Result<(), Violation> {
+    const POINT: &str = "pack.replacement";
+    let recorded = decode_replacement(&marker.0).map_err(|error| {
+        Violation::new(
+            POINT,
+            format!("the replacement record does not decode: {error}"),
+        )
+    })?;
+    invariant::ensure(POINT, recorded == (old, new), || {
+        format!("the record names {recorded:?}, but the index replaces {old} with {new:?}")
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -8013,7 +8318,8 @@ mod tests {
             .unwrap();
         let temporary = tempfile::NamedTempFile::new().unwrap();
         temporary.as_file().set_len(RUN_BYTES).unwrap();
-        let digest = Digest::from(blake3::hash(b"multipart catalog run test object"));
+        // A run is stored under the hash of its bytes: here, zeros.
+        let digest = Digest::from(blake3::hash(&vec![0_u8; RUN_BYTES as usize]));
         writer.reset_read_stats();
         let reference = writer
             .put_prepared_catalog_run(PreparedCatalogRunFile {
@@ -12646,5 +12952,150 @@ mod tests {
         let mut trailing = delta.to_vec();
         trailing.push(0);
         assert!(decode_tombstone_record(&trailing).is_err());
+    }
+
+    fn empty_inline_root(generation: u64) -> DeltaCatalog {
+        DeltaCatalog {
+            sidecars: None,
+            generation,
+            base: CatalogBase::Inline(
+                encode_index_checkpoint(
+                    &Index::default(),
+                    Digest::from(blake3::hash(b"casita authoritative pack index v1\0")),
+                )
+                .unwrap(),
+            ),
+            runs: BTreeMap::new(),
+            deltas: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_catalog_pointer_decodes_advances_and_drops_what_it_retires() {
+        let sealed = |data: &[u8]| {
+            let (meta, bytes) = chunk(data);
+            let mut batch = Batch::default();
+            batch.push(meta, bytes);
+            seal(&batch).unwrap()
+        };
+        let (kept, dropped) = (sealed(b"kept pack"), sealed(b"dropped pack"));
+        let mut candidate = Index::default();
+        candidate.add_pack(kept.id, kept.bytes.len() as u64, kept.entries.clone());
+        candidate.remove_pack(dropped.id);
+        let mut mutations = IndexMutations::default();
+        mutations.record_pack(kept.id);
+        mutations.record_pack(dropped.id);
+        let delta = encode_index_mutations(&candidate, &mutations).unwrap();
+        let previous = IndexCatalogWitness {
+            generation: 1,
+            root: Some(empty_inline_root(1)),
+            ..IndexCatalogWitness::default()
+        };
+        let mut built = empty_inline_root(2);
+        built.deltas.push(delta.clone());
+        let pointer = encode_delta_catalog(&built).unwrap();
+        let nothing = HashSet::new();
+        let check = |built: &DeltaCatalog,
+                     pointer: &[u8],
+                     candidate: &Index,
+                     retired: &HashSet<PackId>,
+                     written: Option<&HashSet<Digest>>| {
+            validate_catalog_pointer(
+                &previous,
+                built,
+                pointer,
+                Some(&delta),
+                candidate,
+                retired,
+                written,
+            )
+        };
+        assert_eq!(
+            check(
+                &built,
+                &pointer,
+                &candidate,
+                &nothing,
+                Some(&HashSet::new())
+            ),
+            Ok(())
+        );
+
+        // The pointer does not decode, or decodes to another root.
+        assert!(check(&built, b"garbage", &candidate, &nothing, None).is_err());
+        let other = encode_delta_catalog(&empty_inline_root(2)).unwrap();
+        assert!(check(&built, &other, &candidate, &nothing, None).is_err());
+
+        // The generation does not advance past the witnessed pointer.
+        let mut stale = built.clone();
+        stale.generation = 1;
+        let stale_pointer = encode_delta_catalog(&stale).unwrap();
+        assert!(check(&stale, &stale_pointer, &candidate, &nothing, None).is_err());
+
+        // A pack whose payload the publication retires is still indexed.
+        let retired = HashSet::from([kept.id]);
+        assert!(check(&built, &pointer, &candidate, &retired, None).is_err());
+
+        // The delta supersedes a pack the published index still references.
+        let mut resurrected = candidate.clone();
+        resurrected.superseded.remove(&dropped.id);
+        resurrected.add_pack(dropped.id, dropped.bytes.len() as u64, dropped.entries);
+        assert!(check(&built, &pointer, &resurrected, &nothing, None).is_err());
+
+        // The pointer names a catalog object that was never stored.
+        let map = Digest::from(blake3::hash(b"unwritten shard map"));
+        let mut sharded = built.clone();
+        sharded.base = CatalogBase::Sharded {
+            root: map,
+            shard_bits: 12,
+        };
+        let sharded_pointer = encode_delta_catalog(&sharded).unwrap();
+        assert!(
+            check(
+                &sharded,
+                &sharded_pointer,
+                &candidate,
+                &nothing,
+                Some(&HashSet::new())
+            )
+            .is_err()
+        );
+        assert_eq!(
+            check(
+                &sharded,
+                &sharded_pointer,
+                &candidate,
+                &nothing,
+                Some(&HashSet::from([map]))
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn marked_deletions_never_include_a_retained_payload() {
+        let kept = Path::from("packs/b3/aa/kept");
+        let gone = Path::from("packs/b3/bb/gone");
+        let retained = HashSet::from([kept.clone()]);
+        assert_eq!(
+            validate_retired_deletions(std::slice::from_ref(&gone), &retained),
+            Ok(())
+        );
+        assert!(validate_retired_deletions(&[gone, kept], &retained).is_err());
+    }
+
+    #[test]
+    fn a_pack_is_replaced_only_under_the_record_that_names_the_replacement() {
+        let old = PackId::new(blake3::hash(b"old pack").into());
+        let new = PackId::new(blake3::hash(b"new pack").into());
+        let marker = ReplacementMarker(encode_replacement(old, Some(new)));
+        assert_eq!(
+            validate_replacement_reference(&marker, old, Some(new)),
+            Ok(())
+        );
+        assert!(validate_replacement_reference(&marker, new, Some(new)).is_err());
+        assert!(validate_replacement_reference(&marker, old, None).is_err());
+        let garbage = ReplacementMarker(Bytes::from_static(b"garbage"));
+        assert!(validate_replacement_reference(&garbage, old, Some(new)).is_err());
     }
 }

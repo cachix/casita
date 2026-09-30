@@ -18,6 +18,17 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::Notify;
 
+#[test]
+fn a_self_addressed_object_is_named_by_the_hash_of_its_bytes() {
+    let digest = Digest::from(blake3::hash(b"catalog object"));
+    let path = sharded_path(&Path::from("base"), "pack-indexes", &digest);
+    assert_eq!(validate_content_address(&path, &digest), Ok(()));
+    let other = Digest::from(blake3::hash(b"other bytes"));
+    assert!(validate_content_address(&path, &other).is_err());
+    let unnamed = Path::from("base/pack-index-current");
+    assert!(validate_content_address(&unnamed, &digest).is_err());
+}
+
 #[tokio::test]
 async fn scoped_verified_reader_rejects_corrupt_proof_before_returning_bytes() {
     let (store, _directory) = small_chunked_store();

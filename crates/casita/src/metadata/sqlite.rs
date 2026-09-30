@@ -11,11 +11,14 @@ use turso::transaction::Transaction;
 use turso::{Connection, params};
 
 use super::{
-    CommitResult, MetadataCheck, MetadataError, MetadataKey, MetadataMutation, MetadataRecord,
-    MetadataSnapshot, MetadataStore, RETAINED_PAGE, RetainedObjects, RootChange, fresh_revision,
+    AddedObject, CollectedObjects, CommitChange, CommitResult, CommitState, MetadataCheck,
+    MetadataError, MetadataKey, MetadataMutation, MetadataRecord, MetadataSnapshot, MetadataStore,
+    ObjectChange, RETAINED_PAGE, RetainedObjects, RootChange, fresh_revision,
+    validate_commit_transition,
 };
 use crate::digest::{BlobId, Digest};
 use crate::error::Error as DatabaseError;
+use crate::invariant;
 use crate::object::{ObjectKey, ObjectRecord, RepositoryRevision, RootName, RootRecord};
 use crate::sqlite::TursoDb;
 
@@ -742,6 +745,9 @@ impl super::VerificationFacts for TursoVerificationFacts {
                     };
                     let next = super::next_facts_generation(old.as_deref())
                         .map_err(|error| crate::error::Error::Backend(Box::new(error)))?;
+                    // Kept only to read back what the clear stores.
+                    let checked_keys =
+                        invariant::ENABLED.then(|| (tombstone.clone(), generation.clone()));
                     transaction
                         .execute(
                             "DELETE FROM verification_facts WHERE length(facts) > 0",
@@ -758,6 +764,34 @@ impl super::VerificationFacts for TursoVerificationFacts {
                         "INSERT OR REPLACE INTO verification_facts (identity, facts) VALUES (?1, ?2)",
                         turso::params![generation, next.to_le_bytes().to_vec()],
                     ).await?;
+                    if let Some((tombstone, generation)) = checked_keys {
+                        let next_generation =
+                            read_fact_tx(&transaction, generation.clone()).await?;
+                        let tombstone = read_fact_tx(&transaction, tombstone).await?;
+                        // The generation row is the one non-empty row a clear keeps.
+                        let facts_remain = transaction
+                            .query(
+                                "SELECT 1 FROM verification_facts \
+                                 WHERE length(facts) > 0 AND identity != ?1 LIMIT 1",
+                                [generation],
+                            )
+                            .await?
+                            .next()
+                            .await?
+                            .is_some();
+                        invariant::check(|| {
+                            super::validate_facts_clear(
+                                "turso.facts_clear",
+                                &super::FactsClear {
+                                    previous_generation: old.as_deref(),
+                                    next_generation: next_generation.as_deref(),
+                                    tombstone: tombstone.as_deref(),
+                                    facts_remain,
+                                },
+                            )
+                        })
+                        .map_err(|violation| state_as_database(violation.into()))?;
+                    }
                     transaction.commit().await?;
                     Ok(())
                 })
@@ -785,6 +819,22 @@ impl super::VerificationFacts for TursoVerificationFacts {
         }
         Ok(keys)
     }
+}
+
+async fn read_fact_tx(
+    transaction: &Transaction<'_>,
+    key: Vec<u8>,
+) -> Result<Option<Vec<u8>>, turso::Error> {
+    let mut rows = transaction
+        .query(
+            "SELECT facts FROM verification_facts WHERE identity = ?1",
+            [key],
+        )
+        .await?;
+    rows.next()
+        .await?
+        .map(|row| row.get::<Vec<u8>>(0))
+        .transpose()
 }
 
 #[async_trait]
@@ -988,6 +1038,16 @@ impl TursoMetadataStore {
                     let transaction = connection.transaction().await?;
                     drop(begin);
                     let prepare = collecting.then(|| CollectionPhase::new("prune_db_prepare"));
+                    // The committed row, read again only to check the transition.
+                    let previous_state = if invariant::ENABLED {
+                        Some(
+                            read_snapshot_state(&transaction)
+                                .await
+                                .map_err(state_as_database)?,
+                        )
+                    } else {
+                        None
+                    };
                     let actual = read_revision_tx(&transaction)
                         .await
                         .map_err(state_as_database)?;
@@ -1029,19 +1089,49 @@ impl TursoMetadataStore {
                         roots_changed: 0,
                     };
                     drop(prepare);
+                    // Each addition's key and prior record, and a collection's
+                    // object counts, kept only for the transition check.
+                    let mut added = Vec::new();
+                    let mut collected = None;
                     if let Some(retained) = mutation.retained_objects {
                         let _retained = CollectionPhase::new("prune_db_retained");
+                        // Collection already scans every object, so counting
+                        // them on both sides stays within its own cost.
+                        let before = if invariant::ENABLED {
+                            Some(
+                                checked_object_count_tx(&transaction)
+                                    .await
+                                    .map_err(state_as_database)?,
+                            )
+                        } else {
+                            None
+                        };
                         result.objects_removed =
                             install_retained_tx(&transaction, retained.as_ref())
                                 .await
                                 .map_err(state_as_database)?;
+                        if let Some(before) = before {
+                            collected = Some(CollectedObjects {
+                                retained: retained.len() as u64,
+                                before,
+                                after: checked_object_count_tx(&transaction)
+                                    .await
+                                    .map_err(state_as_database)?,
+                                missing_root_target: missing_root_target_tx(&transaction)
+                                    .await
+                                    .map_err(state_as_database)?,
+                            });
+                        }
                     } else {
                         for verified in mutation.objects {
                             let record = verified.into_record();
-                            match read_record_tx(&transaction, record.key())
+                            let existing = read_record_tx(&transaction, record.key())
                                 .await
-                                .map_err(state_as_database)?
-                            {
+                                .map_err(state_as_database)?;
+                            if invariant::ENABLED {
+                                added.push((record.key().clone(), existing.clone()));
+                            }
+                            match existing {
                                 Some(existing) if existing == record => {}
                                 Some(_) => {
                                     return Err(state_as_database(
@@ -1102,6 +1192,11 @@ impl TursoMetadataStore {
                     refresh_root_policies_tx(&transaction, root_policy_changes)
                         .await
                         .map_err(state_as_database)?;
+                    let declared_catalog = if invariant::ENABLED {
+                        mutation.payload_catalog.clone()
+                    } else {
+                        None
+                    };
                     transaction
                         .prepare_cached(
                             "UPDATE repository_state SET revision = ?1, generation = ?3, \
@@ -1114,6 +1209,59 @@ impl TursoMetadataStore {
                             generation
                         ])
                         .await?;
+                    if let Some((previous_revision, previous_catalog, previous_generation)) =
+                        &previous_state
+                    {
+                        // Read back what this transaction is about to commit,
+                        // so the check covers the SQL rather than its inputs.
+                        let (next_revision, next_catalog, next_generation) =
+                            read_snapshot_state(&transaction)
+                                .await
+                                .map_err(state_as_database)?;
+                        let mut stored = Vec::with_capacity(added.len());
+                        for (key, _) in &added {
+                            stored.push(
+                                read_record_tx(&transaction, key)
+                                    .await
+                                    .map_err(state_as_database)?,
+                            );
+                        }
+                        let objects = match collected {
+                            Some(collected) => ObjectChange::Collected(collected),
+                            None => ObjectChange::Added(
+                                added
+                                    .iter()
+                                    .zip(&stored)
+                                    .map(|((key, before), after)| AddedObject {
+                                        key,
+                                        before: before.as_ref(),
+                                        after: after.as_ref(),
+                                    })
+                                    .collect(),
+                            ),
+                        };
+                        invariant::check(|| {
+                            validate_commit_transition(
+                                "turso.commit",
+                                &CommitState {
+                                    revision: *previous_revision,
+                                    generation: *previous_generation,
+                                    payload_catalog: previous_catalog.as_deref(),
+                                },
+                                &CommitState {
+                                    revision: next_revision,
+                                    generation: next_generation,
+                                    payload_catalog: next_catalog.as_deref(),
+                                },
+                                &CommitChange {
+                                    payload_catalog: declared_catalog.as_deref(),
+                                    objects,
+                                    result: &result,
+                                },
+                            )
+                        })
+                        .map_err(|violation| state_as_database(violation.into()))?;
+                    }
                     #[cfg(test)]
                     crate::blob::crash_tests::checkpoint("before-state-commit");
                     drop(state);
@@ -1702,6 +1850,31 @@ async fn object_count_tx(transaction: &Transaction<'_>) -> Result<i64, MetadataE
         .await?
         .ok_or_else(|| MetadataError::Corruption("COUNT returned no row".to_owned()))?
         .get(0)?)
+}
+
+async fn checked_object_count_tx(transaction: &Transaction<'_>) -> Result<u64, MetadataError> {
+    u64::try_from(object_count_tx(transaction).await?)
+        .map_err(|_| MetadataError::Corruption("negative object count".to_owned()))
+}
+
+/// A root whose target has no object record, looked up per root through the
+/// object primary key.
+async fn missing_root_target_tx(
+    transaction: &Transaction<'_>,
+) -> Result<Option<ObjectKey>, MetadataError> {
+    let mut rows = transaction
+        .prepare_cached(
+            "SELECT n.namespace, n.native_id FROM named_roots n \
+             LEFT JOIN objects o ON o.namespace = n.namespace AND o.native_id = n.native_id \
+             WHERE o.namespace IS NULL LIMIT 1",
+        )
+        .await?
+        .query(())
+        .await?;
+    rows.next()
+        .await?
+        .map(|row| decode_key(row.get(0)?, row.get(1)?))
+        .transpose()
 }
 
 async fn next_generation_tx(transaction: &Transaction<'_>) -> Result<i64, MetadataError> {
@@ -3553,6 +3726,25 @@ mod tests {
         assert_eq!(
             store.snapshot().await.unwrap().revision(),
             initial.revision()
+        );
+    }
+
+    /// `from_db` decides whether to create the initial revision in a read
+    /// snapshot and inserts it in a separate write transaction, so a second
+    /// first opener's insert hits the singleton key instead of reusing the row.
+    #[tokio::test]
+    #[ignore = "F-34: concurrent first opens race on the initial repository_state row"]
+    async fn concurrent_first_opens_of_one_database_both_succeed() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = crate::sqlite::TursoDb::open(directory.path().join("race.sqlite")).unwrap();
+        let (left, right) = tokio::join!(
+            TursoMetadataStore::from_db(db.clone()),
+            TursoMetadataStore::from_db(db.clone())
+        );
+        let (left, right) = (left.unwrap(), right.unwrap());
+        assert_eq!(
+            left.snapshot().await.unwrap().revision(),
+            right.snapshot().await.unwrap().revision()
         );
     }
 }

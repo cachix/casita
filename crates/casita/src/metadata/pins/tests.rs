@@ -1534,3 +1534,102 @@ fn snapshot_generation_codec_round_trips_and_preserves_legacy_protection() {
         }
     );
 }
+
+fn token(byte: u8) -> PinToken {
+    PinToken([byte; 32])
+}
+
+/// A legal durable write: revision 4 to 5, one pin on "pinned" and one
+/// deletion claim on "garbage". Each bug arm breaks it in one way.
+fn legal_write() -> (PinInventory, PinInventory) {
+    let prev = PinInventory {
+        revision: 4,
+        ..PinInventory::default()
+    };
+    let next = PinInventory {
+        revision: 5,
+        pins: BTreeMap::from([(token(1), staging("pinned"))]),
+        deletions: BTreeMap::from([(token(2), resources("garbage"))]),
+        ..PinInventory::default()
+    };
+    (prev, next)
+}
+
+#[test]
+fn inventory_successor_refuses_illegal_writes() {
+    let (prev, next) = legal_write();
+    assert_eq!(
+        validate_inventory_successor(&prev, &next, RevisionStep::One),
+        Ok(())
+    );
+    let mut skipped = next.clone();
+    skipped.revision = 6;
+    assert!(validate_inventory_successor(&prev, &skipped, RevisionStep::One).is_err());
+    assert_eq!(
+        validate_inventory_successor(&prev, &skipped, RevisionStep::Forward),
+        Ok(())
+    );
+    let mut repeated = next.clone();
+    repeated.revision = prev.revision;
+    assert!(validate_inventory_successor(&prev, &repeated, RevisionStep::Forward).is_err());
+    type Break = fn(&mut PinInventory);
+    let breaks: [(&str, Break); 8] = [
+        ("claim reuses a pin token", |next| {
+            next.deletions.insert(token(1), resources("other"));
+        }),
+        ("collector reuses a claim token", |next| {
+            next.collector = Some(token(2))
+        }),
+        ("logical prune reuses the collector token", |next| {
+            next.collector = Some(token(3));
+            next.logical_prune = Some(token(3));
+        }),
+        ("reader owner reuses a pin token", |next| {
+            next.reader_owners.insert(token(1));
+        }),
+        ("retired token is not pinned", |next| {
+            next.collector = Some(token(3));
+            next.retired.insert(token(4));
+        }),
+        ("retired pin without a collector", |next| {
+            next.retired.insert(token(1));
+        }),
+        ("claim covers a pinned resource", |next| {
+            next.deletions.insert(token(3), resources("pinned"));
+        }),
+        ("two claims cover one resource", |next| {
+            next.deletions.insert(token(3), resources("garbage"));
+        }),
+    ];
+    for (case, break_write) in breaks {
+        let mut broken = next.clone();
+        break_write(&mut broken);
+        assert!(
+            validate_inventory_successor(&prev, &broken, RevisionStep::One).is_err(),
+            "{case}"
+        );
+    }
+}
+
+#[test]
+fn inventory_changes_are_checked_against_unchanged_records() {
+    let (_, next) = legal_write();
+    let mut grown = next.clone();
+    grown
+        .pins
+        .get_mut(&token(1))
+        .unwrap()
+        .resources
+        .extend(resources("garbage"));
+    assert!(validate_inventory_records(&grown, [&token(1)], []).is_err());
+    let mut claimed = next.clone();
+    claimed
+        .deletions
+        .get_mut(&token(2))
+        .unwrap()
+        .extend(resources("pinned"));
+    assert!(validate_inventory_records(&claimed, [], [&token(2)]).is_err());
+    let mut reused = next.clone();
+    reused.pins.insert(token(2), staging("fresh"));
+    assert!(validate_inventory_records(&reused, [&token(2)], []).is_err());
+}

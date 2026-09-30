@@ -7,6 +7,8 @@ use super::{
 };
 use crate::{
     BlobId, Digest,
+    blob::pinned_store::{validate_deletion_claim, validate_deletion_finish},
+    invariant,
     metadata::{PinResource, PinStore, PinToken},
 };
 use futures::TryStreamExt;
@@ -171,7 +173,9 @@ impl ChunkedBlobStore {
                 .iter()
                 .map(|(path, _)| path.clone())
                 .collect();
-            let token = if let (Some((pins, owned)), Some(inventory)) = (&ledger, inventory) {
+            // Kept only to check the claim against the deletions it covers.
+            let mut claimed = BTreeSet::new();
+            let token = if let (Some((pins, owned)), Some(inventory)) = (&ledger, &inventory) {
                 let mut resources: BTreeSet<_> = batch
                     .iter()
                     .map(|path| PinResource::StorageObject(path.to_string()))
@@ -189,6 +193,9 @@ impl ChunkedBlobStore {
                 if resources.is_empty() {
                     None
                 } else {
+                    if invariant::ENABLED {
+                        claimed.clone_from(&resources);
+                    }
                     let Some(token) = pins
                         .claim_deletions(inventory.revision, resources)
                         .await
@@ -203,10 +210,27 @@ impl ChunkedBlobStore {
             } else {
                 None
             };
+            let deleted: BTreeSet<_> = if invariant::ENABLED {
+                batch
+                    .iter()
+                    .map(|path| PinResource::StorageObject(path.to_string()))
+                    .collect()
+            } else {
+                BTreeSet::new()
+            };
+            if let (Some((_, owned)), Some(inventory)) = (&ledger, &inventory) {
+                invariant::check(|| validate_deletion_claim(inventory, owned, &claimed, &deleted))?;
+            }
+            let requested = batch.len();
+            let mut settled = 0_usize;
             for path in batch {
                 super::delete_object(&self.object_store, &path).await?;
+                settled += 1;
             }
             if let (Some(token), Some((pins, _))) = (token, &ledger) {
+                invariant::check(|| {
+                    validate_deletion_finish(&claimed, &deleted, requested.saturating_sub(settled))
+                })?;
                 pins.finish_deletions(&token)
                     .await
                     .map_err(io::Error::other)?;

@@ -13,6 +13,7 @@ use futures::stream::{self, BoxStream};
 use imbl::{OrdMap, OrdSet};
 
 use crate::format::VerifiedObject;
+use crate::invariant::{self, Violation};
 use crate::object::{ObjectKey, ObjectRecord, RepositoryRevision, RootName, RootRecord};
 
 mod closure;
@@ -299,6 +300,167 @@ pub struct CommitResult {
     pub roots_changed: usize,
 }
 
+/// One side of a logical commit, as the committing store holds it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CommitState<'a> {
+    pub(crate) revision: RepositoryRevision,
+    pub(crate) generation: u64,
+    pub(crate) payload_catalog: Option<&'a [u8]>,
+}
+
+/// One key a normal mutation adds, read on both sides of its commit.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AddedObject<'a> {
+    pub(crate) key: &'a ObjectKey,
+    /// The record at `key` before the commit.
+    pub(crate) before: Option<&'a ObjectRecord>,
+    /// The record at `key` in the state about to become durable.
+    pub(crate) after: Option<&'a ObjectRecord>,
+}
+
+/// The object set of a collection, counted on both sides of its commit.
+#[derive(Clone, Debug)]
+pub(crate) struct CollectedObjects {
+    /// Keys the mutation's retained source declares.
+    pub(crate) retained: u64,
+    pub(crate) before: u64,
+    pub(crate) after: u64,
+    /// A root target the next state lacks. A store that cannot look targets
+    /// up cheaply passes `None` and says why at its call site.
+    pub(crate) missing_root_target: Option<ObjectKey>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum ObjectChange<'a> {
+    Added(Vec<AddedObject<'a>>),
+    Collected(CollectedObjects),
+}
+
+/// What one commit changes besides its revision and generation.
+#[derive(Clone, Debug)]
+pub(crate) struct CommitChange<'a> {
+    /// The payload catalog the mutation sets, if it sets one.
+    pub(crate) payload_catalog: Option<&'a [u8]>,
+    pub(crate) objects: ObjectChange<'a>,
+    /// What the store is about to report to its caller.
+    pub(crate) result: &'a CommitResult,
+}
+
+/// The transition every [`MetadataStore::commit`] makes, whatever the
+/// backend: each store checks its own commit against this one function so
+/// their semantics cannot drift apart.
+///
+/// Generations number commits densely (`objects_created_through` and
+/// collection watermarks depend on it); a revision names exactly one state,
+/// so reusing one would let a stale expectation match. Immutable records are
+/// never rewritten, collection keeps exactly its declared retained set and
+/// every root target, and the payload catalog moves only when the mutation
+/// sets one.
+pub(crate) fn validate_commit_transition(
+    point: &'static str,
+    previous: &CommitState<'_>,
+    next: &CommitState<'_>,
+    change: &CommitChange<'_>,
+) -> Result<(), Violation> {
+    let result = change.result;
+    invariant::ensure(
+        point,
+        previous.generation.checked_add(1) == Some(next.generation),
+        || {
+            format!(
+                "generation moved from {} to {}",
+                previous.generation, next.generation
+            )
+        },
+    )?;
+    invariant::ensure(point, next.revision != previous.revision, || {
+        format!("revision {} did not change", next.revision)
+    })?;
+    invariant::ensure(point, result.revision == next.revision, || {
+        format!(
+            "reports revision {} but commits {}",
+            result.revision, next.revision
+        )
+    })?;
+    invariant::ensure(
+        point,
+        next.payload_catalog == change.payload_catalog.or(previous.payload_catalog),
+        || match change.payload_catalog {
+            Some(_) => "payload catalog differs from the one the mutation sets".into(),
+            None => "payload catalog changed without the mutation setting one".into(),
+        },
+    )?;
+    match &change.objects {
+        ObjectChange::Added(objects) => {
+            invariant::ensure(point, result.objects_removed == 0, || {
+                format!(
+                    "a normal mutation reports {} removed objects",
+                    result.objects_removed
+                )
+            })?;
+            // A key repeated in one mutation is new only where it first
+            // appears: later observations may see the first insertion.
+            let mut new = BTreeMap::new();
+            for object in objects {
+                invariant::ensure(point, object.after.is_some(), || {
+                    format!("added object {} is absent after the commit", object.key)
+                })?;
+                invariant::ensure(
+                    point,
+                    object
+                        .before
+                        .is_none_or(|before| object.after == Some(before)),
+                    || format!("immutable object {} was rewritten", object.key),
+                )?;
+                new.entry(object.key).or_insert(object.before.is_none());
+            }
+            let inserted = new.values().filter(|new| **new).count();
+            invariant::ensure(point, result.objects_inserted == inserted, || {
+                format!(
+                    "reports {} inserted objects but {inserted} keys were new",
+                    result.objects_inserted
+                )
+            })?;
+        }
+        ObjectChange::Collected(collected) => {
+            invariant::ensure(
+                point,
+                result.objects_inserted == 0 && result.roots_changed == 0,
+                || {
+                    format!(
+                        "a collection reports {} inserted objects and {} changed roots",
+                        result.objects_inserted, result.roots_changed
+                    )
+                },
+            )?;
+            invariant::ensure(point, collected.after == collected.retained, || {
+                format!(
+                    "collection keeps {} objects but declares {} retained",
+                    collected.after, collected.retained
+                )
+            })?;
+            invariant::ensure(
+                point,
+                collected.before.checked_sub(collected.after)
+                    == Some(result.objects_removed as u64),
+                || {
+                    format!(
+                        "collection went from {} to {} objects but reports {} removed",
+                        collected.before, collected.after, result.objects_removed
+                    )
+                },
+            )?;
+            if let Some(target) = &collected.missing_root_target {
+                return Err(Violation::new(
+                    point,
+                    format!("collection removed root target {target}"),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Failures at the revisioned logical-state boundary.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -575,6 +737,47 @@ fn next_facts_generation(value: Option<&[u8]>) -> Result<u64, MetadataError> {
     facts_generation(value)?
         .checked_add(1)
         .ok_or_else(|| MetadataError::Backend("verification facts generation exhausted".into()))
+}
+
+/// A clear of verification facts, as its store is about to commit it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FactsClear<'a> {
+    /// The generation entry before the clear.
+    pub(crate) previous_generation: Option<&'a [u8]>,
+    /// The generation entry the clear stores.
+    pub(crate) next_generation: Option<&'a [u8]>,
+    /// The entry the clear stores at its tombstone key.
+    pub(crate) tombstone: Option<&'a [u8]>,
+    /// Whether any non-empty entry survives the clear.
+    pub(crate) facts_remain: bool,
+}
+
+/// A writer that captured the facts generation before a clear refuses to
+/// record facts once it moved, so the clear must advance it by exactly one
+/// and leave nothing but tombstones behind; otherwise a fact measured before
+/// an invalidation could be trusted after it.
+pub(crate) fn validate_facts_clear(
+    point: &'static str,
+    clear: &FactsClear<'_>,
+) -> Result<(), Violation> {
+    let expected = facts_generation(clear.previous_generation)
+        .ok()
+        .and_then(|generation| generation.checked_add(1));
+    let stored = clear
+        .next_generation
+        .and_then(|value| facts_generation(Some(value)).ok());
+    invariant::ensure(point, expected.is_some() && stored == expected, || {
+        format!(
+            "facts generation moved from {:?} to {:?}",
+            clear.previous_generation, clear.next_generation
+        )
+    })?;
+    invariant::ensure(point, clear.tombstone.is_some_and(<[u8]>::is_empty), || {
+        format!("tombstone holds {:?}", clear.tombstone)
+    })?;
+    invariant::ensure(point, !clear.facts_remain, || {
+        "a non-empty verification fact survived the clear".into()
+    })
 }
 
 /// Verification facts for ephemeral repositories.
@@ -995,6 +1198,16 @@ impl MemoryMetadataStore {
         }
 
         mutation.reject_mixed_collection()?;
+        // Kept only to read both sides of each addition when checking.
+        let added_keys: Vec<ObjectKey> = if invariant::ENABLED {
+            mutation
+                .objects
+                .iter()
+                .map(|object| object.record().key().clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         for (index, check) in mutation.checks.iter().enumerate() {
             let matches = match check {
@@ -1109,13 +1322,62 @@ impl MemoryMetadataStore {
                 }
             }
         }
-        if let Some(payload_catalog) = mutation.payload_catalog {
-            next_payload_catalog = Some(Arc::new(payload_catalog));
+        let declared_catalog = mutation.payload_catalog.map(Arc::new);
+        if let Some(payload_catalog) = &declared_catalog {
+            next_payload_catalog = Some(payload_catalog.clone());
         }
 
         drop(applying);
         let _publishing = tracing::debug_span!("state.memory.publish").entered();
         let revision = fresh_revision(Some(state.revision))?;
+        let result = CommitResult {
+            revision,
+            objects_inserted,
+            objects_removed,
+            roots_changed,
+        };
+        // Records below are published into the live state, so check first.
+        invariant::check(|| {
+            let objects = match &mutation.retained_objects {
+                Some(source) => ObjectChange::Collected(CollectedObjects {
+                    retained: source.len() as u64,
+                    before: state.objects.len() as u64,
+                    after: next_objects.len() as u64,
+                    missing_root_target: next_roots
+                        .values()
+                        .find(|target| !next_objects.contains_key(*target))
+                        .cloned(),
+                }),
+                None => ObjectChange::Added(
+                    added_keys
+                        .iter()
+                        .map(|key| AddedObject {
+                            key,
+                            before: state.objects.get(key),
+                            after: next_objects.get(key),
+                        })
+                        .collect(),
+                ),
+            };
+            validate_commit_transition(
+                "memory.commit",
+                &CommitState {
+                    revision: state.revision,
+                    generation: state.generation,
+                    payload_catalog: state.payload_catalog.as_deref().map(Vec::as_slice),
+                },
+                &CommitState {
+                    revision,
+                    generation,
+                    payload_catalog: next_payload_catalog.as_deref().map(Vec::as_slice),
+                },
+                &CommitChange {
+                    payload_catalog: declared_catalog.as_deref().map(Vec::as_slice),
+                    objects,
+                    result: &result,
+                },
+            )
+        })?;
         for (key, value) in mutation.records {
             match value {
                 Some(value) => {
@@ -1150,12 +1412,7 @@ impl MemoryMetadataStore {
         state.roots = next_roots;
         state.validated = next_validated;
         state.payload_catalog = next_payload_catalog;
-        Ok(CommitResult {
-            revision,
-            objects_inserted,
-            objects_removed,
-            roots_changed,
-        })
+        Ok(result)
     }
 }
 
@@ -1757,3 +2014,5 @@ mod primitive_benchmarks;
 mod kv_benchmarks;
 #[cfg(test)]
 mod record_tests;
+#[cfg(test)]
+mod transition_tests;

@@ -13,6 +13,15 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Added
 
+- Every commit point checks the transition it is about to make durable
+  before making it: metadata commits in the Turso, wal3 and memory stores,
+  wal3 checkpoints, shards, barriers and repository holds, pack catalog
+  pointers, pack retirement, replacement and deletion claims, and pin-ledger
+  writes, journal appends and checkpoints. Debug builds panic on a broken
+  invariant, so a defect fails the test that reaches it instead of
+  surfacing later as corruption. Release builds compiled with
+  `RUSTFLAGS="--cfg casita_invariants"` refuse the commit as corruption
+  instead; other release builds skip the checks.
 - `RepositoryGeneration` orders the logical states of one repository.
   `MetadataReader::generation` and `RetainedReader::generation` report a
   reader's position in the commit order, so an application holding several
@@ -192,6 +201,20 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
   releases them only when it is polled again. Two new pack read counters,
   `readahead_deferrals` and `buffer_bypasses`, report how often the budget runs
   out.
+
+### Fixed
+
+- An S3 repository no longer becomes unreadable after a commit raced a WAL
+  collection run by another handle. The collection appends a checkpoint of the
+  unchanged state, so the commit found its log position taken, saw the same
+  revision, and retried the record it had built on the old log: a delta then
+  named a checkpoint the collection deletes, or the committing handle recorded
+  its checkpoint at the position it first aimed at and broke the revision chain
+  with its next commit. Every commit was acknowledged, but a freshly opened
+  handle failed with `wal3 manifest has no record at position …` or
+  `wal3 delta revision chain is invalid`. A commit whose log moved under it is
+  now rebuilt on the log as it is, and caches the position where its record
+  actually lands.
 
 ### Security
 

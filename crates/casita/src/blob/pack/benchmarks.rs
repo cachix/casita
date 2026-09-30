@@ -572,18 +572,25 @@ async fn benchmark_local_catalog_durable_publication() {
     .unwrap();
     let mut batch_nanos = Vec::with_capacity(batch_repetitions as usize);
     for repetition in 0..batch_repetitions {
-        let started = Instant::now();
-        let mut publication = batch_store.catalog_object_publication();
-        for ordinal in 0..batch_objects {
-            let digest = benchmark_ordinal_digest(
-                5,
-                repetition
+        // Catalog objects are stored under the hash of their bytes. Build
+        // distinct same-sized objects outside the timed region.
+        let staged: Vec<(Digest, Bytes)> = (0..batch_objects)
+            .map(|ordinal| {
+                let ordinal = repetition
                     .checked_mul(batch_objects)
                     .unwrap()
                     .checked_add(ordinal)
-                    .unwrap(),
-            );
-            publication.put(digest, payload.clone()).await.unwrap();
+                    .unwrap();
+                let mut bytes = payload.to_vec();
+                bytes[..8].copy_from_slice(&ordinal.to_be_bytes());
+                let bytes = Bytes::from(bytes);
+                (Digest::from(blake3::hash(&bytes)), bytes)
+            })
+            .collect();
+        let started = Instant::now();
+        let mut publication = batch_store.catalog_object_publication();
+        for (digest, bytes) in staged {
+            publication.put(digest, bytes).await.unwrap();
         }
         publication.finish().await.unwrap();
         batch_nanos.push(u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX));

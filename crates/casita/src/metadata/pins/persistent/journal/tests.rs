@@ -1020,3 +1020,61 @@ async fn corrupt_frame_epoch_does_not_silently_discard_acknowledged_protection()
     assert!(store.inventory().await.is_err());
     assert!(store.register(staging("must-fail-closed")).await.is_err());
 }
+
+#[test]
+fn journal_append_refuses_frames_replay_would_drop_or_reject() {
+    let epoch = [1; 32];
+    let group = super::super::group::MAX_GROUP;
+    assert_eq!(
+        validate_journal_append(Some(&epoch), &epoch, group, CHECKPOINT_OPERATIONS, WINDOW),
+        Ok(())
+    );
+    let stale = [2; 32];
+    let broken = [
+        ("stale epoch", Some(&stale), 1, 1, BLOCK),
+        ("active file is not a journal", None, 1, 1, BLOCK),
+        ("empty frame", Some(&epoch), 0, 1, BLOCK),
+        ("oversized group", Some(&epoch), group + 1, group + 1, BLOCK),
+        (
+            "operations past a checkpoint",
+            Some(&epoch),
+            1,
+            CHECKPOINT_OPERATIONS + 1,
+            BLOCK,
+        ),
+        ("bytes past the window", Some(&epoch), 1, 1, WINDOW + BLOCK),
+    ];
+    for (case, active, operations, journal_operations, journal_bytes) in broken {
+        assert!(
+            validate_journal_append(
+                active,
+                &epoch,
+                operations,
+                journal_operations,
+                journal_bytes
+            )
+            .is_err(),
+            "{case}"
+        );
+    }
+}
+
+#[test]
+fn checkpoint_refuses_to_change_what_it_compacts_or_reuse_its_epoch() {
+    let mut replayed = PinInventory {
+        revision: 7,
+        ..PinInventory::default()
+    };
+    replayed
+        .pins
+        .insert(PinToken::fresh().unwrap(), staging("acknowledged"));
+    assert_eq!(validate_journal_checkpoint(&replayed, &replayed), Ok(()));
+    let dropped = PinInventory {
+        revision: 7,
+        ..PinInventory::default()
+    };
+    assert!(validate_journal_checkpoint(&replayed, &dropped).is_err());
+    let epoch = [3; 32];
+    assert_eq!(validate_checkpoint_epoch(None, &epoch), Ok(()));
+    assert!(validate_checkpoint_epoch(Some(&epoch), &epoch).is_err());
+}

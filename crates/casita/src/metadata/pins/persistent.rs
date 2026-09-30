@@ -51,16 +51,73 @@ trait Backend: Send + Sync {
 pub struct ObjectPinStore {
     store: Arc<dyn ObjectStore>,
     path: Path,
+    loaded: LastLoad<UpdateVersion>,
 }
 
 impl ObjectPinStore {
     pub fn new(store: Arc<dyn ObjectStore>, path: Path) -> Self {
-        Self { store, path }
+        Self {
+            store,
+            path,
+            loaded: LastLoad::default(),
+        }
     }
 }
 
 fn backend(error: impl std::fmt::Display) -> MetadataError {
     MetadataError::Backend(format!("pin ledger: {error}"))
+}
+
+/// The inventory a remote ledger handle loaded last, and its version, so a
+/// conditional write can validate the transition it would make durable.
+/// Captured only when `invariant::ENABLED`; clones share it. A load never
+/// replaces the capture of a later revision, and no version recurs because
+/// every write advances the revision. A write conditional on another version
+/// is therefore conditional on a superseded one, which the store refuses, so
+/// only the inventory it writes is checked.
+#[derive(Clone)]
+struct LastLoad<V>(Arc<std::sync::Mutex<Option<(V, PinInventory)>>>);
+
+impl<V> Default for LastLoad<V> {
+    fn default() -> Self {
+        Self(Arc::default())
+    }
+}
+
+impl<V: Clone + PartialEq> LastLoad<V> {
+    fn record(&self, version: &V, state: &PinInventory) {
+        if !invariant::ENABLED {
+            return;
+        }
+        let mut last = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if last
+            .as_ref()
+            .is_none_or(|(_, loaded)| loaded.revision <= state.revision)
+        {
+            *last = Some((version.clone(), state.clone()));
+        }
+    }
+
+    /// Checks a write of `next` conditional on `expected`, where `None` means
+    /// the ledger does not exist yet.
+    fn validate(&self, expected: Option<&V>, next: &PinInventory) -> Result<(), Violation> {
+        let Some(expected) = expected else {
+            return validate_inventory_successor(&PinInventory::default(), next, RevisionStep::One);
+        };
+        let last = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match last.as_ref() {
+            Some((version, prev)) if version == expected => {
+                validate_inventory_successor(prev, next, RevisionStep::One)
+            }
+            _ => validate_inventory_records(next, next.pins.keys(), next.deletions.keys()),
+        }
+    }
 }
 
 #[async_trait]
@@ -93,7 +150,9 @@ impl Backend for ObjectPinStore {
             }
             bytes.extend_from_slice(&part);
         }
-        Ok((codec::decode(&bytes)?, Some(version)))
+        let state = codec::decode(&bytes)?;
+        self.loaded.record(&version, &state);
+        Ok((state, Some(version)))
     }
 
     async fn compare_exchange(
@@ -101,6 +160,7 @@ impl Backend for ObjectPinStore {
         expected: Self::Version,
         state: PinInventory,
     ) -> Result<bool, MetadataError> {
+        invariant::check(|| self.loaded.validate(expected.as_ref(), &state))?;
         let bytes = codec::encode(&state)?;
         let mode = expected.map_or(PutMode::Create, PutMode::Update);
         match self
@@ -186,6 +246,13 @@ impl FilePinStore {
 
     fn write_replacement_locked(&self, bytes: &[u8]) -> Result<(), MetadataError> {
         let _phase = LedgerPhase::new("replacement_write_total");
+        if invariant::ENABLED {
+            // A replacement rewrites the whole ledger, so decoding both sides
+            // costs no more than the write.
+            let prev = self.read_replacement_locked()?;
+            let next = codec::decode(bytes)?;
+            invariant::check(|| validate_inventory_successor(&prev, &next, RevisionStep::Forward))?;
+        }
         self.local()?
             .stats
             .replacements
@@ -719,6 +786,7 @@ pub(crate) fn chroma_pin_store(
         storage,
         path,
         edits,
+        loaded: LastLoad::default(),
     })
 }
 
@@ -770,6 +838,7 @@ struct ChromaPinStore {
     storage: Arc<chroma_storage::Storage>,
     path: String,
     edits: Arc<tokio::sync::Mutex<()>>,
+    loaded: LastLoad<chroma_storage::ETag>,
 }
 
 #[cfg(feature = "s3")]
@@ -789,7 +858,11 @@ impl Backend for ChromaPinStore {
         )
         .await
         {
-            Ok((bytes, Some(etag))) => Ok((codec::decode(&bytes)?, Some(etag))),
+            Ok((bytes, Some(etag))) => {
+                let state = codec::decode(&bytes)?;
+                self.loaded.record(&etag, &state);
+                Ok((state, Some(etag)))
+            }
             Ok((_, None)) => Err(backend("conditional pin writes require an ETag")),
             Err(StorageError::NotFound { .. }) => Ok((PinInventory::default(), None)),
             Err(error) => Err(backend(error)),
@@ -802,6 +875,7 @@ impl Backend for ChromaPinStore {
         state: PinInventory,
     ) -> Result<bool, MetadataError> {
         use chroma_storage::{PutMode, PutOptions, StorageError};
+        invariant::check(|| self.loaded.validate(expected.as_ref(), &state))?;
         let mode = expected.map_or(PutMode::IfNotExist, PutMode::IfMatch);
         let options = PutOptions::default().with_mode(mode);
         match Box::pin(

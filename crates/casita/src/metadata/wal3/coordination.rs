@@ -5,6 +5,7 @@
 //! separate log keeps operational holds out of user object identity/revisions.
 
 use super::*;
+use crate::invariant::{self, Violation};
 use crate::metadata::RepositoryLease;
 
 const MAX_HOLDS: usize = 4096;
@@ -150,6 +151,9 @@ impl Coordination {
             let mut mutation = MetadataMutation::new();
             mutation.add_object(self.anchor.clone());
             mutation.set_root(token.clone(), self.anchor.record().key().clone());
+            invariant::check(|| {
+                validate_hold_admission(&holds, &token, self.anchor.record().key(), &mutation)
+            })?;
             match self.store.commit(&snapshot.revision(), mutation).await {
                 Ok(_) => {
                     tracing::info!(token = %token, writer = ?self.store.writer_name,
@@ -188,6 +192,7 @@ impl Coordination {
             let present = snapshot.root(token).await?.is_some();
             let mut mutation = MetadataMutation::new();
             mutation.remove_root(token.clone());
+            invariant::check(|| validate_hold_release(token, &mutation))?;
             // Even an absent token requires a CAS. This fences an admission
             // whose append outcome was ambiguous at the preceding revision.
             match self.store.commit(&snapshot.revision(), mutation).await {
@@ -264,6 +269,55 @@ fn decode_hold(token: &RootName) -> Result<Wal3RepositoryHold, MetadataError> {
         token: token.clone(),
         writer,
         exclusive,
+    })
+}
+
+/// Admission records the caller's exclusive token at most once, alone, as its
+/// only root change. A duplicate token or an overlapping exclusive hold is
+/// state `Coordination::holds_at` rejects as corruption.
+fn validate_hold_admission(
+    holds: &[Wal3RepositoryHold],
+    token: &RootName,
+    anchor: &ObjectKey,
+    mutation: &MetadataMutation,
+) -> Result<(), Violation> {
+    const POINT: &str = "wal3.holds";
+    invariant::ensure(POINT, holds.iter().all(|hold| hold.token != *token), || {
+        format!("hold {token} is already recorded")
+    })?;
+    invariant::ensure(
+        POINT,
+        decode_hold(token).is_ok_and(|hold| hold.exclusive),
+        || format!("admission records {token}, which is not an exclusive hold"),
+    )?;
+    invariant::ensure(POINT, holds.is_empty(), || {
+        format!(
+            "exclusive hold {token} overlaps {} recorded holds",
+            holds.len()
+        )
+    })?;
+    let recorded = RootChange::Set {
+        name: token.clone(),
+        target: anchor.clone(),
+    };
+    invariant::ensure(POINT, mutation.root_changes().eq([&recorded]), || {
+        format!(
+            "admission of {token} makes root changes {:?}",
+            mutation.root_changes().collect::<Vec<_>>()
+        )
+    })
+}
+
+/// Release removes the caller's token and no other hold.
+fn validate_hold_release(token: &RootName, mutation: &MetadataMutation) -> Result<(), Violation> {
+    let removed = RootChange::Remove {
+        name: token.clone(),
+    };
+    invariant::ensure("wal3.holds", mutation.root_changes().eq([&removed]), || {
+        format!(
+            "release of {token} makes root changes {:?}",
+            mutation.root_changes().collect::<Vec<_>>()
+        )
     })
 }
 
@@ -364,5 +418,83 @@ impl Wal3MetadataStore {
             Ok(())
         })
         .await?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn token(kind: &str, entropy: u8) -> RootName {
+        RootName::try_from(format!(
+            "{kind}/{}/w{}",
+            format!("{entropy:02x}").repeat(32),
+            data_encoding::HEXLOWER.encode(b"runner"),
+        ))
+        .unwrap()
+    }
+
+    fn anchor() -> ObjectKey {
+        ObjectKey::blob(crate::BlobId::new(crate::Digest::hash(ANCHOR)))
+    }
+
+    fn admit(name: &RootName, target: &ObjectKey) -> MetadataMutation {
+        let mut mutation = MetadataMutation::new();
+        mutation.set_root(name.clone(), target.clone());
+        mutation
+    }
+
+    fn release(name: &RootName) -> MetadataMutation {
+        let mut mutation = MetadataMutation::new();
+        mutation.remove_root(name.clone());
+        mutation
+    }
+
+    #[test]
+    fn admission_records_one_exclusive_token_alone() {
+        let anchor = anchor();
+        let mine = token("exclusive", 0x11);
+        let other = token("exclusive", 0x22);
+        let shared = token("shared", 0x33);
+        let hold = |name: &RootName| decode_hold(name).unwrap();
+        assert_eq!(
+            validate_hold_admission(&[], &mine, &anchor, &admit(&mine, &anchor)),
+            Ok(())
+        );
+        for recorded in [hold(&mine), hold(&other), hold(&shared)] {
+            let holds = [recorded];
+            assert!(
+                validate_hold_admission(&holds, &mine, &anchor, &admit(&mine, &anchor)).is_err()
+            );
+        }
+        assert!(validate_hold_admission(&[], &shared, &anchor, &admit(&shared, &anchor)).is_err());
+        let mut extra = admit(&mine, &anchor);
+        extra.remove_root(other.clone());
+        let elsewhere = ObjectKey::blob(crate::BlobId::new(crate::Digest::hash(b"elsewhere")));
+        for mutation in [
+            MetadataMutation::new(),
+            admit(&other, &anchor),
+            admit(&mine, &elsewhere),
+            extra,
+        ] {
+            assert!(validate_hold_admission(&[], &mine, &anchor, &mutation).is_err());
+        }
+    }
+
+    #[test]
+    fn release_removes_only_the_callers_token() {
+        let mine = token("exclusive", 0x11);
+        let other = token("exclusive", 0x22);
+        assert_eq!(validate_hold_release(&mine, &release(&mine)), Ok(()));
+        let mut both = release(&mine);
+        both.remove_root(other.clone());
+        for mutation in [
+            MetadataMutation::new(),
+            release(&other),
+            both,
+            admit(&mine, &anchor()),
+        ] {
+            assert!(validate_hold_release(&mine, &mutation).is_err());
+        }
     }
 }

@@ -356,3 +356,8 @@ required-features = ["native", "experimental"]
 name = "sliced_transfer"
 harness = false
 required-features = ["ssh", "experimental"]
+
+[lints.rust]
+# `--cfg casita_invariants` checks commit-transition invariants in release
+# builds too (see `src/invariant.rs`).
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(casita_invariants)"] }

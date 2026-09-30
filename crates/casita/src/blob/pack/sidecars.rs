@@ -922,16 +922,12 @@ impl PackedChunks {
                     deletes.push(object.location);
                 }
                 if deletes.len() == 256 {
-                    self.delete_catalog_batch(
-                        std::mem::take(&mut deletes),
-                        mark.map(|mark| &mark.ledger),
-                    )
-                    .await?;
+                    self.delete_payload_batch(std::mem::take(&mut deletes), mark)
+                        .await?;
                 }
             }
             if !deletes.is_empty() {
-                self.delete_catalog_batch(deletes, mark.map(|mark| &mark.ledger))
-                    .await?;
+                self.delete_payload_batch(deletes, mark).await?;
             }
         }
         Ok(())

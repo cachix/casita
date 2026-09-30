@@ -165,6 +165,7 @@ mod git;
 pub mod import;
 #[cfg(feature = "native")]
 mod importers;
+mod invariant;
 mod ipld;
 mod linked;
 #[cfg(feature = "native")]

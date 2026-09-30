@@ -11,6 +11,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use super::MetadataError;
+use crate::invariant::{self, Violation};
 use crate::{BlobId, ChunkId, ObjectKey};
 
 mod codec;
@@ -454,6 +455,150 @@ impl PinInventory {
             .ok_or_else(|| MetadataError::Backend("pin revision exhausted".into()))?;
         Ok(())
     }
+}
+
+/// Stable identifier of the invariants every durable inventory write keeps.
+const INVENTORY_POINT: &str = "pins.inventory";
+
+/// How far one durable inventory write may advance the ledger revision.
+#[derive(Clone, Copy, Debug)]
+enum RevisionStep {
+    /// Object-store ledgers make one operation durable per conditional write.
+    One,
+    /// The local ledger makes a group of operations durable at once, and its
+    /// reader reservations skip revisions that reader sidecars may have used.
+    Forward,
+}
+
+/// A durable write of `next` over an inventory at `revision` advances the
+/// revision by `step`. Claims validate an exact revision, so a revision that
+/// repeats or goes back lets a stale claim pass.
+fn validate_revision_step(revision: u64, next: u64, step: RevisionStep) -> Result<(), Violation> {
+    let advanced = match step {
+        RevisionStep::One => revision.checked_add(1) == Some(next),
+        RevisionStep::Forward => next > revision,
+    };
+    invariant::ensure(INVENTORY_POINT, advanced, || {
+        format!("revision {next} does not follow {revision} by {step:?}")
+    })
+}
+
+/// `next` may durably replace `prev`: the revision advances by `step`, and
+/// every record of `next` keeps the inventory invariants.
+fn validate_inventory_successor(
+    prev: &PinInventory,
+    next: &PinInventory,
+    step: RevisionStep,
+) -> Result<(), Violation> {
+    validate_revision_step(prev.revision, next.revision, step)?;
+    validate_inventory_records(next, next.pins.keys(), next.deletions.keys())
+}
+
+/// The listed pins and deletion claims of `next`, and all of its ownership
+/// fields, keep the inventory invariants:
+///
+/// - each token names one record: a pin, a deletion claim, the collector, the
+///   logical prune or a reader owner;
+/// - retired tokens stay pinned, under a collector;
+/// - no resource is claimed twice, or claimed and pinned.
+///
+/// Decoding and journal replay refuse an inventory that breaks the last two,
+/// so writing one would also leave the ledger unreadable.
+///
+/// Records left out were checked when they were written, so a write pays for
+/// the records it changes and the claimed resources, and a changed claim for
+/// every pinned resource. Listed tokens absent from `next` were removed.
+fn validate_inventory_records<'a>(
+    next: &PinInventory,
+    pins: impl IntoIterator<Item = &'a PinToken>,
+    deletions: impl IntoIterator<Item = &'a PinToken>,
+) -> Result<(), Violation> {
+    let unique = |role: &str, token: &PinToken| {
+        let records = usize::from(next.pins.contains_key(token))
+            + usize::from(next.deletions.contains_key(token))
+            + usize::from(next.collector.as_ref() == Some(token))
+            + usize::from(next.logical_prune.as_ref() == Some(token))
+            + usize::from(next.reader_owners.contains(token));
+        invariant::ensure(INVENTORY_POINT, records == 1, || {
+            format!("{role} token {token} names {records} records")
+        })
+    };
+    let pins: Vec<_> = pins
+        .into_iter()
+        .filter_map(|token| next.pins.get_key_value(token))
+        .collect();
+    let mut claims_changed = false;
+    for token in deletions {
+        if next.deletions.contains_key(token) {
+            claims_changed = true;
+            unique("deletion claim", token)?;
+        }
+    }
+    for (token, _) in &pins {
+        unique("pin", token)?;
+    }
+    for token in next.collector.iter() {
+        unique("collector", token)?;
+    }
+    // A logical prune may run without a collector: `PinStore::begin_prune`
+    // admits one, and only repository collection pairs the two.
+    for token in next.logical_prune.iter() {
+        unique("logical prune", token)?;
+    }
+    for token in &next.reader_owners {
+        unique("reader owner", token)?;
+    }
+    invariant::ensure(
+        INVENTORY_POINT,
+        next.retired.is_empty() || next.collector.is_some(),
+        || format!("{} retired pins without a collector", next.retired.len()),
+    )?;
+    if let Some(token) = next
+        .retired
+        .iter()
+        .find(|token| !next.pins.contains_key(*token))
+    {
+        return Err(Violation::new(
+            INVENTORY_POINT,
+            format!("retired token {token} is not pinned"),
+        ));
+    }
+    if next.deletions.is_empty() {
+        return Ok(());
+    }
+    let mut claimed = BTreeMap::new();
+    for (token, resources) in &next.deletions {
+        for resource in resources {
+            if let Some(other) = claimed.insert(resource, token) {
+                return Err(Violation::new(
+                    INVENTORY_POINT,
+                    format!("deletion claims {other} and {token} cover the same resource"),
+                ));
+            }
+        }
+    }
+    let uncovered = |token: &PinToken, pin: &DataPin| match pin
+        .resources
+        .iter()
+        .find_map(|resource| claimed.get(resource))
+    {
+        Some(claim) => Err(Violation::new(
+            INVENTORY_POINT,
+            format!("deletion claim {claim} covers a resource pin {token} protects"),
+        )),
+        None => Ok(()),
+    };
+    if claims_changed {
+        // A changed claim may cover any pin, not only a changed one.
+        for (token, pin) in &next.pins {
+            uncovered(token, pin)?;
+        }
+    } else {
+        for (token, pin) in pins {
+            uncovered(token, pin)?;
+        }
+    }
+    Ok(())
 }
 
 #[async_trait]

@@ -2,6 +2,7 @@
 //! is acknowledged only after sync. Checkpoints reuse the two allocated slots.
 use super::*;
 use std::io::{Seek, SeekFrom};
+use std::os::unix::fs::FileExt;
 mod incremental;
 use incremental::{Changes, Index, Touched};
 
@@ -142,6 +143,64 @@ fn apply(
     Ok((touched, globals))
 }
 
+/// Stable identifiers of the local journal's commit invariants.
+const APPEND_POINT: &str = "pins.journal.append";
+const CHECKPOINT_POINT: &str = "pins.journal.checkpoint";
+
+/// A frame appended to the active journal is one a fresh reader replays: it
+/// carries the epoch of the active checkpoint (`None` when the active file is
+/// not a journal) and 1..=MAX_GROUP operations, and the journal it extends
+/// stays within CHECKPOINT_OPERATIONS operations and WINDOW bytes. Replay
+/// stops without an error at a frame from another epoch, dropping it and every
+/// later frame, and refuses the whole ledger over the other limits.
+fn validate_journal_append(
+    active: Option<&[u8; 32]>,
+    epoch: &[u8; 32],
+    operations: usize,
+    journal_operations: usize,
+    journal_bytes: usize,
+) -> Result<(), Violation> {
+    invariant::ensure(APPEND_POINT, active == Some(epoch), || {
+        "frame epoch is not the active checkpoint's".into()
+    })?;
+    invariant::ensure(
+        APPEND_POINT,
+        (1..=super::group::MAX_GROUP).contains(&operations),
+        || format!("frame carries {operations} operations"),
+    )?;
+    invariant::ensure(
+        APPEND_POINT,
+        journal_operations <= CHECKPOINT_OPERATIONS && journal_bytes <= WINDOW,
+        || format!("journal would hold {journal_operations} operations in {journal_bytes} bytes"),
+    )
+}
+
+/// A checkpoint compacts the journal without changing it: it holds exactly
+/// what a fresh reader replays from the active checkpoint, its frames and the
+/// pending frame the checkpoint replaces.
+fn validate_journal_checkpoint(
+    replayed: &PinInventory,
+    checkpoint: &PinInventory,
+) -> Result<(), Violation> {
+    invariant::ensure(CHECKPOINT_POINT, replayed == checkpoint, || {
+        format!(
+            "checkpoint at revision {} differs from the journal replayed to revision {}",
+            checkpoint.revision, replayed.revision
+        )
+    })
+}
+
+/// A checkpoint starts a new epoch: readers tell a new checkpoint, and the
+/// frames that belong to it, from the one they cached by epoch alone.
+fn validate_checkpoint_epoch(
+    previous: Option<&[u8; 32]>,
+    epoch: &[u8; 32],
+) -> Result<(), Violation> {
+    invariant::ensure(CHECKPOINT_POINT, previous != Some(epoch), || {
+        "checkpoint reuses the epoch it replaces".into()
+    })
+}
+
 impl FilePinStore {
     #[cfg(test)]
     pub(super) fn ledger_checkpoint(&self, phase: &'static str) -> Result<(), MetadataError> {
@@ -209,6 +268,30 @@ impl FilePinStore {
     }
 
     fn refresh_journal(&self, cache: &mut Cache) -> Result<Option<PinInventory>, MetadataError> {
+        self.replay_journal(cache, true)
+    }
+
+    /// What a fresh reader recovers from the active ledger, leaving the
+    /// files, the cache and the statistics untouched.
+    fn replay_active_journal(&self) -> Result<PinInventory, MetadataError> {
+        let mut cache = Cache::default();
+        match self.replay_journal(&mut cache, false)? {
+            Some(legacy) => Ok(legacy),
+            None => cache
+                .snapshot
+                .map(|snapshot| snapshot.state)
+                .ok_or_else(bad),
+        }
+    }
+
+    /// Brings `cache` up to date with the ledger. A reader about to act on the
+    /// result `adopt`s it, syncing the checkpoint name and replayed frames a
+    /// killed publisher may have left unsynced.
+    fn replay_journal(
+        &self,
+        cache: &mut Cache,
+        adopt: bool,
+    ) -> Result<Option<PinInventory>, MetadataError> {
         let mut file = match std::fs::File::open(&self.path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -259,9 +342,11 @@ impl FilePinStore {
                 operations: 0,
             });
             // A publisher killed after exchange may not have synced the name.
-            std::fs::File::open(self.parent())
-                .and_then(|file| file.sync_all())
-                .map_err(io)?;
+            if adopt {
+                std::fs::File::open(self.parent())
+                    .and_then(|file| file.sync_all())
+                    .map_err(io)?;
+            }
         }
         let snapshot = cache.snapshot.as_mut().unwrap();
         let capacity = usize::try_from(file.metadata().map_err(io)?.len()).map_err(backend)?;
@@ -331,7 +416,7 @@ impl FilePinStore {
             }
             replayed = true;
         }
-        if replayed {
+        if replayed && adopt {
             // Complete frames from a killed writer can be visible before sync.
             // Adopt them durably before exposing their revision reservations.
             file.sync_all().map_err(io)?;
@@ -416,12 +501,24 @@ impl FilePinStore {
             return Ok(());
         };
         let snapshot = cache.snapshot.as_ref().unwrap();
+        // The pending frame is the commit, whether appended or folded into a
+        // checkpoint, so its changes are checked before either.
+        invariant::check(|| {
+            validate_revision_step(
+                before.revision,
+                snapshot.state.revision,
+                RevisionStep::Forward,
+            )?;
+            let (pins, deletions) = before.touched();
+            validate_inventory_records(&snapshot.state, pins, deletions)
+        })?;
         let body = before.encode(&snapshot.state)?;
         let total = align(HEADER + body.len() + 40);
         if snapshot.operations + cache.pending_operations > CHECKPOINT_OPERATIONS
             || snapshot.cursor - snapshot.start + total > WINDOW
         {
-            return self.checkpoint_cached_journal(cache);
+            let frame = before.frame();
+            return self.checkpoint_cached_journal(cache, frame, &body);
         }
         let state_bytes = snapshot.index.bytes;
         self.ensure_journal_capacity(align(BLOCK + state_bytes) + WINDOW + BLOCK)?;
@@ -443,6 +540,22 @@ impl FilePinStore {
             .write(true)
             .open(&self.path)
             .map_err(io)?;
+        if invariant::ENABLED {
+            let mut active = [0; 40];
+            file.read_exact_at(&mut active, 0).map_err(io)?;
+            invariant::check(|| {
+                validate_journal_append(
+                    active
+                        .split_first_chunk::<8>()
+                        .filter(|(magic, _)| *magic == MAGIC)
+                        .and_then(|(_, epoch)| epoch.first_chunk()),
+                    &snapshot.epoch,
+                    cache.pending_operations,
+                    snapshot.operations + cache.pending_operations,
+                    snapshot.cursor - snapshot.start + total,
+                )
+            })?;
+        }
         // Clear the next header before replacing any interrupted tail. This
         // write never touches an acknowledged frame or checkpoint.
         file.seek(SeekFrom::Start((snapshot.cursor + total) as u64))
@@ -522,11 +635,26 @@ impl FilePinStore {
         Ok(self.parent().join(name))
     }
 
-    fn checkpoint_cached_journal(&self, cache: &mut Cache) -> Result<(), MetadataError> {
+    /// Writes the cached inventory, including the pending `frame` with `body`,
+    /// as the new checkpoint.
+    fn checkpoint_cached_journal(
+        &self,
+        cache: &mut Cache,
+        frame: &[u8; 8],
+        body: &[u8],
+    ) -> Result<(), MetadataError> {
         let _phase = LedgerPhase::new("journal_checkpoint");
+        // Replaying the journal again costs about as much as the checkpoint
+        // itself, so only debug builds check what it compacts.
+        if invariant::DEBUG {
+            let mut replayed = self.replay_active_journal()?;
+            apply(&mut replayed, body, frame)?;
+            let snapshot = cache.snapshot.as_ref().ok_or_else(bad)?;
+            invariant::check(|| validate_journal_checkpoint(&replayed, &snapshot.state))?;
+        }
         let snapshot = cache.snapshot.as_mut().unwrap();
         let bytes = codec::encode(&snapshot.state)?;
-        let (epoch, start) = self.write_checkpoint(&bytes)?;
+        let (epoch, start) = self.write_checkpoint(&bytes, Some(&snapshot.epoch))?;
         // Edits already updated and validated this index. Retain both it and
         // the inventory, advancing journal positions only after durability.
         snapshot.epoch = epoch;
@@ -547,9 +675,19 @@ impl FilePinStore {
         let bytes = codec::encode(state)?;
         if cache.snapshot.is_none() {
             let before = self.read_replacement_locked()?;
+            // Activation carries the legacy ledger over, unchanged or with the
+            // write that triggered it.
+            invariant::check(|| {
+                if before == *state {
+                    Ok(())
+                } else {
+                    validate_inventory_successor(&before, state, RevisionStep::Forward)
+                }
+            })?;
             self.exchange_slot(&codec::encode(&before)?)?;
         }
-        let (epoch, start) = self.write_checkpoint(&bytes)?;
+        let previous = cache.snapshot.as_ref().map(|snapshot| snapshot.epoch);
+        let (epoch, start) = self.write_checkpoint(&bytes, previous.as_ref())?;
         cache.snapshot = Some(Snapshot {
             epoch,
             state: state.clone(),
@@ -563,10 +701,17 @@ impl FilePinStore {
         Ok(())
     }
 
-    fn write_checkpoint(&self, bytes: &[u8]) -> Result<([u8; 32], usize), MetadataError> {
+    /// Writes `bytes` as a checkpoint under a new epoch, replacing the
+    /// checkpoint at epoch `previous`, if any.
+    fn write_checkpoint(
+        &self,
+        bytes: &[u8],
+        previous: Option<&[u8; 32]>,
+    ) -> Result<([u8; 32], usize), MetadataError> {
         let start = align(BLOCK + bytes.len());
         self.ensure_journal_capacity(start + WINDOW + BLOCK)?;
         let epoch = PinToken::fresh()?.0;
+        invariant::check(|| validate_checkpoint_epoch(previous, &epoch))?;
         let mut header = [0; BLOCK];
         header[..8].copy_from_slice(MAGIC);
         header[8..40].copy_from_slice(&epoch);

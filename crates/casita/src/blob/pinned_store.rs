@@ -11,7 +11,75 @@ use object_store::{
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::metadata::{PinBindings, PinResource, WritePins};
+use crate::invariant::{self, Violation};
+use crate::metadata::{PinBindings, PinInventory, PinResource, PinToken, WritePins};
+
+/// Physical deletions a collector issues under the ledger it claimed against.
+///
+/// `inventory` is the ledger at the revision a new claim was conditional on,
+/// so it is also the state that claim landed in. Every deleted resource is
+/// claimed by this collector, either by `claimed` or by a claim it already
+/// `owned`; no pin protects a claimed or deleted resource; and no other
+/// collector's claim covers one.
+pub(crate) fn validate_deletion_claim(
+    inventory: &PinInventory,
+    owned: &BTreeSet<PinToken>,
+    claimed: &BTreeSet<PinResource>,
+    deleted: &BTreeSet<PinResource>,
+) -> Result<(), Violation> {
+    const POINT: &str = "gc.claim";
+    let owned_claims: BTreeSet<&PinResource> = inventory
+        .deletions
+        .iter()
+        .filter(|(token, _)| owned.contains(token))
+        .flat_map(|(_, resources)| resources)
+        .collect();
+    if let Some(resource) = deleted
+        .iter()
+        .find(|resource| !claimed.contains(resource) && !owned_claims.contains(resource))
+    {
+        return Err(Violation::new(
+            POINT,
+            format!("{resource:?} is deleted without a claim this collector owns"),
+        ));
+    }
+    if let Some(token) = inventory.pins.iter().find_map(|(token, pin)| {
+        (!pin.resources.is_disjoint(claimed) || !pin.resources.is_disjoint(deleted))
+            .then_some(token)
+    }) {
+        return Err(Violation::new(
+            POINT,
+            format!("pin {token} protects a claimed or deleted resource"),
+        ));
+    }
+    if let Some(token) = inventory.deletions.iter().find_map(|(token, claim)| {
+        (!owned.contains(token) && (!claim.is_disjoint(claimed) || !claim.is_disjoint(deleted)))
+            .then_some(token)
+    }) {
+        return Err(Violation::new(
+            POINT,
+            format!("claim {token} of another collector covers a deleted resource"),
+        ));
+    }
+    Ok(())
+}
+
+/// Releasing a deletion claim lets writers pin and rewrite its resources, so
+/// it happens only after every DELETE of the batch settled (`unsettled` is
+/// zero), and only for resources that batch `deleted`.
+pub(crate) fn validate_deletion_finish(
+    claimed: &BTreeSet<PinResource>,
+    deleted: &BTreeSet<PinResource>,
+    unsettled: usize,
+) -> Result<(), Violation> {
+    const POINT: &str = "gc.finish";
+    invariant::ensure(POINT, unsettled == 0, || {
+        format!("{unsettled} DELETE requests of the batch have not settled")
+    })?;
+    invariant::ensure(POINT, claimed.is_subset(deleted), || {
+        "the claim covers resources the batch did not delete".into()
+    })
+}
 
 /// Claim a bounded page of loose representations before invalidating caches
 /// or issuing DELETE. Every group represents one logical blob or chunk; a pin
@@ -35,7 +103,7 @@ pub(crate) async fn delete_pinned_groups(
                 .ok_or_else(|| {
                     std::io::Error::other("loose deletion requires collector ownership")
                 })?;
-            let token = loop {
+            let (token, inventory, claimed) = loop {
                 let inventory = pins.inventory().await.map_err(std::io::Error::other)?;
                 if inventory.collector.as_ref() != Some(&collector)
                     || !pins.allows_deletion(&inventory)
@@ -58,7 +126,7 @@ pub(crate) async fn delete_pinned_groups(
                 if selected.is_empty() {
                     return Ok(0);
                 }
-                let resources: BTreeSet<_> = selected
+                let requested: BTreeSet<_> = selected
                     .iter()
                     .flat_map(|at| &groups[*at])
                     .map(|path| PinResource::StorageObject(path.to_string()))
@@ -69,7 +137,7 @@ pub(crate) async fn delete_pinned_groups(
                     .filter(|(token, _)| owned_claims.contains(token))
                     .flat_map(|(_, resources)| resources.iter().cloned())
                     .collect();
-                let resources: BTreeSet<_> = resources.difference(&covered).cloned().collect();
+                let resources: BTreeSet<_> = requested.difference(&covered).cloned().collect();
                 if inventory.deletions.iter().any(|(token, claim)| {
                     !owned_claims.contains(token) && !claim.is_disjoint(&resources)
                 }) {
@@ -79,32 +147,54 @@ pub(crate) async fn delete_pinned_groups(
                     ));
                 }
                 if resources.is_empty() {
-                    break None;
+                    break (None, inventory, resources);
                 }
+                // Kept only to check the claim against the deletions it covers.
+                let claimed = if invariant::ENABLED {
+                    resources.clone()
+                } else {
+                    BTreeSet::new()
+                };
                 if let Some(token) = pins
                     .claim_deletions(inventory.revision, resources)
                     .await
                     .map_err(std::io::Error::other)?
                 {
-                    break Some(token);
+                    break (Some(token), inventory, claimed);
                 }
             };
-            invalidate(&selected);
             let count = selected.len();
             let paths: Vec<_> = selected
                 .iter()
                 .flat_map(|at| groups[*at].iter().cloned())
                 .collect();
+            let deleted: BTreeSet<_> = if invariant::ENABLED {
+                paths
+                    .iter()
+                    .map(|path| PinResource::StorageObject(path.to_string()))
+                    .collect()
+            } else {
+                BTreeSet::new()
+            };
+            invariant::check(|| {
+                validate_deletion_claim(&inventory, &owned_claims, &claimed, &deleted)
+            })?;
+            invalidate(&selected);
+            let requested = paths.len();
+            let mut settled = 0_usize;
             let locations =
                 futures::stream::iter(paths.into_iter().map(Ok::<_, object_store::Error>)).boxed();
             let mut deletes = objects.delete_stream(locations);
             while let Some(result) = deletes.next().await {
                 match result {
-                    Ok(_) | Err(object_store::Error::NotFound { .. }) => {}
+                    Ok(_) | Err(object_store::Error::NotFound { .. }) => settled += 1,
                     Err(error) => return Err(std::io::Error::other(error)),
                 }
             }
             if let Some(token) = token {
+                invariant::check(|| {
+                    validate_deletion_finish(&claimed, &deleted, requested.saturating_sub(settled))
+                })?;
                 pins.finish_deletions(&token)
                     .await
                     .map_err(std::io::Error::other)?;
@@ -363,6 +453,60 @@ mod tests {
         DataPin, DataPinLease, MemoryPinStore, PinScope, PinStore, flush_repository_leases,
     };
     use object_store::ObjectStoreExt;
+
+    fn token(ordinal: u8) -> PinToken {
+        format!("{ordinal:064x}").parse().unwrap()
+    }
+
+    fn objects(names: &[&str]) -> BTreeSet<PinResource> {
+        names
+            .iter()
+            .map(|name| PinResource::StorageObject((*name).into()))
+            .collect()
+    }
+
+    #[test]
+    fn a_collector_deletes_only_what_it_claimed_and_nobody_pins() {
+        let owned_claim = token(1);
+        let inventory = PinInventory {
+            pins: std::collections::BTreeMap::from([(
+                token(3),
+                DataPin {
+                    scope: PinScope::Staging,
+                    catalog: None,
+                    resources: objects(&["pinned"]),
+                },
+            )]),
+            deletions: std::collections::BTreeMap::from([
+                (owned_claim.clone(), objects(&["owned"])),
+                (token(2), objects(&["foreign"])),
+            ]),
+            ..PinInventory::default()
+        };
+        let owned = BTreeSet::from([owned_claim]);
+        let claimed = objects(&["fresh"]);
+        assert_eq!(
+            validate_deletion_claim(&inventory, &owned, &claimed, &objects(&["fresh", "owned"])),
+            Ok(())
+        );
+        let unclaimed = objects(&["fresh", "unclaimed"]);
+        assert!(validate_deletion_claim(&inventory, &owned, &claimed, &unclaimed).is_err());
+        let pinned = objects(&["pinned"]);
+        assert!(validate_deletion_claim(&inventory, &owned, &pinned, &pinned).is_err());
+        let foreign = objects(&["foreign"]);
+        assert!(validate_deletion_claim(&inventory, &owned, &foreign, &foreign).is_err());
+    }
+
+    #[test]
+    fn a_deletion_claim_is_released_only_after_its_deletes_settle() {
+        let deleted = objects(&["a", "b"]);
+        assert_eq!(
+            validate_deletion_finish(&objects(&["a"]), &deleted, 0),
+            Ok(())
+        );
+        assert!(validate_deletion_finish(&objects(&["a"]), &deleted, 1).is_err());
+        assert!(validate_deletion_finish(&objects(&["a", "c"]), &deleted, 0).is_err());
+    }
 
     #[tokio::test]
     async fn multipart_upload_retains_its_pin_through_completion() {

@@ -2067,5 +2067,32 @@ pub(crate) fn digest_from_location(location: &Path) -> io::Result<Digest> {
     Digest::from_hex(name).map_err(io::Error::other)
 }
 
+/// A self-addressed object is stored under the BLAKE3 digest of its exact
+/// bytes. That is what makes rewriting it with `PutMode::Overwrite`
+/// idempotent (F-11, D4).
+pub(crate) fn validate_content_address(
+    location: &Path,
+    actual: &Digest,
+) -> Result<(), crate::invariant::Violation> {
+    const POINT: &str = "blob.content_address";
+    let named = digest_from_location(location).map_err(|error| {
+        crate::invariant::Violation::new(POINT, format!("{location} names no digest: {error}"))
+    })?;
+    crate::invariant::ensure(POINT, named == *actual, || {
+        format!("{location} would hold bytes hashing to {actual}")
+    })
+}
+
+/// Check a self-addressed write before it becomes durable. Debug builds only:
+/// hashing the payload again doubles the write's hashing cost.
+pub(crate) fn check_content_address(location: &Path, bytes: &[u8]) -> io::Result<()> {
+    if crate::invariant::DEBUG {
+        crate::invariant::check(|| {
+            validate_content_address(location, &Digest::from(blake3::hash(bytes)))
+        })?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;
