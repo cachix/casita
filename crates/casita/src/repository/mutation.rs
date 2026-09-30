@@ -202,7 +202,7 @@ where
         // Register the current catalog with the staging pin when possible.
         // Admission still rechecks the metadata revision below, so a catalog
         // change between the snapshot and registration is protected there.
-        let initial = if self.state.coordinates_payload_catalog() {
+        let initial = if self.publication.coordinates_payload_catalog() {
             let snapshot = self.state.snapshot().await?;
             let mut resources = snapshot.retention_resources();
             if let Some(catalog) = snapshot.payload_catalog() {
