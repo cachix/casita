@@ -108,6 +108,7 @@ The supported Rust API uses the non-generic casita::Repository: Repository::loca
             { label: 'Local Repository', slug: 'reference/local-repository' },
             { label: 'Benchmarks', slug: 'reference/benchmarks' },
             { label: 'Errors & Integrity', slug: 'reference/errors' },
+            { label: 'Reliability Contract', slug: 'reference/reliability' },
             {
               label: 'Rust API source',
               link: 'https://github.com/cachix/casita/blob/main/crates/casita/src/lib.rs',

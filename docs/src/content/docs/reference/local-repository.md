@@ -162,6 +162,9 @@ resolved; elapsed time never makes an operation safe to forget.
 Deleting or replacing `gc.lock` while Casita processes are running breaks
 collector coordination.
 
+Clauses C5 and C6 of the [reliability contract](../reliability/) state these
+guarantees, where they apply, and which tests check them.
+
 ## Collection order
 
 Collection marks named-root closures and active pin scopes in one immutable
@@ -189,6 +192,10 @@ passes have a 60-second cooldown shared through a repository stamp file.
 Callers may still run `gc`, invoke `collect()` directly, or schedule
 `DiskPressurePolicy::probe_and_collect`. On a filesystem with nonzero reported
 capacity, zero free bytes always triggers an attempt when the cooldown permits.
+
+The [reliability contract](../reliability/) states what an interrupted
+collection may leave behind (C9) and how collection behaves when storage is
+full (C15).
 
 ## Deterministic publication crash tests
 

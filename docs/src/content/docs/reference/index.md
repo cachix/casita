@@ -20,6 +20,7 @@ then read the task-oriented [CLI](../cli/) or [Library](../library/) guide.
 | [Local repository](./local-repository/) | What the standard persistent profile stores and how processes coordinate |
 | [Benchmarks](./benchmarks/) | How end-to-end performance results are generated, validated, and compared |
 | [Errors and integrity](./errors/) | How to classify failures, decide about retries, and interpret `fsck` |
+| [Reliability contract](./reliability/) | What survives process death, power loss, and corruption on each platform, and which tests check it |
 
 ## Contract levels
 
