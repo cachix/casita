@@ -1906,6 +1906,15 @@
       ]
     },
     {
+      "id": "pack-demand-progress",
+      "suite_id": "blob-backends",
+      "title": "Demand progress across speculative request admission boundaries",
+      "kind": "module",
+      "target": "benchmarks.suites.pack.demand_progress",
+      "profiles": ["smoke", "standard"],
+      "correctness": ["exact bytes", "verified chunk digest", "demand completes while speculative I/O is blocked", "all request and buffer permits released"]
+    },
+    {
       "id": "pack-read-planning",
       "suite_id": "blob-backends",
       "title": "Bounded read planning over audited physical traces (I/O model only)",

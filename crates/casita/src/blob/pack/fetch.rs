@@ -70,6 +70,9 @@ pub(super) struct State {
     pub(super) cache: StdMutex<Cache>,
     buffers: ByteBudget,
     requests: Arc<tokio::sync::Semaphore>,
+    // Backpressured read-ahead can stop polling in-flight requests. Keep one
+    // global request slot available for demand so it can drain that queue.
+    speculative_requests: Arc<tokio::sync::Semaphore>,
 }
 impl State {
     pub(super) fn new(capacity: u64) -> Self {
@@ -77,6 +80,7 @@ impl State {
             cache: StdMutex::new(Cache::new(capacity)),
             buffers: ByteBudget::new(BUFFER_BYTES),
             requests: Arc::new(tokio::sync::Semaphore::new(4)),
+            speculative_requests: Arc::new(tokio::sync::Semaphore::new(3)),
         }
     }
 }
@@ -417,6 +421,22 @@ impl Context {
             .map(|request| {
                 let context = self.clone();
                 async move {
+                    // Acquire speculative admission first. Reversing these
+                    // acquisitions could consume the slot reserved for demand.
+                    let _speculative = if admission == Admission::WhenFree {
+                        Some(
+                            context
+                                .packed
+                                .fetch
+                                .speculative_requests
+                                .clone()
+                                .acquire_owned()
+                                .await
+                                .map_err(io::Error::other)?,
+                        )
+                    } else {
+                        None
+                    };
                     let _request = context
                         .packed
                         .fetch
@@ -688,6 +708,113 @@ impl Drop for Pump {
 mod tests {
     use super::*;
     use crate::blob::BlobReader;
+
+    #[tokio::test]
+    async fn speculative_requests_leave_room_for_demand() {
+        use object_store::memory::InMemory;
+        use object_store::throttle::{ThrottleConfig, ThrottledStore};
+        use std::time::{Duration, Instant};
+
+        // Cover both sides of the three-request speculative admission limit.
+        for count in [2, 3, 4, 8] {
+            let objects = Arc::new(ThrottledStore::new(
+                InMemory::new(),
+                ThrottleConfig::default(),
+            ));
+            let packed =
+                PackedChunks::open_with_cache(objects.clone(), Path::default(), 64 * 1024, 0)
+                    .await
+                    .unwrap();
+            let mut data = vec![0; (count + 1) * 64 * 1024];
+            blake3::Hasher::new()
+                .update(b"reserved-demand-request")
+                .finalize_xof()
+                .fill(&mut data);
+            let mut chunks = Vec::new();
+            for bytes in data.chunks(64 * 1024) {
+                let chunk = ChunkMeta {
+                    digest: ChunkId::new(blake3::hash(bytes).into()),
+                    size: bytes.len() as u64,
+                };
+                packed
+                    .put(
+                        chunk.clone(),
+                        Bytes::from(zstd::encode_all(bytes, 0).unwrap()),
+                    )
+                    .await
+                    .unwrap();
+                chunks.push(chunk);
+            }
+            packed.flush().await.unwrap();
+            let context = Arc::new(Context {
+                packed: packed.reader(),
+                plan: ReadPlan {
+                    frozen: packed.freeze_manifest(&chunks).await.unwrap().unwrap(),
+                    chunks,
+                    _pin: None,
+                },
+                decode: ByteBudget::new(BUFFER_BYTES),
+            });
+            objects.config_mut(|c| c.wait_get_per_call = Duration::from_secs(60));
+            let ahead = context.clone();
+            let pending =
+                tokio::spawn(async move { ahead.window(0..count, Admission::WhenFree).await });
+            let expected_free = 4 - count.min(3);
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while packed.fetch.requests.available_permits() > expected_free {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            // Give every pending request a chance to attempt admission.
+            for _ in 0..32 {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(packed.fetch.requests.available_permits(), expected_free);
+            objects.config_mut(|c| c.wait_get_per_call = Duration::ZERO);
+            let started = Instant::now();
+            let frames =
+                tokio::time::timeout(Duration::from_secs(2), context.demand(count..count + 1))
+                    .await
+                    .expect("demand must progress while speculative I/O is blocked")
+                    .unwrap();
+            let elapsed = started.elapsed();
+            assert_eq!(frames.len(), 1);
+            let chunk = &context.plan.chunks[count];
+            let decoded = zstd::decode_all(frames[0].bytes.as_ref()).unwrap();
+            assert_eq!(decoded.len() as u64, chunk.size);
+            assert_eq!(ChunkId::new(blake3::hash(&decoded).into()), chunk.digest);
+            assert_eq!(decoded, data[count * 64 * 1024..]);
+            drop(frames);
+            pending.abort();
+            match pending.await {
+                Err(error) => assert!(error.is_cancelled()),
+                Ok(_) => panic!("speculative I/O unexpectedly completed"),
+            }
+            let all = packed
+                .fetch
+                .requests
+                .clone()
+                .try_acquire_many_owned(4)
+                .expect("cancellation releases every request permit");
+            drop(all);
+            let buffers = packed
+                .fetch
+                .buffers
+                .try_reserve(BUFFER_BYTES)
+                .expect("cancellation releases compressed buffers");
+            drop(buffers);
+            println!(
+                "demand_progress_sample {}",
+                serde_json::json!({
+                    "speculative_requests": count,
+                    "demand_nanos": elapsed.as_nanos() as u64,
+                    "correctness": "exact bytes, verified digest, demand progress, permits released",
+                })
+            );
+        }
+    }
 
     fn id(n: u8) -> ChunkId {
         ChunkId::new(Digest::from([n; 32]))
