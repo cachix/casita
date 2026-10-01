@@ -1,0 +1,112 @@
+{
+  "complete": true,
+  "iterations": 32,
+  "rounds": 8,
+  "base_revision": "3e49e7316a681c791e4d6b230b29030002c8c85b",
+  "head_revision": "3d1fe3c0bd2e673a7ee2eddaf3308fba28b04088",
+  "binaries": {
+    "A": {
+      "path": "/tmp/casita-coadmission-binaries-20261001/casita-lib-test",
+      "sha256": "b4b313ead3aa3e4285d9cd52df5d36494008ccf6deaf9c2e8aaf3dcd476f0e80"
+    },
+    "B": {
+      "path": "/tmp/casita-coadmission-binaries-20261001/casita-lib-test",
+      "sha256": "b4b313ead3aa3e4285d9cd52df5d36494008ccf6deaf9c2e8aaf3dcd476f0e80"
+    }
+  },
+  "runner_sha256": "bb91ed1452e2dd6c0c1e14085a3c8dcc2e0b1f830d902aa10cda59949f74e577",
+  "warmups": [
+    {
+      "variant": "A",
+      "wall_s": 1.938110202999951,
+      "metrics": {
+        "catalog_marker_iterations": 32,
+        "catalog_marker_absent_nanos_per_probe": 21260,
+        "catalog_marker_present_nanos_per_probe": 24747,
+        "catalog_coadmission_bytes_nanos_per_publication": 7779262,
+        "catalog_coadmission_bytes_pin_operations": 64,
+        "catalog_coadmission_bytes_pin_journal_syncs": 64,
+        "catalog_coadmission_bytes_pin_journal_checkpoints": 0,
+        "catalog_coadmission_file_nanos_per_publication": 10140727,
+        "catalog_coadmission_file_pin_operations": 64,
+        "catalog_coadmission_file_pin_journal_syncs": 65,
+        "catalog_coadmission_file_pin_journal_checkpoints": 1,
+        "catalog_marker_create_nanos_per_publication": 3802772,
+        "catalog_marker_existing_pinned_nanos_per_publication": 1936634,
+        "catalog_marker_existing_inode_replacements": 0,
+        "catalog_marker_existing_pin_operations": 32,
+        "catalog_marker_existing_pin_journal_syncs": 32,
+        "catalog_marker_existing_pin_journal_checkpoints": 0
+      },
+      "activity_before": {
+        "loadavg": [
+          3.029296875,
+          7.2802734375,
+          7.80322265625
+        ],
+        "io_pressure": "some avg10=85.12 avg60=76.92 avg300=58.17 total=927562904\nfull avg10=79.60 avg60=69.13 avg300=47.42 total=754481116",
+        "cpu_pressure": "some avg10=0.00 avg60=1.35 avg300=5.08 total=149370504\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+      },
+      "activity_after": {
+        "loadavg": [
+          3.029296875,
+          7.2802734375,
+          7.80322265625
+        ],
+        "io_pressure": "some avg10=83.65 avg60=76.92 avg300=58.30 total=929023217\nfull avg10=77.68 avg60=69.12 avg300=47.57 total=755779618",
+        "cpu_pressure": "some avg10=0.00 avg60=1.30 avg300=5.04 total=149381406\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+      }
+    },
+    {
+      "variant": "B",
+      "wall_s": 1.2399755690000802,
+      "metrics": {
+        "catalog_marker_iterations": 32,
+        "catalog_marker_absent_nanos_per_probe": 29571,
+        "catalog_marker_present_nanos_per_probe": 30758,
+        "catalog_coadmission_bytes_nanos_per_publication": 5876911,
+        "catalog_coadmission_bytes_pin_operations": 32,
+        "catalog_coadmission_bytes_pin_journal_syncs": 32,
+        "catalog_coadmission_bytes_pin_journal_checkpoints": 0,
+        "catalog_coadmission_file_nanos_per_publication": 6187872,
+        "catalog_coadmission_file_pin_operations": 32,
+        "catalog_coadmission_file_pin_journal_syncs": 32,
+        "catalog_coadmission_file_pin_journal_checkpoints": 0,
+        "catalog_marker_create_nanos_per_publication": 3562975,
+        "catalog_marker_existing_pinned_nanos_per_publication": 2061374,
+        "catalog_marker_existing_inode_replacements": 0,
+        "catalog_marker_existing_pin_operations": 32,
+        "catalog_marker_existing_pin_journal_syncs": 32,
+        "catalog_marker_existing_pin_journal_checkpoints": 0
+      },
+      "activity_before": {
+        "loadavg": [
+          3.029296875,
+          7.2802734375,
+          7.80322265625
+        ],
+        "io_pressure": "some avg10=83.65 avg60=76.92 avg300=58.30 total=929023217\nfull avg10=77.68 avg60=69.12 avg300=47.57 total=755779618",
+        "cpu_pressure": "some avg10=0.00 avg60=1.30 avg300=5.04 total=149381406\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+      },
+      "activity_after": {
+        "loadavg": [
+          3.029296875,
+          7.2802734375,
+          7.80322265625
+        ],
+        "io_pressure": "some avg10=82.26 avg60=76.89 avg300=58.42 total=930001436\nfull avg10=75.74 avg60=69.05 avg300=47.70 total=756676995",
+        "cpu_pressure": "some avg10=0.00 avg60=1.26 avg300=5.01 total=149386387\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+      }
+    }
+  ],
+  "event_logging": false,
+  "test": "blob::pack::benchmarks::benchmark_catalog_reclaim_marker_probe",
+  "modes": {
+    "A": "separate",
+    "B": "combined"
+  },
+  "bootstrap": {
+    "resamples": 20000,
+    "seed": 20261001
+  }
+}

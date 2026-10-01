@@ -1,0 +1,153 @@
+diff --git a/crates/casita/src/blob/pack/benchmarks.rs b/crates/casita/src/blob/pack/benchmarks.rs
+index 7b0f987..ed219ac 100644
+--- a/crates/casita/src/blob/pack/benchmarks.rs
++++ b/crates/casita/src/blob/pack/benchmarks.rs
+@@ -459,7 +459,7 @@ async fn benchmark_catalog_reclaim_marker_probe() {
+     let iterations = std::env::var("CASITA_CATALOG_MARKER_BENCH_ITERATIONS")
+         .ok()
+         .map(|value| value.parse::<u64>().expect("invalid marker iterations"))
+-        .unwrap_or(10_000);
++        .unwrap_or(100);
+     assert!(iterations > 0);
+     let directory = tempfile::tempdir().unwrap();
+     let objects: Arc<dyn ObjectStore> =
+@@ -492,6 +492,139 @@ async fn benchmark_catalog_reclaim_marker_probe() {
+         "catalog_marker_present_nanos_per_probe {}",
+         present_nanos / iterations
+     );
++    benchmark_durable_marker_publication(iterations).await;
++}
++
++async fn benchmark_durable_marker_publication(iterations: u64) {
++    use crate::metadata::{
++        DataPin, DataPinLease, FilePinStore, PinBindings, PinScope, PinStore,
++        flush_repository_leases,
++    };
++
++    let directory = tempfile::tempdir().unwrap();
++    let filesystem =
++        object_store::local::LocalFileSystem::new_with_prefix(directory.path()).unwrap();
++    let objects: Arc<dyn ObjectStore> = Arc::new(filesystem.clone());
++    let bindings = PinBindings::default();
++    let durability = LocalDurability::new(filesystem.clone(), directory.path())
++        .unwrap()
++        .with_pins(bindings.clone());
++    let empty = PackedChunks::empty_state_catalog().unwrap();
++    let writer = PackedChunks::open_with_initial_catalog(
++        objects.clone(),
++        Path::default(),
++        u64::MAX,
++        0,
++        Some(&empty),
++        Some(durability),
++    )
++    .await
++    .unwrap();
++    let collector = PackedChunks::open_with_initial_catalog(
++        objects,
++        Path::default(),
++        u64::MAX,
++        0,
++        Some(&empty),
++        Some(LocalDurability::new(filesystem, directory.path()).unwrap()),
++    )
++    .await
++    .unwrap();
++    let path = directory.path().join(INDEX_RECLAIM_MARKER_NAME);
++    let mut create_nanos = 0_u128;
++    for _ in 0..iterations {
++        assert!(!writer.catalog_reclaim_due().await.unwrap());
++        let started = Instant::now();
++        writer.mark_catalog_reclaim_due().await.unwrap();
++        create_nanos += started.elapsed().as_nanos();
++        assert_eq!(
++            std::fs::read(&path).unwrap(),
++            b"catalog garbage may be present\n"
++        );
++        collector.reclaim_catalog_objects(&[]).await.unwrap();
++        assert!(!writer.catalog_reclaim_due().await.unwrap());
++    }
++
++    writer.mark_catalog_reclaim_due().await.unwrap();
++    let ledger = Arc::new(FilePinStore::new(directory.path().join("pins")));
++    ledger.inventory().await.unwrap();
++    let mut existing_nanos = 0_u128;
++    #[cfg(unix)]
++    let mut replacements = 0_u64;
++    #[cfg(any(target_os = "linux", target_os = "macos"))]
++    let (mut operations, mut journal_syncs) = (0_u64, 0_u64);
++    for _ in 0..iterations {
++        let pin = DataPinLease::acquire(
++            ledger.clone(),
++            DataPin {
++                scope: PinScope::Staging,
++                catalog: None,
++                resources: BTreeSet::new(),
++            },
++        )
++        .await
++        .unwrap();
++        bindings.attach(&pin);
++        #[cfg(unix)]
++        let original = std::fs::File::open(&path).unwrap();
++        #[cfg(any(target_os = "linux", target_os = "macos"))]
++        let before = ledger.test_stats();
++        let started = Instant::now();
++        writer.mark_catalog_reclaim_due().await.unwrap();
++        existing_nanos += started.elapsed().as_nanos();
++        #[cfg(any(target_os = "linux", target_os = "macos"))]
++        {
++            let after = ledger.test_stats();
++            operations += after["operations"] - before["operations"];
++            journal_syncs += after["journal_syncs"] - before["journal_syncs"];
++        }
++        #[cfg(unix)]
++        {
++            use std::os::unix::fs::MetadataExt;
++            replacements += u64::from(
++                original.metadata().unwrap().ino() != std::fs::metadata(&path).unwrap().ino(),
++            );
++        }
++        let inventory = ledger.inventory().await.unwrap();
++        assert!(inventory.pins[pin.token()].resources.contains(
++            &crate::metadata::PinResource::StorageObject(INDEX_RECLAIM_MARKER_NAME.into())
++        ));
++        assert_eq!(
++            std::fs::read(&path).unwrap(),
++            b"catalog garbage may be present\n"
++        );
++        drop(pin);
++        flush_repository_leases().await.unwrap();
++        assert!(ledger.inventory().await.unwrap().pins.is_empty());
++    }
++    collector.reclaim_catalog_objects(&[]).await.unwrap();
++    assert!(!writer.catalog_reclaim_due().await.unwrap());
++    writer.mark_catalog_reclaim_due().await.unwrap();
++    assert!(writer.catalog_reclaim_due().await.unwrap());
++    let reopened = object_store::local::LocalFileSystem::new_with_prefix(directory.path()).unwrap();
++    assert!(
++        reopened
++            .head(&Path::from(INDEX_RECLAIM_MARKER_NAME))
++            .await
++            .is_ok()
++    );
++    println!(
++        "catalog_marker_create_nanos_per_publication {}",
++        create_nanos / u128::from(iterations)
++    );
++    println!(
++        "catalog_marker_existing_pinned_nanos_per_publication {}",
++        existing_nanos / u128::from(iterations)
++    );
++    #[cfg(unix)]
++    println!("catalog_marker_existing_inode_replacements {replacements}");
++    #[cfg(any(target_os = "linux", target_os = "macos"))]
++    {
++        assert_eq!(operations, iterations);
++        assert_eq!(journal_syncs, iterations);
++        println!("catalog_marker_existing_pin_operations {operations}");
++        println!("catalog_marker_existing_pin_journal_syncs {journal_syncs}");
++    }
+ }
+ 
+ #[tokio::test(flavor = "current_thread")]

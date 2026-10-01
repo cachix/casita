@@ -14,9 +14,36 @@ use object_store::path::Path;
 #[cfg(test)]
 thread_local! {
     static SYNCED_DIRECTORIES: std::cell::RefCell<Option<Vec<PathBuf>>> = const { std::cell::RefCell::new(None) };
+    static SYNCED_FILES: std::cell::RefCell<Option<Vec<PathBuf>>> = const { std::cell::RefCell::new(None) };
 }
 
 static TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+const RECLAIM_MARKER_BYTES: &[u8] = b"catalog garbage may be present\n";
+
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct MarkerPause {
+    entered: tokio::sync::Notify,
+    resumed: std::sync::Mutex<bool>,
+    resume: std::sync::Condvar,
+}
+
+#[cfg(test)]
+impl MarkerPause {
+    fn wait(&self) {
+        let mut resumed = self.resumed.lock().unwrap();
+        self.entered.notify_one();
+        while !*resumed {
+            resumed = self.resume.wait(resumed).unwrap();
+        }
+    }
+
+    fn release(&self) {
+        *self.resumed.lock().unwrap() = true;
+        self.resume.notify_all();
+    }
+}
 
 /// The concrete filesystem handle retained alongside the erased object store.
 ///
@@ -31,6 +58,8 @@ pub(crate) struct LocalDurability {
     root: Arc<PathBuf>,
     pins: crate::metadata::PinBindings,
     deletions: super::deletion_barrier::DeletionBarrier,
+    #[cfg(test)]
+    marker_pause: Option<Arc<MarkerPause>>,
 }
 
 /// Held from catalog snapshot selection through durable pointer publication.
@@ -179,6 +208,8 @@ impl LocalDurability {
             root: Arc::new(backend_root),
             pins: Default::default(),
             deletions: Default::default(),
+            #[cfg(test)]
+            marker_pause: None,
         })
     }
 
@@ -206,8 +237,105 @@ impl LocalDurability {
             .await
     }
 
-    /// Durably publish a potentially large object without first materializing
-    /// it as one contiguous byte allocation.
+    /// Keep the reclamation hint durable without replacing an existing inode.
+    /// Presence is not a durability proof: another publisher may have renamed
+    /// the hint but not flushed its directory yet. Always flush both the file
+    /// and its directory chain before dependent catalog objects are published.
+    #[tracing::instrument(
+        name = "blob.local_durability.ensure_reclaim_marker",
+        level = "debug",
+        skip_all
+    )]
+    pub(crate) async fn ensure_reclaim_marker(&self, location: &Path) -> io::Result<()> {
+        let destination = self
+            .filesystem
+            .path_to_filesystem(location)
+            .map_err(io::Error::other)?;
+        let root = Arc::clone(&self.root);
+        #[cfg(test)]
+        let pause = self.marker_pause.clone();
+        self.pins
+            .capture()
+            .write(pin_path(location), async move {
+                tokio::task::spawn_blocking(move || {
+                    #[cfg(test)]
+                    if let Some(pause) = pause {
+                        pause.wait();
+                    }
+                    durable_ensure_reclaim_marker(&root, &destination)
+                })
+                .await
+                .map_err(io::Error::other)?
+            })
+            .await
+    }
+
+    /// Admit marker and object together, then durably publish them in order.
+    pub(crate) async fn put_with_reclaim_marker(
+        &self,
+        marker: &Path,
+        location: &Path,
+        bytes: Bytes,
+    ) -> io::Result<()> {
+        self.publish_with_reclaim_marker(marker, location, move |root, destination| {
+            durable_put(root, destination, &bytes)
+        })
+        .await
+    }
+
+    pub(crate) async fn put_file_with_reclaim_marker(
+        &self,
+        marker: &Path,
+        location: &Path,
+        source: File,
+    ) -> io::Result<()> {
+        self.publish_with_reclaim_marker(marker, location, move |root, destination| {
+            durable_put_file(root, destination, source)
+        })
+        .await
+    }
+
+    // Admit both identities before either I/O operation. The owned write scope
+    // fences collection until both ordered durability barriers settle, even
+    // when the caller is cancelled between marker and object publication.
+    async fn publish_with_reclaim_marker(
+        &self,
+        marker: &Path,
+        location: &Path,
+        publish: impl FnOnce(&FsPath, &FsPath) -> io::Result<()> + Send + 'static,
+    ) -> io::Result<()> {
+        let marker_destination = self
+            .filesystem
+            .path_to_filesystem(marker)
+            .map_err(io::Error::other)?;
+        let destination = self
+            .filesystem
+            .path_to_filesystem(location)
+            .map_err(io::Error::other)?;
+        let root = Arc::clone(&self.root);
+        let mut resources = pin_path(marker);
+        resources.extend(pin_path(location));
+        #[cfg(test)]
+        let pause = self.marker_pause.clone();
+        self.pins
+            .capture()
+            .write(resources, async move {
+                tokio::task::spawn_blocking(move || {
+                    #[cfg(test)]
+                    if let Some(pause) = pause {
+                        pause.wait();
+                    }
+                    durable_ensure_reclaim_marker(&root, &marker_destination)?;
+                    publish(&root, &destination)
+                })
+                .await
+                .map_err(io::Error::other)?
+            })
+            .await
+    }
+
+    /// Durably publish a potentially large object without materializing it.
+    #[cfg(test)]
     #[tracing::instrument(name = "blob.local_durability.put_file", level = "debug", skip_all)]
     pub(crate) async fn put_file(&self, location: &Path, source: File) -> io::Result<()> {
         let destination = self
@@ -307,6 +435,63 @@ fn durable_put(root: &FsPath, destination: &FsPath, bytes: &[u8]) -> io::Result<
     commit_prepared(root, vec![prepared])
 }
 
+#[cfg(unix)]
+fn durable_ensure_reclaim_marker(root: &FsPath, destination: &FsPath) -> io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    if !destination.starts_with(root) {
+        return Err(io::Error::other(
+            "reclaim marker escaped its filesystem root",
+        ));
+    }
+    let file = match OpenOptions::new()
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(destination)
+    {
+        Ok(file) => file,
+        Err(error)
+            if error.kind() == io::ErrorKind::NotFound
+                || error.kind() == io::ErrorKind::PermissionDenied
+                || error.raw_os_error() == Some(libc::ELOOP) =>
+        {
+            return durable_put(root, destination, RECLAIM_MARKER_BYTES);
+        }
+        Err(error) => return Err(error),
+    };
+    if !file.metadata()?.is_file() {
+        drop(file);
+        return durable_put(root, destination, RECLAIM_MARKER_BYTES);
+    }
+    #[cfg(test)]
+    super::crash_tests::file_checkpoint("before-marker-sync", destination);
+    file.sync_all()?;
+    #[cfg(test)]
+    SYNCED_FILES.with_borrow_mut(|record| {
+        if let Some(paths) = record {
+            paths.push(destination.to_path_buf());
+        }
+    });
+    #[cfg(test)]
+    super::crash_tests::file_checkpoint("after-marker-sync", destination);
+    let parent = destination
+        .parent()
+        .ok_or_else(|| io::Error::other("reclaim marker has no parent"))?;
+    #[cfg(test)]
+    super::crash_tests::file_checkpoint("before-marker-directory-sync", destination);
+    sync_directory_chain(root, parent)?;
+    #[cfg(test)]
+    super::crash_tests::file_checkpoint("after-marker-directory-sync", destination);
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn durable_ensure_reclaim_marker(root: &FsPath, destination: &FsPath) -> io::Result<()> {
+    // Keep the existing publication path where portable no-follow opens and
+    // directory flushing cannot establish the Unix reuse contract.
+    durable_put(root, destination, RECLAIM_MARKER_BYTES)
+}
+
 fn durable_put_file(root: &FsPath, destination: &FsPath, source: File) -> io::Result<()> {
     let parent = destination
         .parent()
@@ -369,6 +554,12 @@ fn prepare_put(destination: PathBuf, bytes: &[u8]) -> io::Result<PreparedLocalPu
     }
     #[cfg(test)]
     super::crash_tests::file_checkpoint("after-file-sync", &destination);
+    #[cfg(test)]
+    SYNCED_FILES.with_borrow_mut(|record| {
+        if let Some(paths) = record {
+            paths.push(destination.clone());
+        }
+    });
     drop(file);
     Ok(PreparedLocalPut {
         temporary,
@@ -537,6 +728,249 @@ fn sync_directory_chains(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn reclaim_marker_reuses_the_inode_but_flushes_file_and_directory() {
+        use std::os::unix::fs::MetadataExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let marker = root.join("nested/pack-index-reclaim-needed");
+        SYNCED_FILES.with_borrow_mut(|record| *record = Some(Vec::new()));
+        SYNCED_DIRECTORIES.with_borrow_mut(|record| *record = Some(Vec::new()));
+        durable_ensure_reclaim_marker(root, &marker).unwrap();
+        assert_eq!(std::fs::read(&marker).unwrap(), RECLAIM_MARKER_BYTES);
+        let original = File::open(&marker).unwrap();
+        let inode = original.metadata().unwrap().ino();
+        // An independently visible but not explicitly synced marker must not
+        // cause the reuse path to skip either durability barrier.
+        std::fs::write(&marker, RECLAIM_MARKER_BYTES).unwrap();
+        durable_ensure_reclaim_marker(root, &marker).unwrap();
+        assert_eq!(std::fs::metadata(&marker).unwrap().ino(), inode);
+        assert_eq!(std::fs::read(&marker).unwrap(), RECLAIM_MARKER_BYTES);
+        let files = SYNCED_FILES.with_borrow_mut(|record| record.take().unwrap());
+        let directories = SYNCED_DIRECTORIES.with_borrow_mut(|record| record.take().unwrap());
+        assert_eq!(files, vec![marker.clone(), marker.clone()]);
+        assert_eq!(directories.iter().filter(|path| **path == root).count(), 2);
+        assert_eq!(
+            directories
+                .iter()
+                .filter(|path| **path == root.join("nested"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            std::fs::read_dir(marker.parent().unwrap()).unwrap().count(),
+            1
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reclaim_marker_replaces_symlinks_without_opening_their_targets() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("other-object");
+        std::fs::write(&target, b"unchanged object").unwrap();
+        let marker = directory.path().join("pack-index-reclaim-needed");
+        symlink(&target, &marker).unwrap();
+        durable_ensure_reclaim_marker(directory.path(), &marker).unwrap();
+        assert!(!std::fs::symlink_metadata(&marker).unwrap().is_symlink());
+        assert_eq!(std::fs::read(&marker).unwrap(), RECLAIM_MARKER_BYTES);
+        assert_eq!(std::fs::read(&target).unwrap(), b"unchanged object");
+    }
+
+    #[tokio::test]
+    async fn reclaim_marker_observes_another_handles_clear_and_recreates_after_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let open = || {
+            LocalDurability::new(
+                LocalFileSystem::new_with_prefix(directory.path()).unwrap(),
+                directory.path(),
+            )
+            .unwrap()
+        };
+        let writer = open();
+        let collector = open();
+        let path = Path::from("pack-index-reclaim-needed");
+        writer.ensure_reclaim_marker(&path).await.unwrap();
+        collector.delete(&path).await.unwrap();
+        assert!(!directory.path().join(path.as_ref()).exists());
+        writer.ensure_reclaim_marker(&path).await.unwrap();
+        drop(writer);
+        let reopened = open();
+        reopened.ensure_reclaim_marker(&path).await.unwrap();
+        collector.delete(&path).await.unwrap();
+        reopened.ensure_reclaim_marker(&path).await.unwrap();
+        assert_eq!(
+            std::fs::read(directory.path().join(path.as_ref())).unwrap(),
+            RECLAIM_MARKER_BYTES
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_reclaim_marker_flush_keeps_collection_fenced_until_io_settles() {
+        use crate::metadata::{
+            DataPin, DataPinLease, MemoryPinStore, PinBindings, PinScope, PinStore,
+            flush_repository_leases,
+        };
+        use std::collections::BTreeSet;
+
+        struct ResumeOnDrop(Arc<MarkerPause>);
+        impl Drop for ResumeOnDrop {
+            fn drop(&mut self) {
+                self.0.release();
+            }
+        }
+
+        for (already_present, operation) in [
+            (false, 0),
+            (true, 0),
+            (false, 1),
+            (true, 1),
+            (false, 2),
+            (true, 2),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = Path::from("pack-index-reclaim-needed");
+            let mut durability = LocalDurability::new(
+                LocalFileSystem::new_with_prefix(directory.path()).unwrap(),
+                directory.path(),
+            )
+            .unwrap();
+            if already_present {
+                durability.ensure_reclaim_marker(&path).await.unwrap();
+            }
+            let ledger = Arc::new(MemoryPinStore::default());
+            let pin = DataPinLease::acquire(
+                ledger.clone(),
+                DataPin {
+                    scope: PinScope::Staging,
+                    catalog: None,
+                    resources: BTreeSet::new(),
+                },
+            )
+            .await
+            .unwrap();
+            let bindings = PinBindings::default();
+            bindings.attach(&pin);
+            durability = durability.with_pins(bindings);
+            let pause = Arc::new(MarkerPause::default());
+            let resume = ResumeOnDrop(pause.clone());
+            durability.marker_pause = Some(pause.clone());
+            let writing = durability.clone();
+            let location = path.clone();
+            let object = Path::from("catalog-object");
+            let object_location = object.clone();
+            let task = tokio::spawn(async move {
+                match operation {
+                    0 => writing.ensure_reclaim_marker(&location).await,
+                    1 => {
+                        writing
+                            .put_with_reclaim_marker(
+                                &location,
+                                &object_location,
+                                Bytes::from_static(b"catalog"),
+                            )
+                            .await
+                    }
+                    _ => {
+                        let mut source = tempfile::tempfile().unwrap();
+                        source.write_all(b"catalog").unwrap();
+                        std::io::Seek::seek(&mut source, std::io::SeekFrom::Start(0)).unwrap();
+                        writing
+                            .put_file_with_reclaim_marker(&location, &object_location, source)
+                            .await
+                    }
+                }
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(5), pause.entered.notified())
+                .await
+                .unwrap();
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+            drop(pin);
+            let collector = ledger.acquire_collection(None).await.unwrap().unwrap();
+            let inventory = ledger.inventory().await.unwrap();
+            assert_eq!(inventory.pins.len(), 1);
+            assert!(inventory.pins.values().next().unwrap().resources.contains(
+                &crate::metadata::PinResource::StorageObject(path.to_string())
+            ));
+            let mut protected = pin_path(&path);
+            if operation != 0 {
+                protected.extend(pin_path(&object));
+                assert!(!directory.path().join(object.as_ref()).exists());
+            }
+            assert_eq!(inventory.pins.values().next().unwrap().resources, protected);
+            assert!(
+                ledger
+                    .claim_deletions(inventory.revision, protected)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            drop(resume);
+            flush_repository_leases().await.unwrap();
+            // Released pins remain retired until this collector finishes.
+            ledger.finish_collection(&collector).await.unwrap();
+            let collector = ledger.acquire_collection(None).await.unwrap().unwrap();
+            let inventory = ledger.inventory().await.unwrap();
+            assert!(inventory.pins.is_empty());
+            assert_eq!(
+                std::fs::read(directory.path().join(path.as_ref())).unwrap(),
+                RECLAIM_MARKER_BYTES
+            );
+            if operation != 0 {
+                assert_eq!(
+                    std::fs::read(directory.path().join(object.as_ref())).unwrap(),
+                    b"catalog"
+                );
+            }
+            let claim = ledger
+                .claim_deletions(inventory.revision, pin_path(&path))
+                .await
+                .unwrap()
+                .unwrap();
+            durability.delete(&path).await.unwrap();
+            ledger.finish_deletions(&claim).await.unwrap();
+            ledger.finish_collection(&collector).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn combined_publication_preserves_marker_before_object_failure_ordering() {
+        let directory = tempfile::tempdir().unwrap();
+        let durability = LocalDurability::new(
+            LocalFileSystem::new_with_prefix(directory.path()).unwrap(),
+            directory.path(),
+        )
+        .unwrap();
+        let marker = Path::from("marker");
+        let object = Path::from("object");
+        std::fs::create_dir(directory.path().join("marker")).unwrap();
+        assert!(
+            durability
+                .put_with_reclaim_marker(&marker, &object, Bytes::from_static(b"catalog"))
+                .await
+                .is_err()
+        );
+        assert!(!directory.path().join("object").exists());
+        std::fs::remove_dir(directory.path().join("marker")).unwrap();
+        std::fs::create_dir(directory.path().join("object")).unwrap();
+        assert!(
+            durability
+                .put_with_reclaim_marker(&marker, &object, Bytes::from_static(b"catalog"))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            std::fs::read(directory.path().join("marker")).unwrap(),
+            RECLAIM_MARKER_BYTES
+        );
+        assert!(directory.path().join("object").is_dir());
+    }
 
     #[cfg(unix)]
     #[test]

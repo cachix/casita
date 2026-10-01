@@ -1,0 +1,122 @@
+{
+  "catalog_coadmission_bytes_nanos_per_publication": {
+    "pairs": [
+      {
+        "round": 0,
+        "A_nanos": 4872975,
+        "B_nanos": 3701258,
+        "reduction_percent": 24.045208522514482
+      },
+      {
+        "round": 1,
+        "A_nanos": 4760997,
+        "B_nanos": 3541937,
+        "reduction_percent": 25.605141108049427
+      },
+      {
+        "round": 2,
+        "A_nanos": 4906516,
+        "B_nanos": 3513146,
+        "reduction_percent": 28.3983584278539
+      },
+      {
+        "round": 3,
+        "A_nanos": 4956308,
+        "B_nanos": 3486431,
+        "reduction_percent": 29.656692037702257
+      },
+      {
+        "round": 4,
+        "A_nanos": 4949184,
+        "B_nanos": 3549507,
+        "reduction_percent": 28.280965104550567
+      },
+      {
+        "round": 5,
+        "A_nanos": 4967959,
+        "B_nanos": 3758026,
+        "reduction_percent": 24.35472998066208
+      },
+      {
+        "round": 6,
+        "A_nanos": 4962542,
+        "B_nanos": 3539192,
+        "reduction_percent": 28.68187312067082
+      },
+      {
+        "round": 7,
+        "A_nanos": 4870600,
+        "B_nanos": 3739697,
+        "reduction_percent": 23.218966862398883
+      }
+    ],
+    "median_paired_reduction_percent": 26.9430531063,
+    "bootstrap_95_percent": [
+      24.045208522514482,
+      28.68187312067082
+    ],
+    "candidate_faster": 8,
+    "A_median_nanos": 4927850.0,
+    "B_median_nanos": 3545722.0
+  },
+  "catalog_coadmission_file_nanos_per_publication": {
+    "pairs": [
+      {
+        "round": 0,
+        "A_nanos": 6224790,
+        "B_nanos": 4214469,
+        "reduction_percent": 32.295402736477854
+      },
+      {
+        "round": 1,
+        "A_nanos": 6298402,
+        "B_nanos": 4240589,
+        "reduction_percent": 32.67198568779827
+      },
+      {
+        "round": 2,
+        "A_nanos": 5940283,
+        "B_nanos": 4470925,
+        "reduction_percent": 24.735488191387514
+      },
+      {
+        "round": 3,
+        "A_nanos": 5857692,
+        "B_nanos": 4374828,
+        "reduction_percent": 25.314816825466412
+      },
+      {
+        "round": 4,
+        "A_nanos": 6003729,
+        "B_nanos": 4148648,
+        "reduction_percent": 30.898813054353386
+      },
+      {
+        "round": 5,
+        "A_nanos": 6010556,
+        "B_nanos": 5010108,
+        "reduction_percent": 16.644849494788836
+      },
+      {
+        "round": 6,
+        "A_nanos": 6144647,
+        "B_nanos": 4477455,
+        "reduction_percent": 27.132429251021254
+      },
+      {
+        "round": 7,
+        "A_nanos": 5732209,
+        "B_nanos": 4319693,
+        "reduction_percent": 24.641739336440803
+      }
+    ],
+    "median_paired_reduction_percent": 26.223623038243833,
+    "bootstrap_95_percent": [
+      24.641739336440803,
+      32.295402736477854
+    ],
+    "candidate_faster": 8,
+    "A_median_nanos": 6007142.5,
+    "B_median_nanos": 4347260.5
+  }
+}

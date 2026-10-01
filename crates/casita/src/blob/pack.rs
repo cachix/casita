@@ -3713,10 +3713,14 @@ impl PackedChunks {
         if let Some(local) = &self.local_durability {
             let mut source = prepared.file.as_file().try_clone()?;
             std::io::Seek::seek(&mut source, std::io::SeekFrom::Start(0))?;
-            local.put_file(&path, source).await?;
+            let marker = self.base.clone().join(INDEX_RECLAIM_MARKER_NAME);
+            local
+                .put_file_with_reclaim_marker(&marker, &path, source)
+                .await?;
             return Ok(reference);
         }
 
+        self.mark_catalog_reclaim_due().await?;
         let mut source = tokio::fs::File::from_std(prepared.file.as_file().try_clone()?);
         source.seek(std::io::SeekFrom::Start(0)).await?;
         if reference.encoded_bytes <= SINGLE_PUT_MAX_BYTES {
@@ -4564,13 +4568,7 @@ impl PackedChunks {
                     }
                 })?;
                 let digest = Digest::from(blake3::hash(&encoded));
-                self.mark_catalog_reclaim_due().await.map_err(|error| {
-                    object_store::Error::Generic {
-                        store: "pack index catalog",
-                        source: Box::new(error),
-                    }
-                })?;
-                self.put_catalog_object(digest, encoded.clone())
+                self.put_marked_catalog_object(digest, encoded.clone())
                     .await
                     .map_err(|error| object_store::Error::Generic {
                         store: "pack index catalog",
@@ -4685,6 +4683,23 @@ impl PackedChunks {
         })
     }
 
+    async fn put_marked_catalog_object(&self, digest: Digest, bytes: Bytes) -> io::Result<()> {
+        if let Some(local) = &self.local_durability {
+            self.read_counters
+                .index_put_requests
+                .fetch_add(1, Ordering::Relaxed);
+            self.read_counters
+                .index_put_bytes
+                .fetch_add(bytes.len() as u64, Ordering::Relaxed);
+            let marker = self.base.clone().join(INDEX_RECLAIM_MARKER_NAME);
+            let path = sharded_path(&self.base, INDEXES_KIND, &digest);
+            local.put_with_reclaim_marker(&marker, &path, bytes).await
+        } else {
+            self.mark_catalog_reclaim_due().await?;
+            self.put_catalog_object(digest, bytes).await
+        }
+    }
+
     async fn put_catalog_object(&self, digest: Digest, bytes: Bytes) -> io::Result<()> {
         self.read_counters
             .index_put_requests
@@ -4717,7 +4732,7 @@ impl PackedChunks {
         let marker = self.base.clone().join(INDEX_RECLAIM_MARKER_NAME);
         let bytes = Bytes::from_static(b"catalog garbage may be present\n");
         if let Some(local) = &self.local_durability {
-            local.put(&marker, bytes).await?;
+            local.ensure_reclaim_marker(&marker).await?;
         } else {
             self.object_store
                 .put(&marker, bytes.into())
@@ -5838,12 +5853,6 @@ impl PackedChunks {
                     store: "pack index catalog",
                     source: Box::new(error),
                 })?;
-            self.mark_catalog_reclaim_due().await.map_err(|error| {
-                object_store::Error::Generic {
-                    store: "pack index catalog",
-                    source: Box::new(error),
-                }
-            })?;
             let merged_reference =
                 self.put_prepared_catalog_run(prepared)
                     .await
@@ -7012,6 +7021,53 @@ mod tests {
         let reopened = PackedChunks::open(objects, base, u64::MAX).await.unwrap();
         assert_eq!(reopened.get(&a.digest).await.unwrap(), Some(a_bytes));
         assert_eq!(reopened.get(&b.digest).await.unwrap(), None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_reclaim_marker_reuses_then_recreates_after_another_handles_sweep() {
+        use std::os::unix::fs::MetadataExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let empty = PackedChunks::empty_state_catalog().unwrap();
+        let open = || async {
+            let filesystem =
+                object_store::local::LocalFileSystem::new_with_prefix(directory.path()).unwrap();
+            let durability = LocalDurability::new(filesystem.clone(), directory.path()).unwrap();
+            PackedChunks::open_with_initial_catalog(
+                Arc::new(filesystem),
+                Path::default(),
+                u64::MAX,
+                0,
+                Some(&empty),
+                Some(durability),
+            )
+            .await
+            .unwrap()
+        };
+        let writer = open().await;
+        let collector = open().await;
+        let path = directory.path().join(INDEX_RECLAIM_MARKER_NAME);
+        writer.mark_catalog_reclaim_due().await.unwrap();
+        let original = std::fs::File::open(&path).unwrap();
+        writer.mark_catalog_reclaim_due().await.unwrap();
+        assert_eq!(
+            original.metadata().unwrap().ino(),
+            std::fs::metadata(&path).unwrap().ino()
+        );
+        collector.reclaim_catalog_objects(&[]).await.unwrap();
+        assert!(!writer.catalog_reclaim_due().await.unwrap());
+        writer.mark_catalog_reclaim_due().await.unwrap();
+        assert_ne!(
+            original.metadata().unwrap().ino(),
+            std::fs::metadata(&path).unwrap().ino()
+        );
+        drop(writer);
+        open().await.mark_catalog_reclaim_due().await.unwrap();
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"catalog garbage may be present\n"
+        );
     }
 
     #[tokio::test]

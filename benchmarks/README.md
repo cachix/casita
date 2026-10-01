@@ -433,6 +433,49 @@ Additional coverage is available through:
 - `catalog-maintenance`, `catalog-durability`, `logical-state`: the previously
   unregistered native maintenance and logical-state probes.
 
+  `catalog-maintenance` also measures absent-marker creation and repeated durable
+  marking under fresh staging pins. It audits marker contents, protection and
+  release, another handle clearing/recreating the hint, and reopened visibility.
+  Unix runs count inode replacements while Linux/macOS runs verify one admission
+  operation and journal sync per new pin. Run `benchmark run catalog-maintenance
+  --iterations 32 --repetitions 3 --output /tmp/catalog-marker.json`; the smoke
+  case is included in `benchmark all`.
+
+  The same suite measures marker-plus-object publication with byte and file
+  sources. `CASITA_CATALOG_COADMISSION_BENCH_MODE=separate` selects the previous
+  two-admission sequence; `combined` (the default) admits both paths together.
+  Both modes verify exact contents and both protected identities, and require
+  respectively two or one journal operations per publication. Sync counts include
+  the extra sync for each journal checkpoint, reported separately. Compare both
+  16 and 32 iterations to exercise checkpoint boundaries in this fixture, using
+  the same release probe binary for an alternating paired comparison.
+
+  Paired runners and retained measurements are in
+  `casita-reclaim-marker-ab.py`, `casita-catalog-coadmission-ab.py`, and
+  `reports/2026-10-01-catalog-publication/`. For example, after building the
+  release library-test executable with `cargo test --release -p casita --lib
+  --no-run`, run:
+
+  ```sh
+  python3 benchmarks/casita-catalog-coadmission-ab.py \
+    --binary /path/to/casita-lib-test --iterations 16 --rounds 8 \
+    --base-revision 3e49e7316a681c791e4d6b230b29030002c8c85b \
+    --head-revision 3d1fe3c0bd2e673a7ee2eddaf3308fba28b04088 \
+    --output-dir /tmp/catalog-coadmission-16
+  ```
+
+  Repeat with `--iterations 32` and a fresh output directory. Both modes use
+  the same binary, retaining warmups, samples, binary hashes and sampled I/O
+  pressure. Revision arguments identify the previous and candidate production
+  semantics. The marker runner instead compares separately built binaries;
+  the retained baseline-probe patch supplies its common benchmark to the base
+  revision. Historical metadata names the exact binaries used for each dataset.
+
+  The retained Obrador fixture, source patch, build metadata and
+  `wide-casita-pr30-ab.py` reproduce the wider comparison. Wide runs had noisy
+  I/O and do not establish an end-to-end speedup. Focused publication timings
+  and complete graph timings must be reported separately.
+
 `edited-import` retains the copied-tree dedup workload. Use
 `edited-import-in-place` for ordinary edits: its sample-local source preserves
 all stat identities of unchanged regular files. `graph-traversal` accepts

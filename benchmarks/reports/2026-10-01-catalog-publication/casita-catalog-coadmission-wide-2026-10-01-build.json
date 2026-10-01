@@ -1,0 +1,28 @@
+{
+  "command": [
+    "cargo",
+    "build",
+    "--offline",
+    "--release",
+    "-p",
+    "obrador",
+    "--example",
+    "dynamic-cli",
+    "--features",
+    "benchmark-unsandboxed",
+    "--target-dir",
+    "/tmp/obrador-pr30-ab-20260930/target",
+    "--config",
+    "patch.\"https://github.com/cachix/casita.git\".casita.path=\"/tmp/casita-reclaim-marker-20261001/crates/casita\"",
+    "--config",
+    "patch.\"https://github.com/cachix/casita.git\".casita-fs.path=\"/tmp/casita-reclaim-marker-20261001/crates/casita-fs\""
+  ],
+  "compile_environment": {
+    "OBRADOR_SANDBOX_SHELL": "/nix/store/a48z5j76wm1n36yq87hsxh3byf2zq4h1-busybox-1.37.0/bin/busybox",
+    "OBRADOR_BWRAP": "/tmp/obrador-wide-trace-20260928/production-close/bin/obrador-bwrap"
+  },
+  "cargo_lock_sha256": "c060356558e2752036668390f10e9745ea69ddf4a2d3a47b0244dce709804e5a",
+  "source_diff_sha256": "379efa0f48fc2c91710b6e684a1b31a47e9d91339e73dc0a61d524126ff90767",
+  "candidate_sha256": "161107b56c35d9535807de5b0d916eeebd6e4e2044df202ab27373ba653c7ad1",
+  "baseline": "/tmp/obrador-reclaim-marker-20261001/candidate-cli"
+}

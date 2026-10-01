@@ -459,7 +459,7 @@ async fn benchmark_catalog_reclaim_marker_probe() {
     let iterations = std::env::var("CASITA_CATALOG_MARKER_BENCH_ITERATIONS")
         .ok()
         .map(|value| value.parse::<u64>().expect("invalid marker iterations"))
-        .unwrap_or(10_000);
+        .unwrap_or(100);
     assert!(iterations > 0);
     let directory = tempfile::tempdir().unwrap();
     let objects: Arc<dyn ObjectStore> =
@@ -492,6 +492,237 @@ async fn benchmark_catalog_reclaim_marker_probe() {
         "catalog_marker_present_nanos_per_probe {}",
         present_nanos / iterations
     );
+    benchmark_durable_marker_publication(iterations).await;
+}
+
+async fn benchmark_durable_marker_publication(iterations: u64) {
+    use crate::metadata::{
+        DataPin, DataPinLease, FilePinStore, PinBindings, PinScope, PinStore,
+        flush_repository_leases,
+    };
+
+    let directory = tempfile::tempdir().unwrap();
+    let filesystem =
+        object_store::local::LocalFileSystem::new_with_prefix(directory.path()).unwrap();
+    let objects: Arc<dyn ObjectStore> = Arc::new(filesystem.clone());
+    let bindings = PinBindings::default();
+    let durability = LocalDurability::new(filesystem.clone(), directory.path())
+        .unwrap()
+        .with_pins(bindings.clone());
+    let empty = PackedChunks::empty_state_catalog().unwrap();
+    let writer = PackedChunks::open_with_initial_catalog(
+        objects.clone(),
+        Path::default(),
+        u64::MAX,
+        0,
+        Some(&empty),
+        Some(durability.clone()),
+    )
+    .await
+    .unwrap();
+    let collector = PackedChunks::open_with_initial_catalog(
+        objects,
+        Path::default(),
+        u64::MAX,
+        0,
+        Some(&empty),
+        Some(LocalDurability::new(filesystem, directory.path()).unwrap()),
+    )
+    .await
+    .unwrap();
+    let path = directory.path().join(INDEX_RECLAIM_MARKER_NAME);
+    let mut create_nanos = 0_u128;
+    for _ in 0..iterations {
+        assert!(!writer.catalog_reclaim_due().await.unwrap());
+        let started = Instant::now();
+        writer.mark_catalog_reclaim_due().await.unwrap();
+        create_nanos += started.elapsed().as_nanos();
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"catalog garbage may be present\n"
+        );
+        collector.reclaim_catalog_objects(&[]).await.unwrap();
+        assert!(!writer.catalog_reclaim_due().await.unwrap());
+    }
+
+    writer.mark_catalog_reclaim_due().await.unwrap();
+    let ledger = Arc::new(FilePinStore::new(directory.path().join("pins")));
+    ledger.inventory().await.unwrap();
+    let mut existing_nanos = 0_u128;
+    #[cfg(unix)]
+    let mut replacements = 0_u64;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let (mut operations, mut journal_syncs, mut checkpoints) = (0_u64, 0_u64, 0_u64);
+    for _ in 0..iterations {
+        let pin = DataPinLease::acquire(
+            ledger.clone(),
+            DataPin {
+                scope: PinScope::Staging,
+                catalog: None,
+                resources: BTreeSet::new(),
+            },
+        )
+        .await
+        .unwrap();
+        bindings.attach(&pin);
+        #[cfg(unix)]
+        let original = std::fs::File::open(&path).unwrap();
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let before = ledger.test_stats();
+        let started = Instant::now();
+        writer.mark_catalog_reclaim_due().await.unwrap();
+        existing_nanos += started.elapsed().as_nanos();
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let after = ledger.test_stats();
+            operations += after["operations"] - before["operations"];
+            journal_syncs += after["journal_syncs"] - before["journal_syncs"];
+            checkpoints += after["checkpoints"] - before["checkpoints"];
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            replacements += u64::from(
+                original.metadata().unwrap().ino() != std::fs::metadata(&path).unwrap().ino(),
+            );
+        }
+        let inventory = ledger.inventory().await.unwrap();
+        assert!(inventory.pins[pin.token()].resources.contains(
+            &crate::metadata::PinResource::StorageObject(INDEX_RECLAIM_MARKER_NAME.into())
+        ));
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"catalog garbage may be present\n"
+        );
+        drop(pin);
+        flush_repository_leases().await.unwrap();
+        assert!(ledger.inventory().await.unwrap().pins.is_empty());
+    }
+    // Compare the previous ordered two-admission path with combined admission
+    // using the same release binary and durable physical pin store.
+    let combined = match std::env::var("CASITA_CATALOG_COADMISSION_BENCH_MODE").as_deref() {
+        Ok("separate") => false,
+        Ok("combined") | Err(_) => true,
+        Ok(other) => panic!("invalid coadmission mode: {other}"),
+    };
+    for file_source in [false, true] {
+        let mut nanos = 0_u128;
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let (mut operations, mut syncs, mut checkpoints) = (0_u64, 0_u64, 0_u64);
+        for i in 0..iterations {
+            let pin = DataPinLease::acquire(
+                ledger.clone(),
+                DataPin {
+                    scope: PinScope::Staging,
+                    catalog: None,
+                    resources: BTreeSet::new(),
+                },
+            )
+            .await
+            .unwrap();
+            bindings.attach(&pin);
+            let marker = Path::from(INDEX_RECLAIM_MARKER_NAME);
+            let object = Path::from(format!("coadmission/{file_source}/{i}"));
+            let bytes = Bytes::from(format!("catalog object {file_source} {i}"));
+            let mut source = tempfile::tempfile().unwrap();
+            std::io::Write::write_all(&mut source, &bytes).unwrap();
+            std::io::Seek::seek(&mut source, std::io::SeekFrom::Start(0)).unwrap();
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            let before = ledger.test_stats();
+            let started = Instant::now();
+            if combined {
+                if file_source {
+                    durability
+                        .put_file_with_reclaim_marker(&marker, &object, source)
+                        .await
+                        .unwrap();
+                } else {
+                    durability
+                        .put_with_reclaim_marker(&marker, &object, bytes.clone())
+                        .await
+                        .unwrap();
+                }
+            } else {
+                durability.ensure_reclaim_marker(&marker).await.unwrap();
+                if file_source {
+                    durability.put_file(&object, source).await.unwrap();
+                } else {
+                    durability.put(&object, bytes.clone()).await.unwrap();
+                }
+            }
+            nanos += started.elapsed().as_nanos();
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            {
+                let after = ledger.test_stats();
+                operations += after["operations"] - before["operations"];
+                syncs += after["journal_syncs"] - before["journal_syncs"];
+                checkpoints += after["checkpoints"] - before["checkpoints"];
+            }
+            let expected = BTreeSet::from([
+                crate::metadata::PinResource::StorageObject(marker.to_string()),
+                crate::metadata::PinResource::StorageObject(object.to_string()),
+            ]);
+            assert_eq!(
+                ledger.inventory().await.unwrap().pins[pin.token()].resources,
+                expected
+            );
+            assert_eq!(
+                std::fs::read(directory.path().join(object.as_ref())).unwrap(),
+                bytes
+            );
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                b"catalog garbage may be present\n"
+            );
+            drop(pin);
+            flush_repository_leases().await.unwrap();
+            assert!(ledger.inventory().await.unwrap().pins.is_empty());
+        }
+        let name = if file_source { "file" } else { "bytes" };
+        println!(
+            "catalog_coadmission_{name}_nanos_per_publication {}",
+            nanos / u128::from(iterations)
+        );
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let expected = iterations * if combined { 1 } else { 2 };
+            assert_eq!(operations, expected);
+            // A checkpoint replaces a one-sync frame with a two-sync durable exchange.
+            assert_eq!(syncs, expected + checkpoints);
+            println!("catalog_coadmission_{name}_pin_operations {operations}");
+            println!("catalog_coadmission_{name}_pin_journal_syncs {syncs}");
+            println!("catalog_coadmission_{name}_pin_journal_checkpoints {checkpoints}");
+        }
+    }
+    collector.reclaim_catalog_objects(&[]).await.unwrap();
+    assert!(!writer.catalog_reclaim_due().await.unwrap());
+    writer.mark_catalog_reclaim_due().await.unwrap();
+    assert!(writer.catalog_reclaim_due().await.unwrap());
+    let reopened = object_store::local::LocalFileSystem::new_with_prefix(directory.path()).unwrap();
+    assert!(
+        reopened
+            .head(&Path::from(INDEX_RECLAIM_MARKER_NAME))
+            .await
+            .is_ok()
+    );
+    println!(
+        "catalog_marker_create_nanos_per_publication {}",
+        create_nanos / u128::from(iterations)
+    );
+    println!(
+        "catalog_marker_existing_pinned_nanos_per_publication {}",
+        existing_nanos / u128::from(iterations)
+    );
+    #[cfg(unix)]
+    println!("catalog_marker_existing_inode_replacements {replacements}");
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        assert_eq!(operations, iterations);
+        assert_eq!(journal_syncs, iterations + checkpoints);
+        println!("catalog_marker_existing_pin_operations {operations}");
+        println!("catalog_marker_existing_pin_journal_syncs {journal_syncs}");
+        println!("catalog_marker_existing_pin_journal_checkpoints {checkpoints}");
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

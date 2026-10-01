@@ -1,0 +1,148 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 95f5f0cb..3154dd5e 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -880,7 +880,7 @@ dependencies = [
+ [[package]]
+ name = "casita"
+ version = "0.1.0"
+-source = "git+https://github.com/cachix/casita.git?rev=f7c342e40321c5153facb27aef0a227a816818ae#f7c342e40321c5153facb27aef0a227a816818ae"
++source = "git+https://github.com/cachix/casita.git?rev=0a21f330439d4785f1bcd3bb15dae920b0a31292#0a21f330439d4785f1bcd3bb15dae920b0a31292"
+ dependencies = [
+  "astral-tokio-tar",
+  "async-stream",
+@@ -919,7 +919,7 @@ dependencies = [
+ [[package]]
+ name = "casita-fs"
+ version = "0.1.0"
+-source = "git+https://github.com/cachix/casita.git?rev=f7c342e40321c5153facb27aef0a227a816818ae#f7c342e40321c5153facb27aef0a227a816818ae"
++source = "git+https://github.com/cachix/casita.git?rev=0a21f330439d4785f1bcd3bb15dae920b0a31292#0a21f330439d4785f1bcd3bb15dae920b0a31292"
+ dependencies = [
+  "anyhow",
+  "async-trait",
+@@ -2222,8 +2222,8 @@ checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
+ 
+ [[package]]
+ name = "fskit-native"
+-version = "0.0.0"
+-source = "git+https://github.com/cachix/casita.git?rev=f7c342e40321c5153facb27aef0a227a816818ae#f7c342e40321c5153facb27aef0a227a816818ae"
++version = "0.1.0"
++source = "git+https://github.com/cachix/casita.git?rev=0a21f330439d4785f1bcd3bb15dae920b0a31292#0a21f330439d4785f1bcd3bb15dae920b0a31292"
+ dependencies = [
+  "block2",
+  "libc",
+diff --git a/Cargo.toml b/Cargo.toml
+index 58b93a91..4cb85187 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -84,8 +84,8 @@ nix-archive = "0.6.0"
+ 
+ # Native repository and its portable content identities. All consumers use
+ # the same revision; native/experimental APIs are enabled by their owners.
+-casita = { git = "https://github.com/cachix/casita.git", rev = "f7c342e40321c5153facb27aef0a227a816818ae", default-features = false }
++casita = { git = "https://github.com/cachix/casita.git", rev = "0a21f330439d4785f1bcd3bb15dae920b0a31292", default-features = false }
+ # Backends are opted into per target; the Linux executor mounts through its
+ # own FUSE code, so the casita-fs Linux backend is not needed.
+-casita-fs = { git = "https://github.com/cachix/casita.git", rev = "f7c342e40321c5153facb27aef0a227a816818ae", default-features = false }
++casita-fs = { git = "https://github.com/cachix/casita.git", rev = "0a21f330439d4785f1bcd3bb15dae920b0a31292", default-features = false }
+ goblin = "0.10"
+diff --git a/README.md b/README.md
+index 732a9fad..99d6c34f 100644
+--- a/README.md
++++ b/README.md
+@@ -154,7 +154,7 @@ restricted-store implementation.
+ Nixpkgs-based example.
+ 
+ `casita` and `casita-fs` are pinned together to Casita revision
+-`4788d7e796bb489f4791747af785c972811b90e7`. Nix packaging uses the same extracted
++`0a21f330439d4785f1bcd3bb15dae920b0a31292`. Nix packaging uses the same extracted
+ tree as `casitaSource`; no sibling checkout is required for Cargo builds.
+ Casita directly selects the Turso revision containing its required WAL fixes;
+ Obrador does not need a Turso dependency override.
+diff --git a/benchmarks/analyze-prepared-execution.py b/benchmarks/analyze-prepared-execution.py
+index 2d4aeefc..7b414893 100644
+--- a/benchmarks/analyze-prepared-execution.py
++++ b/benchmarks/analyze-prepared-execution.py
+@@ -93,6 +93,16 @@ def main():
+         results[name] = summarize([(row[end] - row[start]) / 1e6 for row in workers])
+     if all('late_mountinfo_ns' in row for row in workers):
+         results['late_mountinfo'] = summarize([row['late_mountinfo_ns'] / 1e6 for row in workers])
++    if all('late_overlay_mount_syscall_ns' in row for row in workers):
++        for name in ('late_bind', 'late_overlay', 'late_other'):
++            counts = [row[f'{name}_count'] for row in workers]
++            results[f'{name}_operation_counts'] = {
++                'mean': statistics.mean(counts), 'min': min(counts), 'max': max(counts),
++            }
++            results[name] = summarize([row[f'{name}_ns'] / 1e6 for row in workers])
++        results['late_overlay_mount_syscall'] = summarize([
++            row['late_overlay_mount_syscall_ns'] / 1e6 for row in workers
++        ])
+     results['total_request_through_monitor'] = summarize([
+         (row['monitor_done'] - row['request_header']) / 1e6 for row in workers
+     ])
+diff --git a/benchmarks/profile-prepared-bubblewrap.py b/benchmarks/profile-prepared-bubblewrap.py
+index cf6cb5be..02f9c8a0 100644
+--- a/benchmarks/profile-prepared-bubblewrap.py
++++ b/benchmarks/profile-prepared-bubblewrap.py
+@@ -12,6 +12,9 @@ stages = [
+     'helper_profile_ready', 'input_namespace_entered', 'security_ready',
+     'namespace_clone_start', 'namespace_clone_parent', 'namespace_clone_child',
+     'namespace_child_released', 'base_setup_done',
++    'late_bind_ns', 'late_bind_count', 'late_overlay_ns',
++    'late_overlay_count', 'late_other_ns', 'late_other_count',
++    'late_overlay_mount_syscall_ns',
+ ]
+ header = r'''
+ #include <time.h>
+@@ -148,6 +151,38 @@ c = replace(c, '  /* Prepared workers must not inherit', '  ' + mark('child_star
+ c = replace(c, '  debug ("launch executable %s", argv[0]);', '  ' + mark('fds_closed') + '\n\n  debug ("launch executable %s", argv[0]);')
+ c = replace(c, '  /* Should be the last thing before execve()', '  ' + mark('seccomp_start') + '\n\n  /* Should be the last thing before execve()')
+ c = replace(c, '  if (execvp (exec_path, argv) == -1)', '  ' + mark('exec_ready') + '\n  if (obrador_profile_fd >= 0)\n    close (obrador_profile_fd);\n\n  if (execvp (exec_path, argv) == -1)')
++# Only late setup is counted: obrador_profile_now() returns zero until the
++# request-header mark. Capture the original type because overlay setup advances
++# op through its upper, work and lower source entries.
++c = replace(c, '  for (op = ops; op != NULL; op = op->next)\n    {\n      cleanup_fd int source_fd = -1;',
++            '  for (op = ops; op != NULL; op = op->next)\n    {\n      uint64_t obrador_op_start = obrador_profile_now ();\n      int obrador_op_type = op->type;\n      cleanup_fd int source_fd = -1;')
++bind_ns, bind_count, overlay_ns, overlay_count, other_ns, other_count = (
++    stages.index(name) for name in (
++        'late_bind_ns', 'late_bind_count', 'late_overlay_ns',
++        'late_overlay_count', 'late_other_ns', 'late_other_count',
++    )
++)
++c = replace(c, '\n    }\n}\n\n/* Do not leak file descriptors already used by setup_newroot () */',
++            f'''\n      if (obrador_op_start != 0)
++        {{
++          int ns, count;
++          if (obrador_op_type == SETUP_BIND_MOUNT || obrador_op_type == SETUP_RO_BIND_MOUNT || obrador_op_type == SETUP_DEV_BIND_MOUNT)
++            {{ ns = {bind_ns}; count = {bind_count}; }}
++          else if (obrador_op_type == SETUP_OVERLAY_MOUNT || obrador_op_type == SETUP_RO_OVERLAY_MOUNT || obrador_op_type == SETUP_TMP_OVERLAY_MOUNT)
++            {{ ns = {overlay_ns}; count = {overlay_count}; }}
++          else
++            {{ ns = {other_ns}; count = {other_count}; }}
++          obrador_profile_times[ns] += obrador_profile_now () - obrador_op_start;
++          obrador_profile_times[count]++;
++        }}
++    }}
++}}
++
++/* Do not leak file descriptors already used by setup_newroot () */''')
++c = replace(c, '            if (mount ("overlay", dest_path, "overlay", MS_MGC_VAL | MS_NOSUID | MS_NODEV, sb.str) != 0)',
++            '            uint64_t obrador_overlay_mount_start = obrador_profile_now ();\n            if (mount ("overlay", dest_path, "overlay", MS_MGC_VAL | MS_NOSUID | MS_NODEV, sb.str) != 0)')
++c = replace(c, '\n            free (sb.str);\n          }\n          break;\n\n        case SETUP_REMOUNT_RO_NO_RECURSIVE:',
++            f'\n            if (obrador_overlay_mount_start != 0)\n              obrador_profile_times[{stages.index("late_overlay_mount_syscall_ns")}] += obrador_profile_now () - obrador_overlay_mount_start;\n            free (sb.str);\n          }}\n          break;\n\n        case SETUP_REMOUNT_RO_NO_RECURSIVE:')
+ Path('bubblewrap.c').write_text(c)
+ p = Path('obrador-prepared.h'); h = p.read_text()
+ h = replace(h, '  obrador_read_exact (header, sizeof header);', '  obrador_read_exact (header, sizeof header);\n  ' + mark('request_header'))
+diff --git a/nix/prepared-bubblewrap.nix b/nix/prepared-bubblewrap.nix
+index 4ce58161..4aae7ce7 100644
+--- a/nix/prepared-bubblewrap.nix
++++ b/nix/prepared-bubblewrap.nix
+@@ -6,6 +6,8 @@
+   patches = (old.patches or [ ]) ++ [
+     ./prepared-bubblewrap.patch
+     ./input-mount.patch
++    # Release the monitor and namespace init's own log pipes at completion.
++    ./prepared-completion.patch
+   ];
+   postPatch = (old.postPatch or "") + ''
+     cp ${./prepared-bubblewrap.h} obrador-prepared.h
