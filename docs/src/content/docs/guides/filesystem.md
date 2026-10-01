@@ -70,6 +70,9 @@ catches case-folding, Unicode-normalization, and native-name conflicts on the
 actual target filesystem. Checkout uses handle-relative writes so a path
 component swapped for a symlink during materialization cannot redirect writes
 outside the destination. Stored symlinks are recreated rather than followed.
+Checkout does not flush the tree to stable storage; the
+[CLI Reference](../../reference/cli/#checkout) describes recovery after a power
+loss.
 
 Successful checkout creates an `auto/checkout/...` root by default. Use
 `--no-root` only when another root already retains the graph or the restored

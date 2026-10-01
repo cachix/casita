@@ -13,7 +13,7 @@ use object_store::path::Path;
 
 #[cfg(test)]
 thread_local! {
-    static SYNCED_DIRECTORIES: std::cell::RefCell<Option<Vec<PathBuf>>> = const { std::cell::RefCell::new(None) };
+    pub(crate) static SYNCED_DIRECTORIES: std::cell::RefCell<Option<Vec<PathBuf>>> = const { std::cell::RefCell::new(None) };
 }
 
 static TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -461,6 +461,15 @@ fn create_temporary(destination: &FsPath) -> io::Result<(PathBuf, File)> {
         io::ErrorKind::AlreadyExists,
         "could not allocate a durable object temporary file",
     ))
+}
+
+/// Flush `directory` so an entry just renamed or linked into it survives power
+/// loss. Like catalog publication's directory flushes, this is a no-op on
+/// non-Unix platforms.
+///
+/// Used by the `casita` CLI; not an application compatibility surface.
+pub fn sync_directory(directory: &FsPath) -> io::Result<()> {
+    sync_directory_chain(directory, directory)
 }
 
 #[cfg(unix)]

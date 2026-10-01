@@ -24,6 +24,9 @@ pub(crate) mod deletion_barrier;
 pub use deletion_barrier::CommitDurability;
 mod hashing_reader;
 mod local_durability;
+#[cfg(test)]
+pub(crate) use local_durability::SYNCED_DIRECTORIES;
+pub use local_durability::sync_directory;
 mod memory;
 mod pack;
 mod pack_options;

@@ -47,8 +47,9 @@ not prove namespace semantics or closure completeness.
 `Repository::export_casitar` accepts root names, exact object keys, or both.
 It verifies the selected closures under one retention hold, then writes their
 distinct payloads and records in canonical order. File export stages and syncs
-a sibling temporary file before atomic publication. The CLI creates a new file
-by default and requires `--force` to replace one.
+a sibling temporary file, publishes it atomically, then syncs its directory
+before reporting success. The CLI creates a new file by default and requires
+`--force` to replace one.
 
 ## Verification and retention
 

@@ -100,6 +100,14 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Changed
 
+- `casita archive create`, `experimental::Repository::export_casitar_file` and
+  `export_casitar_file_with_policy`, and `casita init` sync the directory that
+  receives their file before reporting success. They already synced the file,
+  but not its new directory entry, so a power loss could lose an exported
+  archive or a workspace marker (and with it access to the workspace's roots)
+  after the command had succeeded. Checkout and IPC restores do not flush what
+  they materialize, since the repository still holds it; the CLI and IPC
+  references now say so.
 - On macOS, repositories whose state is a `TursoMetadataStore`, including
   `Repository::local` and custom compositions, flush the drive cache
   (`F_FULLFSYNC`) before each deletion batch. Commits sync only to the drive's

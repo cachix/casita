@@ -7,6 +7,9 @@
 #![allow(unused_imports)]
 
 #[cfg(feature = "native")]
+#[doc(hidden)]
+pub use crate::blob::sync_directory;
+#[cfg(feature = "native")]
 pub use crate::blob::{
     BlobBatchGuard, BlobChunkSource, BlobGc, BlobIntegrityError, BlobReader, BlobRepairError,
     BlobStore, BlobStreamReader, BlobSync, BlobWriter, CatalogMaintenance, CatalogOutcome,

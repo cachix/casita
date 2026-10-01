@@ -268,6 +268,11 @@ Existing nonempty destinations are rejected. Restoration stages into a sibling
 on the same filesystem and publishes only the completed result; failures clean
 up staged output and leave existing destination contents untouched.
 
+Restored results are not flushed to stable storage: a power loss or
+operating-system crash soon after the response can leave the destination
+absent or incomplete, beside a leftover `.casita-restore-*` staging directory.
+The repository still holds the content, so remove both and restore again.
+
 ## Checkout
 
 `artifact.checkout` takes a directory `root` and destination `path`. It
@@ -280,7 +285,9 @@ an empty destination directory and returns `present: false`.
 ```
 
 The parent must exist. For a present root, the destination may be absent or
-an empty real directory. For a missing root, it must be absent.
+an empty real directory. For a missing root, it must be absent. As with
+[CLI checkout](../../reference/cli/#checkout), the materialized tree is not
+flushed to stable storage.
 
 ## Shutdown and cancellation
 

@@ -59,5 +59,31 @@ pub(crate) async fn run() -> ExitCode {
     }
 }
 
+/// Flush `directory` after publishing a file in it, so a power loss cannot
+/// drop the new name once the command has reported success.
+fn sync_directory(directory: &std::path::Path) -> std::io::Result<()> {
+    casita::experimental::sync_directory(directory)?;
+    #[cfg(test)]
+    SYNCED_DIRECTORIES
+        .lock()
+        .unwrap()
+        .push(directory.to_path_buf());
+    Ok(())
+}
+
+/// Every directory [`sync_directory`] has flushed in this test process.
+#[cfg(test)]
+static SYNCED_DIRECTORIES: std::sync::Mutex<Vec<std::path::PathBuf>> =
+    std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn was_synced(directory: &std::path::Path) -> bool {
+    SYNCED_DIRECTORIES
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|synced| synced == directory)
+}
+
 #[cfg(test)]
 mod tests;

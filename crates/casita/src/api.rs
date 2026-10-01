@@ -635,6 +635,10 @@ impl Repository {
     }
 
     /// Restore a filesystem graph into an empty or absent destination directory.
+    ///
+    /// The materialized tree is not flushed to stable storage. After a power
+    /// loss the destination may be absent or incomplete; remove it and check
+    /// out again.
     pub async fn checkout(&self, root: &ObjectKey, target: impl AsRef<Path>) -> Result<(), Error> {
         self.inner.checkout(root, target).await.app()
     }
