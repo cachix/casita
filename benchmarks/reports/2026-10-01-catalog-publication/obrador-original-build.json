@@ -1,0 +1,56 @@
+{
+  "obrador_revision": "a73d6bd98fc4c098be7e8a22866b21aea946f1fb",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+  "cargo_lock_sha256": "c060356558e2752036668390f10e9745ea69ddf4a2d3a47b0244dce709804e5a",
+  "source_diff_sha256": "379efa0f48fc2c91710b6e684a1b31a47e9d91339e73dc0a61d524126ff90767",
+  "base_revision": "b8366af1d3859b47db9cb45f910522b7c24ee35d",
+  "head_revision": "b7264f9025381764ff8f0b16fb11c5800c48416b",
+  "release": true,
+  "features": [
+    "benchmark-unsandboxed"
+  ],
+  "same_resolved_lockfile": true,
+  "compile_environment": {
+    "OBRADOR_SANDBOX_SHELL": "/nix/store/a48z5j76wm1n36yq87hsxh3byf2zq4h1-busybox-1.37.0/bin/busybox",
+    "OBRADOR_BWRAP": "/tmp/obrador-wide-trace-20260928/production-close/bin/obrador-bwrap"
+  },
+  "commands": {
+    "baseline": [
+      "cargo",
+      "build",
+      "--offline",
+      "--release",
+      "-p",
+      "obrador",
+      "--example",
+      "dynamic-cli",
+      "--features",
+      "benchmark-unsandboxed",
+      "--target-dir",
+      "/tmp/obrador-pr30-ab-20260930/target",
+      "--config",
+      "patch.\"https://github.com/cachix/casita.git\".casita.path=\"/tmp/casita-pr30-ab-base/crates/casita\"",
+      "--config",
+      "patch.\"https://github.com/cachix/casita.git\".casita-fs.path=\"/tmp/casita-pr30-ab-base/crates/casita-fs\""
+    ],
+    "candidate": [
+      "cargo",
+      "build",
+      "--offline",
+      "--release",
+      "-p",
+      "obrador",
+      "--example",
+      "dynamic-cli",
+      "--features",
+      "benchmark-unsandboxed",
+      "--target-dir",
+      "/tmp/obrador-pr30-ab-20260930/target",
+      "--config",
+      "patch.\"https://github.com/cachix/casita.git\".casita.path=\"/tmp/casita-initial-pin-20260930/crates/casita\"",
+      "--config",
+      "patch.\"https://github.com/cachix/casita.git\".casita-fs.path=\"/tmp/casita-initial-pin-20260930/crates/casita-fs\""
+    ]
+  }
+}

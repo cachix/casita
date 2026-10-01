@@ -450,6 +450,32 @@ Additional coverage is available through:
   16 and 32 iterations to exercise checkpoint boundaries in this fixture, using
   the same release probe binary for an alternating paired comparison.
 
+  Paired runners and retained measurements are in
+  `casita-reclaim-marker-ab.py`, `casita-catalog-coadmission-ab.py`, and
+  `reports/2026-10-01-catalog-publication/`. For example, after building the
+  release library-test executable with `cargo test --release -p casita --lib
+  --no-run`, run:
+
+  ```sh
+  python3 benchmarks/casita-catalog-coadmission-ab.py \
+    --binary /path/to/casita-lib-test --iterations 16 --rounds 8 \
+    --base-revision 3e49e7316a681c791e4d6b230b29030002c8c85b \
+    --head-revision 3d1fe3c0bd2e673a7ee2eddaf3308fba28b04088 \
+    --output-dir /tmp/catalog-coadmission-16
+  ```
+
+  Repeat with `--iterations 32` and a fresh output directory. Both modes use
+  the same binary, retaining warmups, samples, binary hashes and sampled I/O
+  pressure. Revision arguments identify the previous and candidate production
+  semantics. The marker runner instead compares separately built binaries;
+  the retained baseline-probe patch supplies its common benchmark to the base
+  revision. Historical metadata names the exact binaries used for each dataset.
+
+  The retained Obrador fixture, source patch, build metadata and
+  `wide-casita-pr30-ab.py` reproduce the wider comparison. Wide runs had noisy
+  I/O and do not establish an end-to-end speedup. Focused publication timings
+  and complete graph timings must be reported separately.
+
 `edited-import` retains the copied-tree dedup workload. Use
 `edited-import-in-place` for ordinary edits: its sample-local source preserves
 all stat identities of unchanged regular files. `graph-traversal` accepts

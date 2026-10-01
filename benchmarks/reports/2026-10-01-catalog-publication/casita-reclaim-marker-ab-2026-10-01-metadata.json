@@ -1,0 +1,90 @@
+{
+  "complete": true,
+  "iterations": 32,
+  "rounds": 8,
+  "base_revision": "0a54e5ae379313e0ab91a817a6e0e83a0c3503e6",
+  "head_revision": "3e49e7316a681c791e4d6b230b29030002c8c85b",
+  "binaries": {
+    "A": {
+      "path": "/tmp/casita-marker-binaries-20261001/baseline-test",
+      "sha256": "5c6f791edd32d54d4ea48b31f73e5564ae304e90134cae815bc63829043bfead"
+    },
+    "B": {
+      "path": "/tmp/casita-marker-binaries-20261001/candidate-test",
+      "sha256": "de432961138667c34e20a56262fd1ea0d8054912958be34a2e823a96e198d32c"
+    }
+  },
+  "runner_sha256": "e3763fe90ef0de26f7bd46cf22cd99048b30102cbf76567fe0ffac1a83252c11",
+  "warmups": [
+    {
+      "variant": "A",
+      "wall_s": 0.9710969990010199,
+      "metrics": {
+        "catalog_marker_iterations": 32,
+        "catalog_marker_absent_nanos_per_probe": 33652,
+        "catalog_marker_present_nanos_per_probe": 23746,
+        "catalog_marker_create_nanos_per_publication": 2250388,
+        "catalog_marker_existing_pinned_nanos_per_publication": 5143554,
+        "catalog_marker_existing_inode_replacements": 32,
+        "catalog_marker_existing_pin_operations": 32,
+        "catalog_marker_existing_pin_journal_syncs": 32
+      },
+      "activity_before": {
+        "loadavg": [
+          4.98486328125,
+          8.01025390625,
+          10.48046875
+        ],
+        "io_pressure": "some avg10=61.08 avg60=47.60 avg300=35.66 total=15403218392\nfull avg10=59.80 avg60=43.85 avg300=28.16 total=13794822971",
+        "cpu_pressure": "some avg10=0.00 avg60=1.47 avg300=4.75 total=726928527\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+      },
+      "activity_after": {
+        "loadavg": [
+          4.98486328125,
+          8.01025390625,
+          10.48046875
+        ],
+        "io_pressure": "some avg10=59.61 avg60=47.78 avg300=35.78 total=15403694596\nfull avg10=58.21 avg60=44.09 avg300=28.32 total=13795284271",
+        "cpu_pressure": "some avg10=0.00 avg60=1.43 avg300=4.72 total=726931035\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+      }
+    },
+    {
+      "variant": "B",
+      "wall_s": 0.40732051099985256,
+      "metrics": {
+        "catalog_marker_iterations": 32,
+        "catalog_marker_absent_nanos_per_probe": 27419,
+        "catalog_marker_present_nanos_per_probe": 23597,
+        "catalog_marker_create_nanos_per_publication": 2731247,
+        "catalog_marker_existing_pinned_nanos_per_publication": 1905587,
+        "catalog_marker_existing_inode_replacements": 0,
+        "catalog_marker_existing_pin_operations": 32,
+        "catalog_marker_existing_pin_journal_syncs": 32
+      },
+      "activity_before": {
+        "loadavg": [
+          4.98486328125,
+          8.01025390625,
+          10.48046875
+        ],
+        "io_pressure": "some avg10=59.61 avg60=47.78 avg300=35.78 total=15403694596\nfull avg10=58.21 avg60=44.09 avg300=28.32 total=13795284271",
+        "cpu_pressure": "some avg10=0.00 avg60=1.43 avg300=4.72 total=726931035\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+      },
+      "activity_after": {
+        "loadavg": [
+          4.82568359375,
+          7.9267578125,
+          10.43994140625
+        ],
+        "io_pressure": "some avg10=59.61 avg60=47.78 avg300=35.78 total=15403894579\nfull avg10=58.21 avg60=44.09 avg300=28.32 total=13795471992",
+        "cpu_pressure": "some avg10=0.00 avg60=1.43 avg300=4.72 total=726933250\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+      }
+    }
+  ],
+  "event_logging": false,
+  "test": "blob::pack::benchmarks::benchmark_catalog_reclaim_marker_probe",
+  "bootstrap": {
+    "resamples": 20000,
+    "seed": 20261001
+  }
+}

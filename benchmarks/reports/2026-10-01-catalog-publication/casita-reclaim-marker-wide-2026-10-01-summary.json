@@ -1,0 +1,197 @@
+{
+  "metadata": {
+    "complete": true,
+    "nodes": 16,
+    "builds": 32,
+    "jobs": 4,
+    "runtime_threads": 4,
+    "rounds": 4,
+    "base_revision": "0a54e5ae379313e0ab91a817a6e0e83a0c3503e6",
+    "head_revision": "3e49e7316a681c791e4d6b230b29030002c8c85b",
+    "binaries": {
+      "A": {
+        "path": "/tmp/obrador-pr30-ab-20260930/candidate-cli",
+        "sha256": "ed92f024623780d8b2ca6f35cf9992a102fc1f7a47ccd12108b1ddc34f14eec9"
+      },
+      "B": {
+        "path": "/tmp/obrador-reclaim-marker-20261001/candidate-cli",
+        "sha256": "b5316cee09066b23cd672826fe084bbb8b85ce7c579827aa905631a4b699bb21"
+      }
+    },
+    "helper": {
+      "path": "/tmp/obrador-wide-trace-20260928/production-close/bin/obrador-bwrap",
+      "resolved_path": "/nix/store/z3jvym51dmpznrx9k6y241fc8gsklzdj-obrador-prepared-bubblewrap-0.12.0-unstable-2026-08-27/bin/obrador-bwrap",
+      "sha256": "16bac6046291c38b6879662c092851dfd363a1976550ae9ce5d53921455e1625"
+    },
+    "shell": {
+      "path": "/nix/store/a48z5j76wm1n36yq87hsxh3byf2zq4h1-busybox-1.37.0/bin/busybox",
+      "sha256": "32d4b330ccb0417d7eb4e8427e4537d1b02094c5f0a920336cff0c34014ccde7"
+    },
+    "warmup": [
+      {
+        "variant": "A",
+        "sandbox": "on",
+        "nodes": 16,
+        "builds": 32,
+        "reopen_builds": 0,
+        "wall_ms": 5334.451221999188,
+        "graph_ms": 4942.3522,
+        "inside_process_ms": 5329.304257000001,
+        "outputs": [
+          "/nix/store/70pykca1s1cfzhkgdsna5asadv9lbmrm-generator-0",
+          "/nix/store/q2pp8s87il5f1wrbsqrm883xljrh98sx-generator-1",
+          "/nix/store/mm01npy577c8bima3vq6270g6kp1ah9y-generator-2",
+          "/nix/store/hp2zd0wf3k78ak74f9f7mcrsvx5cyw5a-generator-3",
+          "/nix/store/qlyjfinf4zk0jcinvsk83h0amn9y67ba-generator-4",
+          "/nix/store/fj9jlsbq4ng3vv0ph73msan0sjspif6f-generator-5",
+          "/nix/store/sip1m4lqgdjwmj05l82wsyhax94r1l47-generator-6",
+          "/nix/store/vjam3gqb0a420x5x37n8m5lw9frxvnhc-generator-7",
+          "/nix/store/xl6ir46k487va738bwx7wqm2jjyahgkl-generator-8",
+          "/nix/store/046mr5c0h9kqykf19biwcxvslflpib2r-generator-9",
+          "/nix/store/xc9vi8j9j8pv0cb7pyjbacpaphi3nvcv-generator-10",
+          "/nix/store/m8m9967ani8y5gijin3mmvvb3pwkzpz4-generator-11",
+          "/nix/store/vjxrlhqn1ld5gx9qz1glqq4icfz7ws0g-generator-12",
+          "/nix/store/0jicc4azhzlia28b3scbh0843j3vzynh-generator-13",
+          "/nix/store/bhyrnhkn6nll470skrqknddqnrpksr45-generator-14",
+          "/nix/store/ng9dvwf11z5mik0gcvf5lfy0lqxdvhmh-generator-15"
+        ],
+        "activity_before": {
+          "loadavg": [
+            2.8935546875,
+            6.9853515625,
+            10.00146484375
+          ],
+          "cpu_pressure": "some avg10=0.00 avg60=0.66 avg300=4.03 total=727006775\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+          "io_pressure": "some avg10=62.14 avg60=54.67 avg300=39.35 total=15432323851\nfull avg10=61.35 avg60=52.49 avg300=32.85 total=13823433830"
+        },
+        "activity_after": {
+          "loadavg": [
+            2.68212890625,
+            6.80419921875,
+            9.90966796875
+          ],
+          "cpu_pressure": "some avg10=0.00 avg60=0.55 avg300=3.89 total=727053874\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+          "io_pressure": "some avg10=52.08 avg60=53.50 avg300=39.62 total=15436419083\nfull avg10=49.56 avg60=51.13 avg300=33.21 total=13827210232"
+        }
+      },
+      {
+        "variant": "B",
+        "sandbox": "on",
+        "nodes": 16,
+        "builds": 32,
+        "reopen_builds": 0,
+        "wall_ms": 5018.361809001362,
+        "graph_ms": 4613.13005,
+        "inside_process_ms": 5012.482278,
+        "outputs": [
+          "/nix/store/70pykca1s1cfzhkgdsna5asadv9lbmrm-generator-0",
+          "/nix/store/q2pp8s87il5f1wrbsqrm883xljrh98sx-generator-1",
+          "/nix/store/mm01npy577c8bima3vq6270g6kp1ah9y-generator-2",
+          "/nix/store/hp2zd0wf3k78ak74f9f7mcrsvx5cyw5a-generator-3",
+          "/nix/store/qlyjfinf4zk0jcinvsk83h0amn9y67ba-generator-4",
+          "/nix/store/fj9jlsbq4ng3vv0ph73msan0sjspif6f-generator-5",
+          "/nix/store/sip1m4lqgdjwmj05l82wsyhax94r1l47-generator-6",
+          "/nix/store/vjam3gqb0a420x5x37n8m5lw9frxvnhc-generator-7",
+          "/nix/store/xl6ir46k487va738bwx7wqm2jjyahgkl-generator-8",
+          "/nix/store/046mr5c0h9kqykf19biwcxvslflpib2r-generator-9",
+          "/nix/store/xc9vi8j9j8pv0cb7pyjbacpaphi3nvcv-generator-10",
+          "/nix/store/m8m9967ani8y5gijin3mmvvb3pwkzpz4-generator-11",
+          "/nix/store/vjxrlhqn1ld5gx9qz1glqq4icfz7ws0g-generator-12",
+          "/nix/store/0jicc4azhzlia28b3scbh0843j3vzynh-generator-13",
+          "/nix/store/bhyrnhkn6nll470skrqknddqnrpksr45-generator-14",
+          "/nix/store/ng9dvwf11z5mik0gcvf5lfy0lqxdvhmh-generator-15"
+        ],
+        "activity_before": {
+          "loadavg": [
+            2.68212890625,
+            6.80419921875,
+            9.90966796875
+          ],
+          "cpu_pressure": "some avg10=0.00 avg60=0.55 avg300=3.89 total=727053966\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+          "io_pressure": "some avg10=52.08 avg60=53.50 avg300=39.62 total=15436429450\nfull avg10=49.56 avg60=51.13 avg300=33.21 total=13827220325"
+        },
+        "activity_after": {
+          "loadavg": [
+            2.9482421875,
+            6.79052734375,
+            9.88818359375
+          ],
+          "cpu_pressure": "some avg10=0.00 avg60=0.48 avg300=3.78 total=727101275\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+          "io_pressure": "some avg10=46.00 avg60=52.02 avg300=39.67 total=15439892471\nfull avg10=42.53 avg60=49.44 avg300=33.34 total=13830330325"
+        }
+      }
+    ],
+    "event_logging": false,
+    "tracing": "filtered build and prepared-dispatch span counter only"
+  },
+  "samples_sha256": "653ebe852fe74402f8a6a03a4be094d03523c48cf2f17e217310d92ea1aadeeb",
+  "modes": {
+    "on": {
+      "pairs": [
+        {
+          "round": 0,
+          "A_wall_ms": 7599.208253999677,
+          "B_wall_ms": 8350.902624999435,
+          "A_graph_ms": 6992.406682000001,
+          "B_graph_ms": 7720.984317,
+          "wall_reduction_percent": -9.891745901345969,
+          "graph_reduction_percent": -10.419554641687524
+        },
+        {
+          "round": 1,
+          "A_wall_ms": 8014.161095001327,
+          "B_wall_ms": 7689.29663399831,
+          "A_graph_ms": 7367.988746,
+          "B_graph_ms": 7094.887107,
+          "wall_reduction_percent": 4.053630282097082,
+          "graph_reduction_percent": 3.70659685315432
+        },
+        {
+          "round": 2,
+          "A_wall_ms": 7731.694728998264,
+          "B_wall_ms": 8045.5885130031675,
+          "A_graph_ms": 7121.8824429999995,
+          "B_graph_ms": 7419.624212000001,
+          "wall_reduction_percent": -4.059831576479905,
+          "graph_reduction_percent": -4.180661101653643
+        },
+        {
+          "round": 3,
+          "A_wall_ms": 9249.94354500086,
+          "B_wall_ms": 7446.51235299898,
+          "A_graph_ms": 8609.602311,
+          "B_graph_ms": 6782.1424099999995,
+          "wall_reduction_percent": 19.49667241997976,
+          "graph_reduction_percent": 21.225834074416646
+        }
+      ],
+      "timed_builds": 256,
+      "wall": {
+        "median_paired_reduction_percent": -0.003100647191411454,
+        "bootstrap_95_percent": [
+          -9.891745901345969,
+          19.49667241997976
+        ],
+        "candidate_faster": 2,
+        "A_median_ms": 7872.9279119997955,
+        "B_median_ms": 7867.442573500739
+      },
+      "graph": {
+        "median_paired_reduction_percent": -0.23703212424966136,
+        "bootstrap_95_percent": [
+          -10.419554641687524,
+          21.225834074416646
+        ],
+        "candidate_faster": 2,
+        "A_median_ms": 7244.9355945,
+        "B_median_ms": 7257.255659500001
+      }
+    }
+  },
+  "bootstrap": {
+    "resamples": 20000,
+    "seed": 20260930,
+    "method": "paired percentile, interpolated quantiles"
+  },
+  "all_stderr_empty": true
+}

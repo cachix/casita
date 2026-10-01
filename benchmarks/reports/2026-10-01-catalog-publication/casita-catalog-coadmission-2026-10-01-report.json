@@ -1,0 +1,413 @@
+{
+  "date": "2026-10-01",
+  "branch": "perf/catalog-marker-coadmission",
+  "base_revision": "3e49e7316a681c791e4d6b230b29030002c8c85b",
+  "head_revision": "3d1fe3c0bd2e673a7ee2eddaf3308fba28b04088",
+  "local_worktree": "/tmp/casita-reclaim-marker-20261001",
+  "published": false,
+  "implementation": {
+    "change": "Admit reclaim marker and catalog-object paths in one physical pin operation, then flush the marker before publishing the object.",
+    "production_call_sites": [
+      "PackedChunks::put_marked_catalog_object for background catalog runs",
+      "PackedChunks::put_prepared_catalog_run for merged file-backed runs"
+    ],
+    "cancellation": "An owned WritePins scope retains both protections until both ordered blocking operations settle, even after caller cancellation.",
+    "remote": "Retains marker-before-object ordering and the existing object-store publication path.",
+    "durability": "No file or directory durability barriers were removed.",
+    "scope": "This reduces admissions for the paired call sites; it does not halve all repository pin operations."
+  },
+  "tests": {
+    "passed_distinct_relevant_rust_tests": 16,
+    "local_durability": 13,
+    "marker_recovery_and_packed_integration": "6 passes, including 4 overlapping LocalDurability tests",
+    "remote_multipart": 1,
+    "new_coverage": [
+      "cancelled combined byte/file writes, with both absent and existing markers, preserve both protections against collection",
+      "marker failure prevents object publication; object failure retains the durable marker"
+    ],
+    "crash_coverage": "Existing four marker process-death checkpoints passed. This is not a power-loss test.",
+    "clippy": "all features, all targets, -D warnings passed",
+    "python_harness_tests": 10,
+    "registered_smoke_suite": "catalog-maintenance passed with final release binary"
+  },
+  "focused_method": {
+    "profile": "release",
+    "binary": "/tmp/casita-coadmission-binaries-20261001/casita-lib-test",
+    "comparison": "Same candidate release binary, A selects the previous separate-admission operations, B selects combined admission. base_revision labels the previous production semantics, not a separate native baseline binary.",
+    "env": "CASITA_CATALOG_COADMISSION_BENCH_MODE=separate or combined",
+    "pairs_per_size": 8,
+    "iterations_per_trial": [
+      16,
+      32
+    ],
+    "order": "alternating AB/BA",
+    "warmups": "one per mode per size, excluded",
+    "measured_marker_plus_object_publications": 1536,
+    "excluded_from_publication_timer": [
+      "fixture setup",
+      "source-file preparation",
+      "staging lease acquisition",
+      "inventory checks and pin release"
+    ],
+    "included_in_publication_timer": [
+      "pin protection and journal durability",
+      "marker file/directory durability",
+      "object publication durability"
+    ],
+    "native_cargo_lock_sha256": "9478f7252361de78d1f40e2a825b3a47a6e9025921ad79c590acc7c0fd1475f9",
+    "checkpoint_accounting": "Each journal checkpoint replaces a one-sync journal frame with a two-sync durable exchange. Total syncs must equal admission operations plus observed checkpoints.",
+    "initial_failed_warmup": "Before any timed samples, the old exact-sync gate rejected a 32-iteration separate-file warmup because a checkpoint added one sync. The permanent benchmark was corrected to count checkpoints; both 16 and 32 iteration complete datasets are retained."
+  },
+  "focused_results": {
+    "16": {
+      "catalog_coadmission_bytes_nanos_per_publication": {
+        "pairs": [
+          {
+            "round": 0,
+            "A_nanos": 4872975,
+            "B_nanos": 3701258,
+            "reduction_percent": 24.045208522514482
+          },
+          {
+            "round": 1,
+            "A_nanos": 4760997,
+            "B_nanos": 3541937,
+            "reduction_percent": 25.605141108049427
+          },
+          {
+            "round": 2,
+            "A_nanos": 4906516,
+            "B_nanos": 3513146,
+            "reduction_percent": 28.3983584278539
+          },
+          {
+            "round": 3,
+            "A_nanos": 4956308,
+            "B_nanos": 3486431,
+            "reduction_percent": 29.656692037702257
+          },
+          {
+            "round": 4,
+            "A_nanos": 4949184,
+            "B_nanos": 3549507,
+            "reduction_percent": 28.280965104550567
+          },
+          {
+            "round": 5,
+            "A_nanos": 4967959,
+            "B_nanos": 3758026,
+            "reduction_percent": 24.35472998066208
+          },
+          {
+            "round": 6,
+            "A_nanos": 4962542,
+            "B_nanos": 3539192,
+            "reduction_percent": 28.68187312067082
+          },
+          {
+            "round": 7,
+            "A_nanos": 4870600,
+            "B_nanos": 3739697,
+            "reduction_percent": 23.218966862398883
+          }
+        ],
+        "median_paired_reduction_percent": 26.9430531063,
+        "bootstrap_95_percent": [
+          24.045208522514482,
+          28.68187312067082
+        ],
+        "candidate_faster": 8,
+        "A_median_nanos": 4927850.0,
+        "B_median_nanos": 3545722.0
+      },
+      "catalog_coadmission_file_nanos_per_publication": {
+        "pairs": [
+          {
+            "round": 0,
+            "A_nanos": 6224790,
+            "B_nanos": 4214469,
+            "reduction_percent": 32.295402736477854
+          },
+          {
+            "round": 1,
+            "A_nanos": 6298402,
+            "B_nanos": 4240589,
+            "reduction_percent": 32.67198568779827
+          },
+          {
+            "round": 2,
+            "A_nanos": 5940283,
+            "B_nanos": 4470925,
+            "reduction_percent": 24.735488191387514
+          },
+          {
+            "round": 3,
+            "A_nanos": 5857692,
+            "B_nanos": 4374828,
+            "reduction_percent": 25.314816825466412
+          },
+          {
+            "round": 4,
+            "A_nanos": 6003729,
+            "B_nanos": 4148648,
+            "reduction_percent": 30.898813054353386
+          },
+          {
+            "round": 5,
+            "A_nanos": 6010556,
+            "B_nanos": 5010108,
+            "reduction_percent": 16.644849494788836
+          },
+          {
+            "round": 6,
+            "A_nanos": 6144647,
+            "B_nanos": 4477455,
+            "reduction_percent": 27.132429251021254
+          },
+          {
+            "round": 7,
+            "A_nanos": 5732209,
+            "B_nanos": 4319693,
+            "reduction_percent": 24.641739336440803
+          }
+        ],
+        "median_paired_reduction_percent": 26.223623038243833,
+        "bootstrap_95_percent": [
+          24.641739336440803,
+          32.295402736477854
+        ],
+        "candidate_faster": 8,
+        "A_median_nanos": 6007142.5,
+        "B_median_nanos": 4347260.5
+      }
+    },
+    "32": {
+      "catalog_coadmission_bytes_nanos_per_publication": {
+        "pairs": [
+          {
+            "round": 0,
+            "A_nanos": 8039318,
+            "B_nanos": 5711728,
+            "reduction_percent": 28.952580305941375
+          },
+          {
+            "round": 1,
+            "A_nanos": 7789280,
+            "B_nanos": 5246863,
+            "reduction_percent": 32.63994875007703
+          },
+          {
+            "round": 2,
+            "A_nanos": 8145544,
+            "B_nanos": 5643866,
+            "reduction_percent": 30.712227446073584
+          },
+          {
+            "round": 3,
+            "A_nanos": 8040208,
+            "B_nanos": 5382957,
+            "reduction_percent": 33.04953055940841
+          },
+          {
+            "round": 4,
+            "A_nanos": 5899618,
+            "B_nanos": 4159370,
+            "reduction_percent": 29.497638660672607
+          },
+          {
+            "round": 5,
+            "A_nanos": 5536898,
+            "B_nanos": 4441577,
+            "reduction_percent": 19.78221379552233
+          },
+          {
+            "round": 6,
+            "A_nanos": 5753209,
+            "B_nanos": 4031550,
+            "reduction_percent": 29.92519479128952
+          },
+          {
+            "round": 7,
+            "A_nanos": 5777400,
+            "B_nanos": 4144900,
+            "reduction_percent": 28.2566552428428
+          }
+        ],
+        "median_paired_reduction_percent": 29.711416725981064,
+        "bootstrap_95_percent": [
+          28.2566552428428,
+          32.63994875007703
+        ],
+        "candidate_faster": 8,
+        "A_median_nanos": 6844449.0,
+        "B_median_nanos": 4844220.0
+      },
+      "catalog_coadmission_file_nanos_per_publication": {
+        "pairs": [
+          {
+            "round": 0,
+            "A_nanos": 9812995,
+            "B_nanos": 5680264,
+            "reduction_percent": 42.114879300356314
+          },
+          {
+            "round": 1,
+            "A_nanos": 9949423,
+            "B_nanos": 5825300,
+            "reduction_percent": 41.450876096030896
+          },
+          {
+            "round": 2,
+            "A_nanos": 9760383,
+            "B_nanos": 5714993,
+            "reduction_percent": 41.44704157613487
+          },
+          {
+            "round": 3,
+            "A_nanos": 7675076,
+            "B_nanos": 5624684,
+            "reduction_percent": 26.714940672900177
+          },
+          {
+            "round": 4,
+            "A_nanos": 7904856,
+            "B_nanos": 4504763,
+            "reduction_percent": 43.012712692046506
+          },
+          {
+            "round": 5,
+            "A_nanos": 8150775,
+            "B_nanos": 4437273,
+            "reduction_percent": 45.560109314758414
+          },
+          {
+            "round": 6,
+            "A_nanos": 7502435,
+            "B_nanos": 4249419,
+            "reduction_percent": 43.359469292303096
+          },
+          {
+            "round": 7,
+            "A_nanos": 7580612,
+            "B_nanos": 4257807,
+            "reduction_percent": 43.83293855430142
+          }
+        ],
+        "median_paired_reduction_percent": 42.56379599620141,
+        "bootstrap_95_percent": [
+          41.44704157613487,
+          43.83293855430142
+        ],
+        "candidate_faster": 8,
+        "A_median_nanos": 8027815.5,
+        "B_median_nanos": 5064723.5
+      }
+    }
+  },
+  "wide_results": {
+    "pairs": [
+      {
+        "round": 0,
+        "A_wall_ms": 4753.302774000076,
+        "B_wall_ms": 4468.519727000057,
+        "A_graph_ms": 4475.144053,
+        "B_graph_ms": 4186.827603000001,
+        "wall_reduction_percent": 5.991266715803247,
+        "graph_reduction_percent": 6.442618306481571
+      },
+      {
+        "round": 1,
+        "A_wall_ms": 10883.283019999908,
+        "B_wall_ms": 10984.327000999656,
+        "A_graph_ms": 10260.56082,
+        "B_graph_ms": 10341.238893,
+        "wall_reduction_percent": -0.928432907736224,
+        "graph_reduction_percent": -0.7862930147321043
+      },
+      {
+        "round": 2,
+        "A_wall_ms": 10614.984785999695,
+        "B_wall_ms": 9122.25279500035,
+        "A_graph_ms": 9932.437951,
+        "B_graph_ms": 8497.147942,
+        "wall_reduction_percent": 14.062497696352219,
+        "graph_reduction_percent": 14.450530837250236
+      },
+      {
+        "round": 3,
+        "A_wall_ms": 8032.873667000331,
+        "B_wall_ms": 7744.124442000157,
+        "A_graph_ms": 7581.911121,
+        "B_graph_ms": 7295.864156000001,
+        "wall_reduction_percent": 3.5945943751907667,
+        "graph_reduction_percent": 3.77275544958211
+      }
+    ],
+    "timed_builds": 256,
+    "wall": {
+      "median_paired_reduction_percent": 4.792930545497007,
+      "bootstrap_95_percent": [
+        -0.928432907736224,
+        14.062497696352219
+      ],
+      "candidate_faster": 3,
+      "A_median_ms": 9323.929226500013,
+      "B_median_ms": 8433.188618500253
+    },
+    "graph": {
+      "median_paired_reduction_percent": 5.10768687803184,
+      "bootstrap_95_percent": [
+        -0.7862930147321043,
+        14.450530837250236
+      ],
+      "candidate_faster": 3,
+      "A_median_ms": 8757.174536,
+      "B_median_ms": 7896.506049
+    }
+  },
+  "limitations": [
+    "Wide-graph bootstrap interval includes zero; no established general end-to-end speedup.",
+    "Substantial background I/O, including previously observed Agentaps configuration rewrites. Per-trial pressure snapshots retained.",
+    "32-iteration separate-file publication crosses one journal checkpoint; its larger measured gain includes threshold effects.",
+    "No own compiler was running during timed datasets.",
+    "All measured trials retained; no outlier removal."
+  ],
+  "reproduce": {
+    "focused_16": "python3 benchmarks/casita-catalog-coadmission-ab.py --binary /tmp/casita-coadmission-binaries-20261001/casita-lib-test --iterations 16 --rounds 8 --base-revision 3e49e7316a681c791e4d6b230b29030002c8c85b --head-revision 3d1fe3c0bd2e673a7ee2eddaf3308fba28b04088 --output-dir /tmp/new-coadmission-16",
+    "focused_32": "python3 benchmarks/casita-catalog-coadmission-ab.py --binary /tmp/casita-coadmission-binaries-20261001/casita-lib-test --iterations 32 --rounds 8 --base-revision 3e49e7316a681c791e4d6b230b29030002c8c85b --head-revision 3d1fe3c0bd2e673a7ee2eddaf3308fba28b04088 --output-dir /tmp/new-coadmission-32",
+    "wide": "python3 benchmarks/wide-casita-pr30-ab.py --baseline /tmp/obrador-reclaim-marker-20261001/candidate-cli --candidate /tmp/obrador-coadmission-20261001/candidate-cli --helper /tmp/obrador-wide-trace-20260928/production-close/bin/obrador-bwrap --shell /nix/store/a48z5j76wm1n36yq87hsxh3byf2zq4h1-busybox-1.37.0/bin/busybox --nodes 16 --rounds 4 --sandbox on --base-revision 3e49e7316a681c791e4d6b230b29030002c8c85b --head-revision 3d1fe3c0bd2e673a7ee2eddaf3308fba28b04088 --output-dir /tmp/new-coadmission-wide"
+  },
+  "next": {
+    "preferred": "Prepare a separate Casita PR covering marker reuse and combined admission with their correctness tests and scoped benchmark claims.",
+    "alternative": "Investigate Agentaps repeated config saves and repeat larger wide graphs with less background I/O."
+  },
+  "artifacts": [
+    "casita-catalog-coadmission-16-2026-10-01-metadata.json",
+    "casita-catalog-coadmission-16-2026-10-01-summary.json",
+    "casita-catalog-coadmission-16-2026-10-01.jsonl",
+    "casita-catalog-coadmission-2026-10-01-raw.tar.gz",
+    "casita-catalog-coadmission-2026-10-01-report.json",
+    "casita-catalog-coadmission-32-2026-10-01-metadata.json",
+    "casita-catalog-coadmission-32-2026-10-01-summary.json",
+    "casita-catalog-coadmission-32-2026-10-01.jsonl",
+    "casita-catalog-coadmission-wide-2026-10-01-build.json",
+    "casita-catalog-coadmission-wide-2026-10-01-metadata.json",
+    "casita-catalog-coadmission-wide-2026-10-01-raw.tar.gz",
+    "casita-catalog-coadmission-wide-2026-10-01-summary.json",
+    "casita-catalog-coadmission-wide-2026-10-01.jsonl",
+    "casita-reclaim-marker-ab-2026-10-01-metadata.json",
+    "casita-reclaim-marker-ab-2026-10-01-raw.tar.gz",
+    "casita-reclaim-marker-ab-2026-10-01-summary.json",
+    "casita-reclaim-marker-ab-2026-10-01.jsonl",
+    "casita-reclaim-marker-baseline-probe-2026-10-01.patch",
+    "casita-reclaim-marker-wide-2026-10-01-build.json",
+    "casita-reclaim-marker-wide-2026-10-01-metadata.json",
+    "casita-reclaim-marker-wide-2026-10-01-raw.tar.gz",
+    "casita-reclaim-marker-wide-2026-10-01-summary.json",
+    "casita-reclaim-marker-wide-2026-10-01.jsonl",
+    "obrador-dynamic-cli.rs",
+    "obrador-original-build.json",
+    "obrador-source.patch"
+  ],
+  "contribution": "Prepared as a stacked draft PR based on PR #30. Published status in this experiment record describes when the measurements were collected."
+}
