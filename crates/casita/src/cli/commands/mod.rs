@@ -1842,16 +1842,22 @@ async fn run_inner(cli: Cli) -> Result<(), Error> {
                     "pack cache tuning is only supported for S3 sync endpoints",
                 ));
             }
-            return on_heap(|| run::execute(args, &repository_dir, spill_limits, pack_target_bytes))
-                .await;
+            return on_heap(|| {
+                run::execute(args, &repository_dir, spill_limits, pack_target_bytes)
+            })
+            .await;
         }
         Command::Ipc(args) => {
-            return on_heap(|| crate::cli::ipc::serve_with_options(&repository_dir, args.options()))
-                .await;
+            return on_heap(|| {
+                crate::cli::ipc::serve_with_options(&repository_dir, args.options())
+            })
+            .await;
         }
         Command::Sync(args) => {
-            return on_heap(|| generic_sync(args, spill_limits, pack_target_bytes, pack_cache_bytes))
-                .await;
+            return on_heap(|| {
+                generic_sync(args, spill_limits, pack_target_bytes, pack_cache_bytes)
+            })
+            .await;
         }
         Command::Archive {
             command: ArchiveCommand::Inspect(args),
