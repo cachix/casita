@@ -1722,6 +1722,20 @@ pub(super) fn run(cli: Cli) -> impl std::future::Future<Output = Result<(), Erro
     Box::pin(run_inner(cli))
 }
 
+/// Build a command's future in its own frame and poll it from the heap.
+///
+/// Unoptimized builds give every future awaited inline in [`run_inner`] its own
+/// stack slots in the dispatcher's poll frame, so the frame grew with the sum
+/// of all command futures (about 430 KiB) and overflowed Windows stacks.
+fn on_heap<'a, F>(
+    start: impl FnOnce() -> F,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = F::Output> + 'a>>
+where
+    F: std::future::Future + 'a,
+{
+    Box::pin(start())
+}
+
 fn command_trace_name(command: &Command) -> &'static str {
     match command {
         Command::Init => "init",
@@ -1818,7 +1832,7 @@ async fn run_inner(cli: Cli) -> Result<(), Error> {
             stdout.flush().await?;
             return Ok(());
         }
-        Command::Holds { endpoint, json } => return list_holds(&endpoint, json).await,
+        Command::Holds { endpoint, json } => return on_heap(|| list_holds(&endpoint, json)).await,
         // Run names belong to producer namespaces, not the workspace root
         // namespace. Project configuration supplies only explicit shortcuts,
         // even when --repository selects a different local store.
@@ -1828,22 +1842,25 @@ async fn run_inner(cli: Cli) -> Result<(), Error> {
                     "pack cache tuning is only supported for S3 sync endpoints",
                 ));
             }
-            return run::execute(args, &repository_dir, spill_limits, pack_target_bytes).await;
+            return on_heap(|| run::execute(args, &repository_dir, spill_limits, pack_target_bytes))
+                .await;
         }
         Command::Ipc(args) => {
-            return crate::cli::ipc::serve_with_options(&repository_dir, args.options()).await;
+            return on_heap(|| crate::cli::ipc::serve_with_options(&repository_dir, args.options()))
+                .await;
         }
         Command::Sync(args) => {
-            return generic_sync(args, spill_limits, pack_target_bytes, pack_cache_bytes).await;
+            return on_heap(|| generic_sync(args, spill_limits, pack_target_bytes, pack_cache_bytes))
+                .await;
         }
         Command::Archive {
             command: ArchiveCommand::Inspect(args),
-        } => return archive_inspect(args).await,
+        } => return on_heap(|| archive_inspect(args)).await,
         Command::Archive {
             command: ArchiveCommand::Verify(args),
-        } => return archive_verify(args, spill_limits).await,
+        } => return on_heap(|| archive_verify(args, spill_limits)).await,
         #[cfg(feature = "ssh")]
-        Command::SshSource(args) => return serve_ssh_source(args).await,
+        Command::SshSource(args) => return on_heap(|| serve_ssh_source(args)).await,
         command => command,
     };
     if pack_cache_bytes.is_some() {
@@ -1911,13 +1928,15 @@ async fn run_inner(cli: Cli) -> Result<(), Error> {
                     .map(|name| scoped_root(workspace.as_ref(), name))
                     .transpose()?
                     .ok_or_else(|| usage_error("tar import requires --root"))?;
-                return import_tar(
-                    &repository,
-                    &args.path,
-                    name,
-                    args.tar,
-                    args.retention.map(Into::into),
-                )
+                return on_heap(|| {
+                    import_tar(
+                        &repository,
+                        &args.path,
+                        name,
+                        args.tar,
+                        args.retention.map(Into::into),
+                    )
+                })
                 .await;
             }
             if importer == super::ImporterKind::Casitar {
@@ -1929,8 +1948,10 @@ async fn run_inner(cli: Cli) -> Result<(), Error> {
                         "casitar import uses --casitar-root, not --root",
                     ));
                 }
-                return import_casitar(&repository, &args.path, args.casitar, workspace.as_ref())
-                    .await;
+                return on_heap(|| {
+                    import_casitar(&repository, &args.path, args.casitar, workspace.as_ref())
+                })
+                .await;
             }
             if importer == super::ImporterKind::Git {
                 if args.retention.is_some() {
@@ -1946,13 +1967,12 @@ async fn run_inner(cli: Cli) -> Result<(), Error> {
                         None if automatically_detected => automatic_git_view(&args.path)?,
                         None => return Err(usage_error("git import requires --git-view")),
                     };
-                    let report = casita::import::GitImport::new(args.path, view_name)
+                    let import = casita::import::GitImport::new(args.path, view_name)
                         .with_refs(args.git.refs)?
                         .with_max_cached_pack_bytes(args.git.max_cached_pack_bytes)
                         .with_concurrency(args.git.concurrency)
-                        .with_max_buffered_bytes(args.git.max_buffered_bytes)
-                        .import(&repository)
-                        .await?;
+                        .with_max_buffered_bytes(args.git.max_buffered_bytes);
+                    let report = on_heap(|| import.import(&repository)).await?;
                     println!("view {}", report.view);
                     println!("objects {}", report.objects);
                     return Ok(());
@@ -1978,31 +1998,31 @@ async fn run_inner(cli: Cli) -> Result<(), Error> {
             if let Some(retention) = args.retention {
                 input = input.with_retention(retention.into());
             }
-            let key = repository.import(input).await?;
+            let key = on_heap(|| repository.import(input)).await?;
             println!("{key}");
             println!("root {name}");
         }
         Command::Archive { command } => match command {
             ArchiveCommand::Create(args) => {
-                archive_create(&repository, args, workspace.as_ref()).await?
+                on_heap(|| archive_create(&repository, args, workspace.as_ref())).await?
             }
             ArchiveCommand::Import(args) => {
-                archive_import(&repository, args, workspace.as_ref()).await?
+                on_heap(|| archive_import(&repository, args, workspace.as_ref())).await?
             }
             ArchiveCommand::Inspect(_) | ArchiveCommand::Verify(_) => {
                 unreachable!("handled before local open")
             }
         },
         Command::Object { command } => match command {
-            ObjectCommand::Show { key } => object_show(&repository, &key).await?,
+            ObjectCommand::Show { key } => on_heap(|| object_show(&repository, &key)).await?,
         },
-        Command::Git { command } => run_native_git(&repository, command).await?,
+        Command::Git { command } => on_heap(|| run_native_git(&repository, command)).await?,
         Command::Tree { command } => match command {
-            TreeCommand::List { key } => tree_list(&repository, &key).await?,
+            TreeCommand::List { key } => on_heap(|| tree_list(&repository, &key)).await?,
         },
         Command::Checkout { key, dir, no_root } => {
             let key = parse_directory_key(&key)?;
-            repository.checkout(&key, &dir).await?;
+            on_heap(|| repository.checkout(&key, &dir)).await?;
             println!("checked out {key} to {}", dir.display());
             if !no_root {
                 let name =
@@ -2026,19 +2046,21 @@ async fn run_inner(cli: Cli) -> Result<(), Error> {
             verified,
             from: _,
         } => {
-            object_cat(&repository, &key, verified).await?;
+            on_heap(|| object_cat(&repository, &key, verified)).await?;
         }
-        Command::Root { command } => generic_root(&repository, command, workspace.as_ref()).await?,
+        Command::Root { command } => {
+            on_heap(|| generic_root(&repository, command, workspace.as_ref())).await?
+        }
         Command::Gc { dry_run } => {
             if dry_run {
-                let preview = repository.preview_collection().await?;
+                let preview = on_heap(|| repository.preview_collection()).await?;
                 println!(
                     "would remove {} object record(s), {} payload(s), {} chunk(s)",
                     preview.logical_objects, preview.payload_blobs, preview.chunks
                 );
                 return Ok(());
             }
-            let outcome = repository.collect().await?;
+            let outcome = on_heap(|| repository.collect()).await?;
             // A collection that pruned no logical record leaves the revision
             // alone, which is the ordinary outcome whenever the named roots
             // still cover everything stored. Physical payloads can still have
@@ -2059,7 +2081,7 @@ async fn run_inner(cli: Cli) -> Result<(), Error> {
             );
         }
         Command::Vacuum => {
-            let outcome = repository.vacuum().await?;
+            let outcome = on_heap(|| repository.vacuum()).await?;
             match outcome.revision {
                 Some(revision) => print!("revision {revision}; "),
                 None => print!("revision unchanged; "),
@@ -2075,7 +2097,7 @@ async fn run_inner(cli: Cli) -> Result<(), Error> {
                 outcome.spill.files_opened, outcome.spill.peak_bytes
             );
         }
-        Command::Fsck(args) => print_fsck(&repository, args, spill_limits).await?,
+        Command::Fsck(args) => on_heap(|| print_fsck(&repository, args, spill_limits)).await?,
         Command::Sync(_) | Command::Holds { .. } => {
             unreachable!("handled before local open")
         }
