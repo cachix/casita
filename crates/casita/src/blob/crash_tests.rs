@@ -572,6 +572,27 @@ fn run_worker(work: &Path, scenario: &str, target: &str, verify: bool) {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn reclaim_marker_reuse_process_death_preserves_acknowledged_repository() {
+    let control = tempfile::tempdir().unwrap();
+    run_worker(control.path(), "repository", "control", false);
+    run_worker(control.path(), "repository", "control", true);
+    let trace = std::fs::read_to_string(control.path().join("trace")).unwrap();
+    for phase in [
+        "before-marker-sync",
+        "after-marker-sync",
+        "before-marker-directory-sync",
+        "after-marker-directory-sync",
+    ] {
+        let target = format!("catalog-object/pack-index-reclaim-needed/{phase}:1");
+        assert!(trace.lines().any(|line| line == target), "missing {target}");
+        let work = tempfile::tempdir().unwrap();
+        run_worker(work.path(), "repository", &target, false);
+        run_worker(work.path(), "repository", &target, true);
+    }
+}
+
 fn exercise(scenario: &str) {
     let control = tempfile::tempdir().unwrap();
     run_worker(control.path(), scenario, "control", false);

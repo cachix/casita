@@ -107,7 +107,7 @@ SMOKE = {
     "state-publication": ["--iterations", "10"],
     "metadata-durability": ["--iterations", "10"],
     "deletion-ordering": ["--iterations", "1"],
-    "catalog-maintenance": ["--iterations", "100"],
+    "catalog-maintenance": ["--iterations", "16"],
     "catalog-durability": ["--iterations", "10"],
     "logical-state": ["--entries", "4096"],
     "casitar": ["--profile", "smoke"],

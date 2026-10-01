@@ -4717,7 +4717,7 @@ impl PackedChunks {
         let marker = self.base.clone().join(INDEX_RECLAIM_MARKER_NAME);
         let bytes = Bytes::from_static(b"catalog garbage may be present\n");
         if let Some(local) = &self.local_durability {
-            local.put(&marker, bytes).await?;
+            local.ensure_reclaim_marker(&marker).await?;
         } else {
             self.object_store
                 .put(&marker, bytes.into())
@@ -7012,6 +7012,53 @@ mod tests {
         let reopened = PackedChunks::open(objects, base, u64::MAX).await.unwrap();
         assert_eq!(reopened.get(&a.digest).await.unwrap(), Some(a_bytes));
         assert_eq!(reopened.get(&b.digest).await.unwrap(), None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_reclaim_marker_reuses_then_recreates_after_another_handles_sweep() {
+        use std::os::unix::fs::MetadataExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let empty = PackedChunks::empty_state_catalog().unwrap();
+        let open = || async {
+            let filesystem =
+                object_store::local::LocalFileSystem::new_with_prefix(directory.path()).unwrap();
+            let durability = LocalDurability::new(filesystem.clone(), directory.path()).unwrap();
+            PackedChunks::open_with_initial_catalog(
+                Arc::new(filesystem),
+                Path::default(),
+                u64::MAX,
+                0,
+                Some(&empty),
+                Some(durability),
+            )
+            .await
+            .unwrap()
+        };
+        let writer = open().await;
+        let collector = open().await;
+        let path = directory.path().join(INDEX_RECLAIM_MARKER_NAME);
+        writer.mark_catalog_reclaim_due().await.unwrap();
+        let original = std::fs::File::open(&path).unwrap();
+        writer.mark_catalog_reclaim_due().await.unwrap();
+        assert_eq!(
+            original.metadata().unwrap().ino(),
+            std::fs::metadata(&path).unwrap().ino()
+        );
+        collector.reclaim_catalog_objects(&[]).await.unwrap();
+        assert!(!writer.catalog_reclaim_due().await.unwrap());
+        writer.mark_catalog_reclaim_due().await.unwrap();
+        assert_ne!(
+            original.metadata().unwrap().ino(),
+            std::fs::metadata(&path).unwrap().ino()
+        );
+        drop(writer);
+        open().await.mark_catalog_reclaim_due().await.unwrap();
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"catalog garbage may be present\n"
+        );
     }
 
     #[tokio::test]

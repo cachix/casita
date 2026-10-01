@@ -1643,7 +1643,7 @@
     {
       "id": "catalog-maintenance",
       "suite_id": "blob-backends",
-      "title": "Catalog reclamation marker",
+      "title": "Catalog marker probes, durable creation and repeated pinned marking",
       "kind": "module",
       "target": "benchmarks.suites.native_probes",
       "default_arguments": [

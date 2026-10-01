@@ -433,6 +433,14 @@ Additional coverage is available through:
 - `catalog-maintenance`, `catalog-durability`, `logical-state`: the previously
   unregistered native maintenance and logical-state probes.
 
+  `catalog-maintenance` also measures absent-marker creation and repeated durable
+  marking under fresh staging pins. It audits marker contents, protection and
+  release, another handle clearing/recreating the hint, and reopened visibility.
+  Unix runs count inode replacements while Linux/macOS runs verify one admission
+  operation and journal sync per new pin. Run `benchmark run catalog-maintenance
+  --iterations 32 --repetitions 3 --output /tmp/catalog-marker.json`; the smoke
+  case is included in `benchmark all`.
+
 `edited-import` retains the copied-tree dedup workload. Use
 `edited-import-in-place` for ordinary edits: its sample-local source preserves
 all stat identities of unchanged regular files. `graph-traversal` accepts
