@@ -441,6 +441,15 @@ Additional coverage is available through:
   --iterations 32 --repetitions 3 --output /tmp/catalog-marker.json`; the smoke
   case is included in `benchmark all`.
 
+  The same suite measures marker-plus-object publication with byte and file
+  sources. `CASITA_CATALOG_COADMISSION_BENCH_MODE=separate` selects the previous
+  two-admission sequence; `combined` (the default) admits both paths together.
+  Both modes verify exact contents and both protected identities, and require
+  respectively two or one journal operations per publication. Sync counts include
+  the extra sync for each journal checkpoint, reported separately. Compare both
+  16 and 32 iterations to exercise checkpoint boundaries in this fixture, using
+  the same release probe binary for an alternating paired comparison.
+
 `edited-import` retains the copied-tree dedup workload. Use
 `edited-import-in-place` for ordinary edits: its sample-local source preserves
 all stat identities of unchanged regular files. `graph-traversal` accepts

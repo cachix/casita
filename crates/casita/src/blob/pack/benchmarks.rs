@@ -516,7 +516,7 @@ async fn benchmark_durable_marker_publication(iterations: u64) {
         u64::MAX,
         0,
         Some(&empty),
-        Some(durability),
+        Some(durability.clone()),
     )
     .await
     .unwrap();
@@ -552,7 +552,7 @@ async fn benchmark_durable_marker_publication(iterations: u64) {
     #[cfg(unix)]
     let mut replacements = 0_u64;
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let (mut operations, mut journal_syncs) = (0_u64, 0_u64);
+    let (mut operations, mut journal_syncs, mut checkpoints) = (0_u64, 0_u64, 0_u64);
     for _ in 0..iterations {
         let pin = DataPinLease::acquire(
             ledger.clone(),
@@ -577,6 +577,7 @@ async fn benchmark_durable_marker_publication(iterations: u64) {
             let after = ledger.test_stats();
             operations += after["operations"] - before["operations"];
             journal_syncs += after["journal_syncs"] - before["journal_syncs"];
+            checkpoints += after["checkpoints"] - before["checkpoints"];
         }
         #[cfg(unix)]
         {
@@ -596,6 +597,102 @@ async fn benchmark_durable_marker_publication(iterations: u64) {
         drop(pin);
         flush_repository_leases().await.unwrap();
         assert!(ledger.inventory().await.unwrap().pins.is_empty());
+    }
+    // Compare the previous ordered two-admission path with combined admission
+    // using the same release binary and durable physical pin store.
+    let combined = match std::env::var("CASITA_CATALOG_COADMISSION_BENCH_MODE").as_deref() {
+        Ok("separate") => false,
+        Ok("combined") | Err(_) => true,
+        Ok(other) => panic!("invalid coadmission mode: {other}"),
+    };
+    for file_source in [false, true] {
+        let mut nanos = 0_u128;
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let (mut operations, mut syncs, mut checkpoints) = (0_u64, 0_u64, 0_u64);
+        for i in 0..iterations {
+            let pin = DataPinLease::acquire(
+                ledger.clone(),
+                DataPin {
+                    scope: PinScope::Staging,
+                    catalog: None,
+                    resources: BTreeSet::new(),
+                },
+            )
+            .await
+            .unwrap();
+            bindings.attach(&pin);
+            let marker = Path::from(INDEX_RECLAIM_MARKER_NAME);
+            let object = Path::from(format!("coadmission/{file_source}/{i}"));
+            let bytes = Bytes::from(format!("catalog object {file_source} {i}"));
+            let mut source = tempfile::tempfile().unwrap();
+            std::io::Write::write_all(&mut source, &bytes).unwrap();
+            std::io::Seek::seek(&mut source, std::io::SeekFrom::Start(0)).unwrap();
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            let before = ledger.test_stats();
+            let started = Instant::now();
+            if combined {
+                if file_source {
+                    durability
+                        .put_file_with_reclaim_marker(&marker, &object, source)
+                        .await
+                        .unwrap();
+                } else {
+                    durability
+                        .put_with_reclaim_marker(&marker, &object, bytes.clone())
+                        .await
+                        .unwrap();
+                }
+            } else {
+                durability.ensure_reclaim_marker(&marker).await.unwrap();
+                if file_source {
+                    durability.put_file(&object, source).await.unwrap();
+                } else {
+                    durability.put(&object, bytes.clone()).await.unwrap();
+                }
+            }
+            nanos += started.elapsed().as_nanos();
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            {
+                let after = ledger.test_stats();
+                operations += after["operations"] - before["operations"];
+                syncs += after["journal_syncs"] - before["journal_syncs"];
+                checkpoints += after["checkpoints"] - before["checkpoints"];
+            }
+            let expected = BTreeSet::from([
+                crate::metadata::PinResource::StorageObject(marker.to_string()),
+                crate::metadata::PinResource::StorageObject(object.to_string()),
+            ]);
+            assert_eq!(
+                ledger.inventory().await.unwrap().pins[pin.token()].resources,
+                expected
+            );
+            assert_eq!(
+                std::fs::read(directory.path().join(object.as_ref())).unwrap(),
+                bytes
+            );
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                b"catalog garbage may be present\n"
+            );
+            drop(pin);
+            flush_repository_leases().await.unwrap();
+            assert!(ledger.inventory().await.unwrap().pins.is_empty());
+        }
+        let name = if file_source { "file" } else { "bytes" };
+        println!(
+            "catalog_coadmission_{name}_nanos_per_publication {}",
+            nanos / u128::from(iterations)
+        );
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let expected = iterations * if combined { 1 } else { 2 };
+            assert_eq!(operations, expected);
+            // A checkpoint replaces a one-sync frame with a two-sync durable exchange.
+            assert_eq!(syncs, expected + checkpoints);
+            println!("catalog_coadmission_{name}_pin_operations {operations}");
+            println!("catalog_coadmission_{name}_pin_journal_syncs {syncs}");
+            println!("catalog_coadmission_{name}_pin_journal_checkpoints {checkpoints}");
+        }
     }
     collector.reclaim_catalog_objects(&[]).await.unwrap();
     assert!(!writer.catalog_reclaim_due().await.unwrap());
@@ -621,9 +718,10 @@ async fn benchmark_durable_marker_publication(iterations: u64) {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         assert_eq!(operations, iterations);
-        assert_eq!(journal_syncs, iterations);
+        assert_eq!(journal_syncs, iterations + checkpoints);
         println!("catalog_marker_existing_pin_operations {operations}");
         println!("catalog_marker_existing_pin_journal_syncs {journal_syncs}");
+        println!("catalog_marker_existing_pin_journal_checkpoints {checkpoints}");
     }
 }
 

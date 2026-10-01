@@ -270,8 +270,72 @@ impl LocalDurability {
             .await
     }
 
-    /// Durably publish a potentially large object without first materializing
-    /// it as one contiguous byte allocation.
+    /// Admit marker and object together, then durably publish them in order.
+    pub(crate) async fn put_with_reclaim_marker(
+        &self,
+        marker: &Path,
+        location: &Path,
+        bytes: Bytes,
+    ) -> io::Result<()> {
+        self.publish_with_reclaim_marker(marker, location, move |root, destination| {
+            durable_put(root, destination, &bytes)
+        })
+        .await
+    }
+
+    pub(crate) async fn put_file_with_reclaim_marker(
+        &self,
+        marker: &Path,
+        location: &Path,
+        source: File,
+    ) -> io::Result<()> {
+        self.publish_with_reclaim_marker(marker, location, move |root, destination| {
+            durable_put_file(root, destination, source)
+        })
+        .await
+    }
+
+    // Admit both identities before either I/O operation. The owned write scope
+    // fences collection until both ordered durability barriers settle, even
+    // when the caller is cancelled between marker and object publication.
+    async fn publish_with_reclaim_marker(
+        &self,
+        marker: &Path,
+        location: &Path,
+        publish: impl FnOnce(&FsPath, &FsPath) -> io::Result<()> + Send + 'static,
+    ) -> io::Result<()> {
+        let marker_destination = self
+            .filesystem
+            .path_to_filesystem(marker)
+            .map_err(io::Error::other)?;
+        let destination = self
+            .filesystem
+            .path_to_filesystem(location)
+            .map_err(io::Error::other)?;
+        let root = Arc::clone(&self.root);
+        let mut resources = pin_path(marker);
+        resources.extend(pin_path(location));
+        #[cfg(test)]
+        let pause = self.marker_pause.clone();
+        self.pins
+            .capture()
+            .write(resources, async move {
+                tokio::task::spawn_blocking(move || {
+                    #[cfg(test)]
+                    if let Some(pause) = pause {
+                        pause.wait();
+                    }
+                    durable_ensure_reclaim_marker(&root, &marker_destination)?;
+                    publish(&root, &destination)
+                })
+                .await
+                .map_err(io::Error::other)?
+            })
+            .await
+    }
+
+    /// Durably publish a potentially large object without materializing it.
+    #[cfg(test)]
     #[tracing::instrument(name = "blob.local_durability.put_file", level = "debug", skip_all)]
     pub(crate) async fn put_file(&self, location: &Path, source: File) -> io::Result<()> {
         let destination = self
@@ -761,7 +825,14 @@ mod tests {
             }
         }
 
-        for already_present in [false, true] {
+        for (already_present, operation) in [
+            (false, 0),
+            (true, 0),
+            (false, 1),
+            (true, 1),
+            (false, 2),
+            (true, 2),
+        ] {
             let directory = tempfile::tempdir().unwrap();
             let path = Path::from("pack-index-reclaim-needed");
             let mut durability = LocalDurability::new(
@@ -791,7 +862,30 @@ mod tests {
             durability.marker_pause = Some(pause.clone());
             let writing = durability.clone();
             let location = path.clone();
-            let task = tokio::spawn(async move { writing.ensure_reclaim_marker(&location).await });
+            let object = Path::from("catalog-object");
+            let object_location = object.clone();
+            let task = tokio::spawn(async move {
+                match operation {
+                    0 => writing.ensure_reclaim_marker(&location).await,
+                    1 => {
+                        writing
+                            .put_with_reclaim_marker(
+                                &location,
+                                &object_location,
+                                Bytes::from_static(b"catalog"),
+                            )
+                            .await
+                    }
+                    _ => {
+                        let mut source = tempfile::tempfile().unwrap();
+                        source.write_all(b"catalog").unwrap();
+                        std::io::Seek::seek(&mut source, std::io::SeekFrom::Start(0)).unwrap();
+                        writing
+                            .put_file_with_reclaim_marker(&location, &object_location, source)
+                            .await
+                    }
+                }
+            });
             tokio::time::timeout(std::time::Duration::from_secs(5), pause.entered.notified())
                 .await
                 .unwrap();
@@ -804,9 +898,15 @@ mod tests {
             assert!(inventory.pins.values().next().unwrap().resources.contains(
                 &crate::metadata::PinResource::StorageObject(path.to_string())
             ));
+            let mut protected = pin_path(&path);
+            if operation != 0 {
+                protected.extend(pin_path(&object));
+                assert!(!directory.path().join(object.as_ref()).exists());
+            }
+            assert_eq!(inventory.pins.values().next().unwrap().resources, protected);
             assert!(
                 ledger
-                    .claim_deletions(inventory.revision, pin_path(&path))
+                    .claim_deletions(inventory.revision, protected)
                     .await
                     .unwrap()
                     .is_none()
@@ -822,6 +922,12 @@ mod tests {
                 std::fs::read(directory.path().join(path.as_ref())).unwrap(),
                 RECLAIM_MARKER_BYTES
             );
+            if operation != 0 {
+                assert_eq!(
+                    std::fs::read(directory.path().join(object.as_ref())).unwrap(),
+                    b"catalog"
+                );
+            }
             let claim = ledger
                 .claim_deletions(inventory.revision, pin_path(&path))
                 .await
@@ -831,6 +937,39 @@ mod tests {
             ledger.finish_deletions(&claim).await.unwrap();
             ledger.finish_collection(&collector).await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn combined_publication_preserves_marker_before_object_failure_ordering() {
+        let directory = tempfile::tempdir().unwrap();
+        let durability = LocalDurability::new(
+            LocalFileSystem::new_with_prefix(directory.path()).unwrap(),
+            directory.path(),
+        )
+        .unwrap();
+        let marker = Path::from("marker");
+        let object = Path::from("object");
+        std::fs::create_dir(directory.path().join("marker")).unwrap();
+        assert!(
+            durability
+                .put_with_reclaim_marker(&marker, &object, Bytes::from_static(b"catalog"))
+                .await
+                .is_err()
+        );
+        assert!(!directory.path().join("object").exists());
+        std::fs::remove_dir(directory.path().join("marker")).unwrap();
+        std::fs::create_dir(directory.path().join("object")).unwrap();
+        assert!(
+            durability
+                .put_with_reclaim_marker(&marker, &object, Bytes::from_static(b"catalog"))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            std::fs::read(directory.path().join("marker")).unwrap(),
+            RECLAIM_MARKER_BYTES
+        );
+        assert!(directory.path().join("object").is_dir());
     }
 
     #[cfg(unix)]

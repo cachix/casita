@@ -3713,10 +3713,14 @@ impl PackedChunks {
         if let Some(local) = &self.local_durability {
             let mut source = prepared.file.as_file().try_clone()?;
             std::io::Seek::seek(&mut source, std::io::SeekFrom::Start(0))?;
-            local.put_file(&path, source).await?;
+            let marker = self.base.clone().join(INDEX_RECLAIM_MARKER_NAME);
+            local
+                .put_file_with_reclaim_marker(&marker, &path, source)
+                .await?;
             return Ok(reference);
         }
 
+        self.mark_catalog_reclaim_due().await?;
         let mut source = tokio::fs::File::from_std(prepared.file.as_file().try_clone()?);
         source.seek(std::io::SeekFrom::Start(0)).await?;
         if reference.encoded_bytes <= SINGLE_PUT_MAX_BYTES {
@@ -4564,13 +4568,7 @@ impl PackedChunks {
                     }
                 })?;
                 let digest = Digest::from(blake3::hash(&encoded));
-                self.mark_catalog_reclaim_due().await.map_err(|error| {
-                    object_store::Error::Generic {
-                        store: "pack index catalog",
-                        source: Box::new(error),
-                    }
-                })?;
-                self.put_catalog_object(digest, encoded.clone())
+                self.put_marked_catalog_object(digest, encoded.clone())
                     .await
                     .map_err(|error| object_store::Error::Generic {
                         store: "pack index catalog",
@@ -4683,6 +4681,23 @@ impl PackedChunks {
                 "background catalog rebase did not finish within 30 seconds",
             ))
         })
+    }
+
+    async fn put_marked_catalog_object(&self, digest: Digest, bytes: Bytes) -> io::Result<()> {
+        if let Some(local) = &self.local_durability {
+            self.read_counters
+                .index_put_requests
+                .fetch_add(1, Ordering::Relaxed);
+            self.read_counters
+                .index_put_bytes
+                .fetch_add(bytes.len() as u64, Ordering::Relaxed);
+            let marker = self.base.clone().join(INDEX_RECLAIM_MARKER_NAME);
+            let path = sharded_path(&self.base, INDEXES_KIND, &digest);
+            local.put_with_reclaim_marker(&marker, &path, bytes).await
+        } else {
+            self.mark_catalog_reclaim_due().await?;
+            self.put_catalog_object(digest, bytes).await
+        }
     }
 
     async fn put_catalog_object(&self, digest: Digest, bytes: Bytes) -> io::Result<()> {
@@ -5838,12 +5853,6 @@ impl PackedChunks {
                     store: "pack index catalog",
                     source: Box::new(error),
                 })?;
-            self.mark_catalog_reclaim_due().await.map_err(|error| {
-                object_store::Error::Generic {
-                    store: "pack index catalog",
-                    source: Box::new(error),
-                }
-            })?;
             let merged_reference =
                 self.put_prepared_catalog_run(prepared)
                     .await
