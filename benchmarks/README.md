@@ -1,5 +1,22 @@
 # Benchmark suite
 
+## Packed reader demand progress
+
+`benchmark run pack-demand-progress` holds speculative range I/O pending and
+checks that a demand fetch can still complete. Cases with 2, 3, 4, and 8
+speculative requests cover both sides of the three-request admission limit.
+Every case verifies the demanded chunk's bytes and digest, cancels the blocked
+work, and checks that all request and compressed-buffer permits are released.
+The suite is included in `benchmark all`. Its timings measure demand progress
+on a throttled in-memory backend, not filesystem or network throughput.
+
+```sh
+benchmark run pack-demand-progress --repetitions 3 --output /tmp/demand-progress.json
+benchmark all --suites pack-demand-progress --output /tmp/demand-progress-all
+```
+
+Use `--probe-binary` and `--no-build` with an existing Casita library test binary.
+
 ## Filesystem reuse
 
 `benchmark run filesystem-reuse` separates cached tree import from forced rereads
