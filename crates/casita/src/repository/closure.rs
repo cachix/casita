@@ -45,6 +45,7 @@ impl<PS, SS> Repository<PS, SS> {
             formats: &self.formats,
             limits: &self.limits,
             area: self.spill_area(),
+            proven: None,
         }
     }
 }
@@ -90,6 +91,19 @@ pub(super) struct ClosureVerifier<'a, PS> {
     pub(super) formats: &'a FormatRegistry,
     pub(super) limits: &'a FormatLimits,
     pub(super) area: SpillArea,
+    /// Objects whose complete closures earlier walks proved against this same
+    /// snapshot and overlay. An incremental walk stops at them and adds every
+    /// object it verifies. A walk that does not complete may leave partial
+    /// proofs behind, so callers must discard the set after any such status.
+    pub(super) proven: Option<&'a mut SpillSet<ObjectKey>>,
+}
+
+impl<'a, PS> ClosureVerifier<'a, PS> {
+    /// Share proofs with the other walks of one publication attempt.
+    pub(super) fn with_proofs(mut self, proven: &'a mut SpillSet<ObjectKey>) -> Self {
+        self.proven = Some(proven);
+        self
+    }
 }
 
 /// Verify one closure, optionally recording every verified key in `union`.
@@ -152,6 +166,7 @@ pub(super) async fn verify_closure_with<PS: BlobStore>(
         formats,
         limits,
         area,
+        mut proven,
     } = verifier;
     // An incremental walk stops at verified objects, so it cannot also produce
     // the complete union a transfer or archive plan needs.
@@ -159,6 +174,13 @@ pub(super) async fn verify_closure_with<PS: BlobStore>(
         !(matches!(audit, ClosureAudit::Incremental) && union.is_some()),
         "an incremental closure walk cannot collect a complete union"
     );
+    // Shared proofs are shortcuts; an exhaustive audit must reread everything.
+    debug_assert!(
+        !(matches!(audit, ClosureAudit::Exhaustive) && proven.is_some()),
+        "an exhaustive closure audit cannot trust earlier walks"
+    );
+    // Objects read in the current frontier, published to `proven` after it.
+    let mut proved = Vec::new();
     let mut reachable = SpillSet::new(area.clone(), "closure");
     let mut queue = TraversalQueue::new(area.clone());
     queue.push((None, root.clone())).await?;
@@ -181,10 +203,15 @@ pub(super) async fn verify_closure_with<PS: BlobStore>(
         let keys: Vec<_> = frontier.iter().map(|(_, key)| key.clone()).collect();
         // An already-verified object stands in for everything beneath it, so
         // the walk neither reads it nor descends into it.
-        let settled = match audit {
+        let mut settled = match audit {
             ClosureAudit::Exhaustive => vec![false; keys.len()],
             ClosureAudit::Incremental => snapshot.validated_closures(&keys).await?,
         };
+        if let Some(proven) = proven.as_deref() {
+            for (settled, proven) in settled.iter_mut().zip(proven.contains_batch(&keys).await?) {
+                *settled |= proven;
+            }
+        }
         let found = overlay_records(snapshot, overlay, &keys).await?;
 
         for (((from, key), record), settled) in frontier.into_iter().zip(found).zip(settled) {
@@ -261,9 +288,20 @@ pub(super) async fn verify_closure_with<PS: BlobStore>(
                     .push((Some(record.key().clone()), target.clone()))
                     .await?;
             }
+            if proven.is_some() {
+                proved.push(key.clone());
+            }
             if let Some(newly_verified) = newly_verified.as_deref_mut() {
                 newly_verified.push(key);
             }
+        }
+        // Once this walk completes, every object it read has a complete
+        // closure: each link was queued and then verified, settled, or already
+        // proven. Publishing per frontier keeps memory bounded; this walk never
+        // revisits a key, and a failing walk's caller discards the set.
+        if let Some(proven) = proven.as_deref_mut() {
+            proven.insert_batch(&proved).await?;
+            proved.clear();
         }
     }
     Ok(ClosureStatus::Complete {

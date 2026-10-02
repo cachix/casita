@@ -1016,34 +1016,54 @@ where
                             });
                         }
                     }
-                    let mut newly_verified: Vec<_> = constructed_closures.iter().cloned().collect();
+                    // Every walk of this attempt shares the objects earlier
+                    // walks proved, so each object is read at most once per
+                    // attempt. A retry starts empty against its new snapshot.
+                    let mut proven = SpillSet::new(self.repository.spill_area(), "publication");
+                    let trust_construction = self.repository.formats.is_builtin();
+                    let mut newly_verified = Vec::new();
+                    if trust_construction {
+                        newly_verified.extend(constructed_closures.iter().cloned());
+                    } else {
+                        // Construction proves the built-in rules, not those a
+                        // replacement verifier adds under the same namespace.
+                        // Staging order is bottom-up, so parents stop at their
+                        // already proven children.
+                        for target in staged
+                            .iter()
+                            .map(|object| object.record().key())
+                            .filter(|key| constructed_closures.contains(*key))
+                        {
+                            verify_publishable(
+                                self.repository.closure_verifier().with_proofs(&mut proven),
+                                snapshot.as_ref(),
+                                &overlay,
+                                target,
+                                &mut newly_verified,
+                            )
+                            .await?;
+                        }
+                    }
                     for change in &root_changes {
                         if let RootChange::Set { target, .. } = change {
-                            if constructed_closures.contains(target) {
+                            if trust_construction && constructed_closures.contains(target) {
                                 // The target record is part of this exact overlay, and
                                 // the private caller established its complete closure
                                 // while constructing the filesystem graph bottom-up.
                                 debug_assert!(overlay.contains_key(target));
                                 continue;
                             }
-                            let status = verify_closure_with(
-                                self.repository.closure_verifier(),
+                            verify_publishable(
+                                self.repository.closure_verifier().with_proofs(&mut proven),
                                 snapshot.as_ref(),
                                 &overlay,
                                 target,
-                                None,
-                                ClosureAudit::Incremental,
-                                Some(&mut newly_verified),
+                                &mut newly_verified,
                             )
                             .await?;
-                            if !matches!(status, ClosureStatus::Complete { .. }) {
-                                return Err(RepositoryError::RootNotPublishable {
-                                    root: target.clone(),
-                                    status,
-                                });
-                            }
                         }
                     }
+                    drop(proven);
 
                     let mut mutation = metadata.clone().unwrap_or_default();
                     mutation.add_objects(verified.iter().cloned());
@@ -1174,5 +1194,32 @@ where
                 Err(error) => return Err(error.into()),
             }
         }
+    }
+}
+
+/// Require one complete closure before any of its proofs can be recorded.
+async fn verify_publishable<PS: BlobStore>(
+    verifier: ClosureVerifier<'_, PS>,
+    snapshot: &dyn MetadataSnapshot,
+    overlay: &BTreeMap<ObjectKey, ObjectRecord>,
+    target: &ObjectKey,
+    newly_verified: &mut Vec<ObjectKey>,
+) -> Result<(), RepositoryError> {
+    match verify_closure_with(
+        verifier,
+        snapshot,
+        overlay,
+        target,
+        None,
+        ClosureAudit::Incremental,
+        Some(newly_verified),
+    )
+    .await?
+    {
+        ClosureStatus::Complete { .. } => Ok(()),
+        status => Err(RepositoryError::RootNotPublishable {
+            root: target.clone(),
+            status,
+        }),
     }
 }

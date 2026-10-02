@@ -210,6 +210,11 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
   `wal3 delta revision chain is invalid`. A commit whose log moved under it is
   now rebuilt on the log as it is, and caches the position where its record
   actually lands.
+- Filesystem, NAR and Git imports into a repository built with a custom
+  `FormatRegistry` no longer bypass its verifiers' relational rules. Their
+  construction proofs cover only the built-in formats, so such imports now
+  audit each constructed closure before publishing it or its witnesses. The
+  walks of one publication share their proofs, so each object is read once.
 
 ### Security
 
