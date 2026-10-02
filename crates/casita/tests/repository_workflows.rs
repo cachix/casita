@@ -165,7 +165,10 @@ async fn an_import_recognizes_unchanged_files_and_never_stale_ones() {
     let stat = std::fs::metadata(tree.join("rewritten.txt")).unwrap();
     let when = stat.modified().unwrap();
     std::fs::write(tree.join("rewritten.txt"), b"second-copy").unwrap();
-    std::fs::File::open(tree.join("rewritten.txt"))
+    // Windows only sets file times through a handle opened for writing.
+    std::fs::File::options()
+        .write(true)
+        .open(tree.join("rewritten.txt"))
         .unwrap()
         .set_modified(when)
         .unwrap();
