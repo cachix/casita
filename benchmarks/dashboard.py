@@ -14,6 +14,7 @@ import sys
 from collections import defaultdict
 from typing import Any, Iterable, Sequence
 
+from benchmarks.suites import git_closure_audit, git_closure_import
 from benchmarks.suites import repository as common
 from benchmarks.metrics import MetricRegistryError, load_metric_registry
 
@@ -340,6 +341,77 @@ def normalize_graph_traversal_result(path: pathlib.Path, result: dict[str, Any])
             }
         )
     return normalized_run(path, result, "graph-traversal", observations)
+
+
+GIT_CLOSURE_WORKLOADS = {
+    "casita.git-closure-import.v1": ("git-closure-import", git_closure_import.WORKLOAD),
+    "casita.git-closure-audit.v1": ("git-closure-audit", git_closure_audit.WORKLOAD),
+}
+GIT_CLOSURE_COUNTS = (
+    "imported_objects",
+    "reused_objects",
+    "source_bytes",
+    "blob_witnesses",
+    "link_audits",
+    "link_audits_per_object",
+    "witnesses",
+    "witness_commits",
+    "max_witness_batch",
+)
+
+
+def normalize_git_closure_result(path: pathlib.Path, result: dict[str, Any]) -> dict[str, Any]:
+    """Report one observation per operation, variant and complete workload.
+
+    Distinct configurations are distinct workloads, so only repetitions of one
+    configuration share an observation.
+    """
+    if result.get("complete") is not True:
+        raise ValueError("incomplete Git closure matrix cannot be compared")
+    entrypoint, workload = GIT_CLOSURE_WORKLOADS[result["result_schema"]]
+    fields = ("operation", "variant", *workload)
+    groups: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
+    for sample in result.get("samples", []):
+        missing = [field for field in fields if field not in sample]
+        if missing:
+            raise DashboardError(f"Git closure sample in {path} lacks {missing}")
+        key = tuple(sample[field] for field in fields)
+        if (any(type(value) not in (str, int, bool) for value in key)
+                or any(type(value) is not str for value in key[:2])):
+            raise DashboardError(f"Git closure sample in {path} has an invalid workload {key!r}")
+        # Typing each value keeps equal values of differing types, such as
+        # True and 1, apart, and keys of differing types comparable.
+        groups[tuple((type(value).__name__, value) for value in key)].append(sample)
+    paired = len({variant for _operation, (_type, variant), *_workload in groups}) > 1
+    observations = []
+    for typed, samples in sorted(groups.items()):
+        operation, variant, *values = (value for _type, value in typed)
+        scale = dict(zip(workload, values, strict=True))
+        successful = [sample for sample in samples if sample.get("status") == "ok"]
+        wall, p95_wall = aggregate_metric(successful, "wall_seconds")
+        metrics = {
+            "wall_seconds": wall,
+            "p95_wall_seconds": p95_wall,
+            "max_rss_bytes": aggregate_metric(successful, "max_rss_bytes")[0],
+            **{field: aggregate_metric(successful, field)[0] for field in GIT_CLOSURE_COUNTS},
+        }
+        failures = sample_failures(samples)
+        observations.append(
+            {
+                "workload": f"{entrypoint}:" + json.dumps(scale, sort_keys=True),
+                "profile": result.get("configuration", {}).get("profile", "custom"),
+                "cache_policy": "cold" if operation.startswith("cold") else "warm",
+                "operation": operation,
+                "implementation": f"casita-{variant}" if paired else "casita",
+                "status": "ok" if len(successful) == len(samples) and not failures else "failed",
+                "samples": len(samples),
+                "successful_samples": len(successful),
+                "failures": failures,
+                "metrics": {name: value for name, value in metrics.items() if value is not None},
+                "scale": scale,
+            }
+        )
+    return normalized_run(path, result, result["suite_id"], observations)
 
 
 def flatten_numeric_metrics(value: Any, prefix: str = "") -> dict[str, float]:
@@ -835,6 +907,8 @@ def normalize_result(path: pathlib.Path) -> dict[str, Any]:
         return normalize_s3_pack_index_result(path, result)
     if result_schema.startswith("casita.s3-pack."):
         return normalize_s3_pack_result(path, result)
+    if result_schema in GIT_CLOSURE_WORKLOADS:
+        return normalize_git_closure_result(path, result)
     suite_id = result.get("suite_id")
     if result_schema.startswith("casita.gix-odb."):
         return normalize_gix_odb_result(path, result)

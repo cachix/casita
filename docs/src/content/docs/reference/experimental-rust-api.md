@@ -182,7 +182,9 @@ take the required hold internally.
 | Named graph import | `Repository::import(CopyImport::from_source(source, source_name, destination_name))` | Custom `TransferSource`; built-in sources use `CopyImport::new` |
 | Path-selected transfer | `transfer_path` | Named filesystem root plus a `TransferSource` |
 | Git view publish/read/checkout | `publish_git_view`, `read_git_view`, `checkout_git_tree` | `native` |
-| Native local Git import | `Repository::import(GitImport::new(...))` | `git` |
+| Native local Git view import | `Repository::import(GitImport::new(...))` | `git` |
+| Native Git closure import | `Repository::import(GitClosureImport::new(objects_dir, roots))` | `git`; retained result without a view |
+| Session-scoped Git closure import | `GitClosureImport::new(objects_dir, roots).import(&session)` | `git`; receiving session retains the result |
 | Git fetch service | `GitFetchService` | `git-fetch`; HTTP adapter requires `git-http` |
 | SSH source | `SshTransferSource` | `ssh` |
 | Casitar stream I/O, export, and import | `CasitarReader`, `CasitarWriter`, `Repository::export_casitar`, `Repository::import(CasitarImport::new(...))` | `native` |

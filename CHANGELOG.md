@@ -13,6 +13,14 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Added
 
+- `GitClosureImport` imports selected native Git closures without named views or
+  per-revision inventories. It reuses verified subtrees and returns a retained
+  reader protecting the result until application roots are published. A
+  malformed selection, or a selected root of the wrong type, fails as invalid
+  input before decoding. Closure witnesses are committed in batches of at most
+  `max_batch_objects`, and only once the whole selection is proven complete.
+  Repeating an interrupted import completes them.
+
 - `MutationSession::stage_object_reader_with_size` verifies an exact-length
   source while writing it, avoiding a verification reread of the stored payload.
   Native identity, complete consumption, and backend digest and length remain

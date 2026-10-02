@@ -21,7 +21,7 @@ and `IntegrityDisposition`.
 | Area | `Repository` methods |
 |---|---|
 | Open | `local`, `memory`; `s3` with the experimental S3 storage profile |
-| Import | `import` with `BlobImport`, `CopyImport`, `FilesystemImport`, `TarImport`, `CasitarImport`, or `GitImport` (`git`) |
+| Import | `import` with `BlobImport`, `CopyImport`, `FilesystemImport`, `TarImport`, `CasitarImport`, or `GitImport` / `GitClosureImport` (`git`) |
 | Filesystem | `checkout` |
 | Objects | `object`, `open`, `open_verified` |
 | Consistent reads | `metadata_reader`, `retained_reader` |
@@ -36,6 +36,18 @@ It consumes an input request and returns that importer's associated `Report` and
 are no public format-specific import methods. Built-in requests use application
 `Error` with the standard handle and typed engine errors with experimental
 compositions. Custom importers can implement the same trait.
+
+`GitClosureImport::new(objects_dir, roots)` imports type-qualified native Git
+roots directly from an object directory. It follows packs and alternates and
+reuses complete stored subtrees across unrelated revisions and repositories.
+It creates no named roots or serving-view inventory. The returned
+`GitClosureImportOutcome` contains a `report` and a retained `reader`; keep the
+reader alive until application roots have been published. A fully stored
+selection does not access the source directory. Completeness records are
+committed in bounded batches, and only once the whole selection is proven
+complete; repeating an interrupted import completes them. Report counters
+describe work performed and reuse boundaries, not the size of the complete
+reachable graph.
 
 `Reader` implements Tokio `AsyncRead` and `AsyncSeek`. It keeps the selected
 object's content protected from collection until dropped. `VerifiedReader`

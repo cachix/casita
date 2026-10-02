@@ -31,6 +31,8 @@ SMOKE = {
     "mutation-catalog": ["--profile", "smoke"],
     "filesystem-outputs": ["--profile", "smoke"],
     "output-import": ["--profile", "smoke"],
+    "git-closure-import": ["--profile", "smoke"],
+    "git-closure-audit": ["--profile", "smoke"],
     "git-import-profile": ["--profile", "smoke"],
     "git-blob-file": ["--profile", "smoke"],
     "git-verified-stream": ["--profile", "smoke"],

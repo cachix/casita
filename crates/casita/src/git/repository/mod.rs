@@ -1,6 +1,9 @@
 //! Repository operations for immutable native Git views.
 
 #[cfg(feature = "git")]
+pub(crate) mod closure_import;
+
+#[cfg(feature = "git")]
 use std::collections::BTreeSet;
 use std::collections::{BTreeMap, VecDeque};
 #[cfg(feature = "git")]
