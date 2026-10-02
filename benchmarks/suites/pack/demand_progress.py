@@ -1,4 +1,4 @@
-"""Demand progress under blocked speculative I/O, not storage throughput."""
+"""Demand progress and optional paired verified archive throughput."""
 from __future__ import annotations
 
 import argparse
@@ -6,6 +6,8 @@ import hashlib
 import json
 import pathlib
 import subprocess
+import statistics
+import time
 
 from benchmarks import cli
 from benchmarks.suites import repository as common
@@ -29,6 +31,64 @@ def parse_samples(stdout):
     return samples
 
 
+def compare_archives(args):
+    """Alternate whole-blob reads, retaining failures as well as successful timings."""
+    binaries = {}
+    for value in args.archive_binary:
+        label, path = value.split("=", 1)
+        if not label or label in binaries:
+            raise common.BenchmarkError("archive labels must be unique and nonempty")
+        binaries[label] = str(pathlib.Path(path).resolve())
+    artifacts = []
+    for label, path in binaries.items():
+        digest = hashlib.sha256()
+        with open(path, "rb") as source:
+            while chunk := source.read(1024 * 1024):
+                digest.update(chunk)
+        artifacts.append(dict(label=label, path=path, sha256=digest.hexdigest()))
+    result = dict(schema_version=1, result_schema="casita.pack-archive-comparison.v1",
+                  complete=False, environment=common.environment_metadata(cli.ROOT),
+                  configuration=dict(repository=str(args.repository.resolve()),
+                                     object_key=args.object_key, expected_bytes=args.expected_bytes,
+                                     repetitions=args.repetitions, cache="uncontrolled OS page cache",
+                                     timeout_seconds=args.archive_timeout),
+                  binaries=binaries, artifacts=artifacts, samples=[], summary={})
+    try:
+        for repetition in range(args.repetitions + 1):
+            order = list(binaries)
+            if repetition % 2:
+                order.reverse()
+            for label in order:
+                command = [binaries[label], str(args.repository.resolve()), args.object_key,
+                           str(args.expected_bytes)]
+                start = time.monotonic()
+                try:
+                    process = subprocess.run(command, capture_output=True, text=True,
+                                             timeout=args.archive_timeout)
+                    row = dict(exit_code=process.returncode, stdout=process.stdout,
+                               stderr=process.stderr)
+                    row["status"] = ("ok" if process.returncode == 0 and
+                                     process.stdout.strip() == f"verified_bytes {args.expected_bytes}"
+                                     else "failed")
+                except subprocess.TimeoutExpired as error:
+                    row = dict(status="timeout",
+                               stdout=(error.stdout or b"").decode(errors="replace"),
+                               stderr=(error.stderr or b"").decode(errors="replace"))
+                row.update(label=label, repetition=repetition, warmup=repetition == 0,
+                           seconds=time.monotonic()-start)
+                result["samples"].append(row)
+                common.write_atomic(args.output, json.dumps(result, indent=2)+"\n")
+        for label in binaries:
+            rows = [r for r in result["samples"] if r["label"] == label and not r["warmup"]]
+            times = [r["seconds"] for r in rows if r["status"] == "ok"]
+            result["summary"][label] = dict(successes=len(times), failures=len(rows)-len(times),
+                                          median_seconds=statistics.median(times) if times else None)
+        result["complete"] = all(r["status"] == "ok" for r in result["samples"])
+    finally:
+        common.write_atomic(args.output, json.dumps(result, indent=2)+"\n")
+    return 0 if result["complete"] else 1
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=("smoke", "standard"), default="smoke")
@@ -37,7 +97,17 @@ def main(argv=None):
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--output", type=pathlib.Path,
                         default=cli.ROOT / "benchmarks/results/pack-demand-progress.json")
+    parser.add_argument("--archive-binary", action="append", metavar="LABEL=PATH")
+    parser.add_argument("--repository", type=pathlib.Path)
+    parser.add_argument("--object-key")
+    parser.add_argument("--expected-bytes", type=int)
+    parser.add_argument("--archive-timeout", type=float, default=120)
     args = parser.parse_args(argv)
+    if args.archive_binary:
+        if (args.repetitions < 1 or not args.repository or not args.object_key
+                or not args.expected_bytes or args.expected_bytes < 1 or args.archive_timeout <= 0):
+            parser.error("archive comparison requires repository, key, size, and positive limits")
+        return compare_archives(args)
     if args.repetitions < 1 or (args.no_build and args.probe_binary is None):
         parser.error("positive repetitions and a binary for --no-build are required")
     binary = args.probe_binary

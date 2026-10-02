@@ -1906,9 +1906,18 @@
       ]
     },
     {
+      "id": "pack-demand-latency",
+      "suite_id": "blob-backends",
+      "title": "Verified packed reads across calibrated GET delays and cache boundaries",
+      "kind": "module",
+      "target": "benchmarks.suites.pack.demand_latency",
+      "profiles": ["smoke", "standard"],
+      "correctness": ["exact bytes", "independent BLAKE3", "matching variant fixtures", "calibrated GET delay", "fitting warm cache issues no pack GETs"]
+    },
+    {
       "id": "pack-demand-progress",
       "suite_id": "blob-backends",
-      "title": "Demand progress across speculative request admission boundaries",
+      "title": "Demand progress and paired verified archive reads",
       "kind": "module",
       "target": "benchmarks.suites.pack.demand_progress",
       "profiles": ["smoke", "standard"],

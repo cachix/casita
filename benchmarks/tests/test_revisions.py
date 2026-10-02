@@ -97,6 +97,7 @@ class RevisionArgumentTests(unittest.TestCase):
                 "pack-cache-network",
                 "pack-fragmentation",
                 "pack-demand-progress",
+                "pack-demand-latency",
                 "s3-fragmentation",
                 "s3-read-planning",
                 "s3-fetch-pipeline",

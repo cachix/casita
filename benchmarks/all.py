@@ -24,6 +24,7 @@ SMOKE = {
     "s3-fetch-pipeline": ["--profile", "smoke", "--rtt-ms", "0,80", "--caches", "below-largest-pack", "above-largest-pack", "default", "ample"],
     "s3-fetch-lookahead": ["--profile", "smoke", "--rtt-ms", "0,80", "--caches", "below-largest-pack", "above-largest-pack", "default", "ample"],
     "pack-read-planning": ["--profile", "smoke"],
+    "pack-demand-latency": ["--profile", "smoke", "--sizes-mib", "1,17,65", "--delay-ms", "0,20", "--cache-mib", "0,192"],
     "pack-demand-progress": ["--profile", "smoke"],
     "s3-fragmentation": ["--profile", "smoke", "--read-bytes", "0,1", "--include-small-buffer-control"],
     "pack-fragmentation": ["--profile", "smoke"],

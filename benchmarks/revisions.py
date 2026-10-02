@@ -184,6 +184,12 @@ SUITE_BUILD_SPECS["output-import"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["catalog-wal"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["scoped-catalog"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["pack-fragmentation"] = SUITE_BUILD_SPECS["metadata-collection"]
+SUITE_BUILD_SPECS["pack-demand-latency"] = SuiteBuildSpec(
+    ("build", "--release", "-p", "casita", "--no-default-features", "--features", "native,experimental", "--example", "packed_read_latency"),
+    "--probe-binary", "packed_read_latency", relative_artifact="release/examples/packed_read_latency",
+    supports_report=False,
+)
+
 SUITE_BUILD_SPECS["pack-demand-progress"] = dataclasses.replace(
     SUITE_BUILD_SPECS["metadata-collection"], supports_report=False,
 )
