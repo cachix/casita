@@ -33,6 +33,7 @@ SMOKE = {
     "output-import": ["--profile", "smoke"],
     "git-import-profile": ["--profile", "smoke"],
     "git-blob-file": ["--profile", "smoke"],
+    "git-verified-stream": ["--profile", "smoke"],
     "git-ingest-scheduling": ["--profile", "smoke"],
     "git-ingest-concurrency": ["--profile", "smoke"],
     "git-fetch-s3": ["--profile", "smoke", "--diagnostics"],

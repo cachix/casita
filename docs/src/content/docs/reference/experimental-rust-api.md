@@ -169,6 +169,7 @@ take the required hold internally.
 
 | Workflow | Primary API | Extra capability |
 |---|---|---|
+| Exact-length object ingestion | `MutationSession::stage_object_reader_with_size` | `native`; verifies while writing, with no stored-payload reread |
 | Raw blob import | `Repository::import(BlobImport::new(reader, root))` or `MutationSession::import(BlobImport::new(reader, root))` | `PS: BlobStore`, `SS: MetadataStore`, `native` |
 | Filesystem import and checkout | `Repository::import(FilesystemImport::new(...))`, `FilesystemImport::new(...).reread(true)`, `Repository::checkout` | `PS: BlobStore`, `SS: MetadataStore`, `native` |
 | Tar stream import | `Repository::import(TarImport::new(...))` | `PS: BlobStore`, `SS: MetadataStore`, `native` |

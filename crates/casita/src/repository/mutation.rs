@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod verified_stream;
+
 /// Private construction evidence and public requests for normal verification
 /// must remain distinct, even when they share the publication transaction.
 #[derive(Default)]
@@ -491,6 +493,50 @@ where
                 tokio::io::copy(reader, &mut writer).await?;
                 let (payload, _) = writer.close().await?;
                 self.stage_existing(key, payload).await
+            })
+            .await
+    }
+
+    /// Verify an exact-length stream while writing it, without reopening the
+    /// stored payload. The selected format checks native identity and links;
+    /// its physical digest is independently compared with the backend writer.
+    /// Short, oversized, or incompletely consumed streams cannot be staged.
+    #[tracing::instrument(
+        name = "repository.stage_object_reader_with_size",
+        level = "debug",
+        skip_all,
+        fields(bytes = payload_size)
+    )]
+    pub async fn stage_object_reader_with_size<'hold>(
+        &'hold self,
+        key: ObjectKey,
+        payload_size: u64,
+        reader: &mut (impl AsyncRead + Unpin + Send),
+    ) -> Result<StagedObject<'hold>, RepositoryError> {
+        self.write_scope()
+            .run(async {
+                if payload_size > self.repository.limits.max_payload_bytes {
+                    return Err(FormatError::PayloadLimit {
+                        limit: self.repository.limits.max_payload_bytes,
+                    }
+                    .into());
+                }
+                let mut tee = verified_stream::WritingReader::new(
+                    reader,
+                    self.repository.payloads.open_write().await,
+                    payload_size,
+                );
+                let verified = self
+                    .repository
+                    .formats
+                    .verify(&key, &mut tee, &self.repository.limits)
+                    .await?;
+                tee.finish(verified.record()).await?;
+                Ok(StagedObject {
+                    verified,
+                    repository: self.repository.staging_identity.clone(),
+                    _hold: std::marker::PhantomData,
+                })
             })
             .await
     }

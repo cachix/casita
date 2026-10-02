@@ -2777,4 +2777,26 @@ benchmark run git-blob-file --profile smoke --output /tmp/git-blob-file.json
 
 Use `--repetitions 7 --cpu-affinity 0,1,2,3` for paired investigation runs, choosing
 CPUs allowed on the host. Frozen integration executables can be supplied through
-`--probe-binary` with `--no-build`.`--file-bytes` and `--files` override the profile's cases.
+`--probe-binary` with `--no-build`. `--file-bytes` and `--files` override the
+profile's cases.
+
+## One-pass verified Git ingestion
+
+`git-verified-stream` compares the existing `stage_object_reader` write-then-read
+path with `stage_object_reader_with_size`, which verifies the native identity
+while writing the same source bytes. Both strategies run in the same executable
+in alternating order, with fresh repositories and deterministic random input.
+Timing covers staging; fixture creation, mutation setup, publication, exhaustive
+closure verification and byte-for-byte readback are excluded. The writer's digest
+and length remain independently checked.
+
+Both profiles cover empty, one-byte and 65535/65536/65537-byte payloads on
+memory and local backends; the standard profile adds both sides of 4 MiB, and
+`--file-bytes` overrides either. The suite is included in `benchmark all`.
+Process RSS includes the fixture and audits, so it cannot establish the importer's
+streaming memory footprint. Source decoding is outside this measurement.
+
+```sh
+benchmark run git-verified-stream --profile smoke --output /tmp/git-verified-stream-smoke.json
+benchmark run git-verified-stream --backend both --repetitions 7 --cpu-affinity 0,1,2,3 --output /tmp/git-verified-stream-paired.json
+```

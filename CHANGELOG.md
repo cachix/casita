@@ -13,6 +13,10 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Added
 
+- `MutationSession::stage_object_reader_with_size` verifies an exact-length
+  source while writing it, avoiding a verification reread of the stored payload.
+  Native identity, complete consumption, and backend digest and length remain
+  independently checked.
 - `MutationSession::stage_git_blob_file` and `stage_git_blob_files` register
   stored verified native Git blobs as ordinary files without reading or
   writing their payloads again. A batch takes one metadata read, one

@@ -592,6 +592,15 @@
       ]
     },
     {
+      "id": "git-verified-stream",
+      "suite_id": "native-git",
+      "title": "One-pass native Git verification and payload storage",
+      "kind": "module",
+      "target": "benchmarks.suites.git_verified_stream",
+      "profiles": ["smoke", "standard"],
+      "correctness": ["identical native identities", "exact payload lengths", "complete closures", "byte-for-byte readback"]
+    },
+    {
       "id": "git-blob-file",
       "suite_id": "native-git",
       "title": "Register verified Git blob contents as files without payload rereads",

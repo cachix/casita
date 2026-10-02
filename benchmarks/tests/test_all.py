@@ -11,6 +11,18 @@ from benchmarks import all as runner
 from benchmarks import cli
 
 class AllSuiteTests(unittest.TestCase):
+    def test_verified_stream_builds_and_receives_its_registered_probe(self):
+        commands = runner.build_commands(["git-verified-stream"], pathlib.Path("/build"))
+        self.assertEqual(len(commands), 1)
+        command = commands[0]
+        self.assertEqual(command[command.index("--test") + 1], "verified_stream")
+        self.assertIn("--no-default-features", command)
+        self.assertEqual(command[command.index("--features") + 1], "native,git,experimental")
+        self.assertIn("verified_stream", runner.integration_probe_names())
+        arguments = runner.suite_arguments("git-verified-stream", pathlib.Path("/binaries"), "smoke", 1)
+        self.assertIn("/binaries/verified_stream", arguments)
+        self.assertIn("--no-build", arguments)
+
     def test_build_retains_registered_integration_probe(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
