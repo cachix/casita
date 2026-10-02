@@ -5,73 +5,19 @@ use std::path::Path;
 
 /// Rename `from` over `to`, replacing any existing file.
 ///
-/// The caller must flush the file's data first. On Windows the rename itself is
-/// written through before this returns, since directories cannot be opened to
-/// flush them. Unix has no per-rename flush: callers sync the parent directory.
+/// The caller must flush the file's data first. Unix has no per-rename flush:
+/// callers sync the parent directory. Windows cannot open directories to flush
+/// them, so the renamed file is flushed instead; NTFS records the new name in
+/// the file's own metadata, which that flush commits. The rename uses POSIX
+/// semantics, so it replaces a destination other processes still have open.
 pub(crate) fn rename_write_through(from: &Path, to: &Path) -> io::Result<()> {
+    std::fs::rename(from, to)?;
     #[cfg(windows)]
-    {
-        windows::move_file_write_through(from, to)
-    }
-    #[cfg(not(windows))]
-    {
-        std::fs::rename(from, to)
-    }
-}
-
-#[cfg(windows)]
-mod windows {
-    use std::ffi::OsString;
-    use std::io;
-    use std::os::windows::ffi::{OsStrExt, OsStringExt};
-    use std::path::{Path, PathBuf};
-    use windows_sys::Win32::Storage::FileSystem::{
-        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
-    };
-
-    pub(super) fn move_file_write_through(from: &Path, to: &Path) -> io::Result<()> {
-        let from = wide(&verbatim(from)?);
-        let to = wide(&verbatim(to)?);
-        // The only unsafe call in the crate: Rust exposes no rename flags.
-        #[allow(unsafe_code)]
-        // SAFETY: both pointers are NUL-terminated UTF-16 buffers that outlive
-        // the call, and MoveFileExW does not retain them.
-        let moved = unsafe {
-            MoveFileExW(
-                from.as_ptr(),
-                to.as_ptr(),
-                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-            )
-        };
-        if moved == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
-    }
-
-    fn wide(path: &Path) -> Vec<u16> {
-        path.as_os_str().encode_wide().chain(Some(0)).collect()
-    }
-
-    /// The `\\?\` form, which lifts MAX_PATH as std does for its own calls.
-    fn verbatim(path: &Path) -> io::Result<PathBuf> {
-        let absolute: Vec<u16> = std::path::absolute(path)?
-            .as_os_str()
-            .encode_wide()
-            .collect();
-        let prefixed = if absolute.starts_with(&units(r"\\?\")) {
-            absolute
-        } else if let Some(share) = absolute.strip_prefix(units(r"\\").as_slice()) {
-            [units(r"\\?\UNC\").as_slice(), share].concat()
-        } else {
-            [units(r"\\?\").as_slice(), &absolute].concat()
-        };
-        Ok(OsString::from_wide(&prefixed).into())
-    }
-
-    fn units(text: &str) -> Vec<u16> {
-        text.encode_utf16().collect()
-    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(to)?
+        .sync_all()?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -100,6 +46,21 @@ mod tests {
         assert_eq!(std::fs::read(&to).unwrap(), b"new");
     }
 
+    /// Concurrent processes replace shared marker files while others read
+    /// them; Windows must not refuse a destination that is still open.
+    #[test]
+    fn replaces_a_destination_another_handle_has_open() {
+        let directory = tempfile::tempdir().unwrap();
+        let from = directory.path().join("new");
+        let to = directory.path().join("current");
+        std::fs::write(&from, b"new").unwrap();
+        std::fs::write(&to, b"old").unwrap();
+        let reader = std::fs::File::open(&to).unwrap();
+        rename_write_through(&from, &to).unwrap();
+        drop(reader);
+        assert_eq!(std::fs::read(&to).unwrap(), b"new");
+    }
+
     #[test]
     fn a_missing_source_is_an_error() {
         let directory = tempfile::tempdir().unwrap();
@@ -111,7 +72,7 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 
-    /// Paths past MAX_PATH need the verbatim form on Windows.
+    /// Paths past MAX_PATH must still work on Windows.
     #[test]
     fn handles_paths_longer_than_max_path() {
         let directory = tempfile::tempdir().unwrap();

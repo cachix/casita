@@ -529,8 +529,8 @@ fn sync_directory_chains(
             ));
         }
     }
-    // Windows cannot open directories to flush them. Its renames are written
-    // through instead, and every data file is flushed before its rename.
+    // Windows cannot open directories to flush them. Each renamed file is
+    // flushed instead, and every data file is flushed before its rename.
     Ok(())
 }
 

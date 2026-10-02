@@ -201,7 +201,7 @@ impl FilePinStore {
             crate::durable_rename::rename_write_through(&temporary, &self.path).map_err(backend)?;
             // The rename consumed the temporary name.
             let _ = temporary.keep();
-            // Windows wrote the rename through; it cannot open directories.
+            // Windows flushed the renamed file; it cannot open directories.
             #[cfg(unix)]
             std::fs::File::open(self.parent())
                 .and_then(|directory| directory.sync_all())
