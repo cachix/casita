@@ -2,6 +2,23 @@
 
 use super::*;
 
+/// Private construction evidence and public requests for normal verification
+/// must remain distinct, even when they share the publication transaction.
+#[derive(Default)]
+pub(super) struct ClosurePublication {
+    pub(super) constructed: BTreeSet<ObjectKey>,
+    pub(super) requested: BTreeSet<ObjectKey>,
+}
+
+impl ClosurePublication {
+    fn constructed(constructed: BTreeSet<ObjectKey>) -> Self {
+        Self {
+            constructed,
+            requested: BTreeSet::new(),
+        }
+    }
+}
+
 /// One root value that must still match before a conditional mutation can
 /// commit.
 ///
@@ -64,6 +81,8 @@ pub(crate) const PUBLICATION_PHASES: [&str; 6] = [
 pub(crate) struct PublicationProfile {
     pub(crate) calls: [u64; 6],
     pub(crate) nanos: [u64; 6],
+    /// Most keys one closure walk collected for witnesses.
+    pub(crate) witness_inventory_peak: usize,
 }
 
 #[cfg(test)]
@@ -114,6 +133,12 @@ impl<PS, SS> Repository<PS, SS> {
     #[cfg(test)]
     pub(crate) fn pause_catalog_maintenance_for_test(&self) -> Arc<publication::MaintenancePause> {
         self.publication.pause_maintenance()
+    }
+
+    #[cfg(test)]
+    pub(super) fn record_witness_inventory(&self, keys: usize) {
+        let mut profile = self.publication_profile.lock().unwrap();
+        profile.witness_inventory_peak = profile.witness_inventory_peak.max(keys);
     }
 
     #[cfg(test)]
@@ -784,7 +809,7 @@ where
                 Vec::new(),
                 root_changes,
                 None,
-                constructed,
+                ClosurePublication::constructed(constructed),
                 metadata,
             )
             .await?
@@ -859,7 +884,7 @@ where
                 Vec::new(),
                 roots,
                 None,
-                BTreeSet::new(),
+                ClosurePublication::default(),
                 Some(mutation),
             )
             .await?
@@ -884,7 +909,7 @@ where
             expectations,
             root_changes,
             exact_revision,
-            constructed_closures,
+            ClosurePublication::constructed(constructed_closures),
             None,
         )
         .await
@@ -898,7 +923,8 @@ where
             root_expectations = expectations.len(),
             root_changes = root_changes.len(),
             exact_revision = exact_revision.is_some(),
-            constructed_closures = constructed_closures.len()
+            constructed_closures = closures.constructed.len(),
+            checked_closures = closures.requested.len()
         )
     )]
     pub(super) async fn publish_inner_with_metadata(
@@ -907,7 +933,7 @@ where
         expectations: Vec<RootExpectation>,
         root_changes: Vec<RootChange>,
         exact_revision: Option<crate::RepositoryRevision>,
-        constructed_closures: BTreeSet<ObjectKey>,
+        closures: ClosurePublication,
         metadata: Option<MetadataMutation>,
     ) -> Result<ConditionalPublishResult, RepositoryError> {
         self.write_scope()
@@ -916,6 +942,13 @@ where
                     return Err(RepositoryError::LimitExceeded(format!(
                         "mutation has {} objects, limit is {}",
                         staged.len(),
+                        self.repository.limits.max_batch_objects
+                    )));
+                }
+                if closures.requested.len() > self.repository.limits.max_batch_objects {
+                    return Err(RepositoryError::LimitExceeded(format!(
+                        "mutation checks {} closures, limit is {}",
+                        closures.requested.len(),
                         self.repository.limits.max_batch_objects
                     )));
                 }
@@ -981,6 +1014,13 @@ where
                         inputs.insert(crate::metadata::PinResource::Object(target.clone()));
                     }
                 }
+                inputs.extend(
+                    closures
+                        .requested
+                        .iter()
+                        .cloned()
+                        .map(crate::metadata::PinResource::Object),
+                );
                 self.pin.protect(inputs).await?;
                 #[cfg(test)]
                 let phase = self.repository.time_publication_phase(0);
@@ -1020,7 +1060,7 @@ where
                                 &overlay,
                                 &staged,
                                 &root_changes,
-                                &constructed_closures,
+                                &closures,
                             )
                             .await?,
                         ),
@@ -1115,14 +1155,16 @@ where
         overlay: &BTreeMap<ObjectKey, ObjectRecord>,
         staged: &[StagedObject<'_>],
         root_changes: &[RootChange],
-        constructed_closures: &BTreeSet<ObjectKey>,
+        closures: &ClosurePublication,
     ) -> Result<Vec<ObjectKey>, RepositoryError> {
+        let constructed_closures = &closures.constructed;
         let formats = &self.repository.formats;
         let trust_construction = formats.is_builtin();
         let mut newly_verified = Vec::new();
         // Every walk is planned first and driven by one await: a debug build
         // reserves frame space per await point, and publication already runs
-        // beneath deep import and command futures.
+        // beneath deep import and command futures. `true` witnesses every
+        // object the walk verifies; `false` only the target, planned below.
         let mut walks = Vec::new();
         if trust_construction {
             // A raw blob's record already proves its closure, so a witness
@@ -1146,7 +1188,7 @@ where
                     .iter()
                     .map(|object| object.record().key())
                     .filter(|key| constructed_closures.contains(*key))
-                    .cloned(),
+                    .map(|key| (key.clone(), true)),
             );
         }
         for change in root_changes {
@@ -1162,25 +1204,51 @@ where
                     debug_assert!(overlay.contains_key(target));
                     continue;
                 }
-                walks.push(target.clone());
+                walks.push((target.clone(), true));
+            }
+        }
+        // Requested targets always pass normal format and link checks, but
+        // only the targets themselves gain witnesses: recording every object
+        // a walk visits would accumulate the transitive inventory.
+        let requested: Vec<_> = closures.requested.iter().cloned().collect();
+        let records = overlay_records(snapshot, overlay, &requested).await?;
+        for (target, record) in requested.into_iter().zip(records) {
+            let Some(record) = record else {
+                return Err(RepositoryError::RootNotPublishable {
+                    root: target.clone(),
+                    status: ClosureStatus::Missing {
+                        from: None,
+                        missing: target,
+                    },
+                });
+            };
+            // A present raw blob is complete; the pins keep its payload.
+            if !formats.intrinsically_complete(&record) {
+                newly_verified.push(target.clone());
+                walks.push((target, false));
             }
         }
         // Every walk shares the objects earlier walks proved, so each object
         // is read at most once per publication.
+        // Only walks that witness what they visit collect it: the proof set
+        // spills, but this list stays in memory until the commit.
         let mut proven = SpillSet::new(self.repository.spill_area(), "publication");
-        for target in walks {
-            match verify_closure_with(
+        let mut visited = Vec::new();
+        for (target, witness_visited) in walks {
+            let status = verify_closure_with(
                 self.repository.closure_verifier().with_proofs(&mut proven),
                 snapshot,
                 overlay,
                 &target,
                 None,
                 ClosureAudit::Incremental,
-                Some(&mut newly_verified),
+                witness_visited.then_some(&mut visited),
             )
-            .await?
-            {
-                ClosureStatus::Complete { .. } => {}
+            .await?;
+            #[cfg(test)]
+            self.repository.record_witness_inventory(visited.len());
+            match status {
+                ClosureStatus::Complete { .. } => newly_verified.append(&mut visited),
                 status => {
                     return Err(RepositoryError::RootNotPublishable {
                         root: target,
@@ -1199,6 +1267,46 @@ where
         staged: Vec<StagedObject<'_>>,
     ) -> Result<CommitResult, RepositoryError> {
         self.publish(staged, Vec::new()).await
+    }
+
+    /// Publish records and verify selected complete closures without naming
+    /// them. Targets may refer to staged or previously published objects.
+    /// Every target must pass normal format and link verification before any
+    /// records or closure witnesses become visible.
+    ///
+    /// Only requested targets acquire closure witnesses, and a built-in raw
+    /// blob needs none: its record already proves its closure. This does not
+    /// accumulate the transitive object inventory. Target count and
+    /// staged-object count are each bounded by `max_batch_objects`. Already
+    /// verified closures may be trusted, so this is a completeness check
+    /// rather than a fresh corruption audit. Witnesses do not retain objects:
+    /// after the mutation and other holds end, they remain collectible.
+    pub async fn publish_closures(
+        &self,
+        staged: Vec<StagedObject<'_>>,
+        targets: BTreeSet<ObjectKey>,
+    ) -> Result<CommitResult, RepositoryError> {
+        match self
+            .publish_inner_with_metadata(
+                staged,
+                Vec::new(),
+                Vec::new(),
+                None,
+                ClosurePublication {
+                    requested: targets,
+                    ..Default::default()
+                },
+                // Existing targets need only the metadata commit path; no
+                // payload flush is needed when nothing is staged.
+                Some(MetadataMutation::new()),
+            )
+            .await?
+        {
+            ConditionalPublishResult::Committed(result) => Ok(result),
+            ConditionalPublishResult::RootMismatch { .. } => {
+                unreachable!("unnamed closure publication has no root expectations")
+            }
+        }
     }
 
     /// Atomically publish records and set one exact named root.

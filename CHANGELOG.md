@@ -13,6 +13,10 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Added
 
+- `MutationSession::publish_closures` atomically publishes records and checks
+  bounded closure targets without creating named roots. Only the targets gain
+  reusable witnesses, raw blobs need none, and the mutation keeps the checked
+  graphs protected.
 - `RepositoryGeneration` orders the logical states of one repository.
   `MetadataReader::generation` and `RetainedReader::generation` report a
   reader's position in the commit order, so an application holding several

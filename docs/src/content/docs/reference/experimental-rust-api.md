@@ -128,6 +128,7 @@ links. An arbitrary `ObjectRecord` is not accepted as a publication substitute.
 Publication choices include:
 
 - `publish_unrooted` for verified records only;
+- `publish_closures` for records plus bounded, checked closure targets without named roots;
 - `publish_rooted` for records plus one root;
 - `publish` for records plus a batch of `RootChange` values;
 - `publish_at_revision` for an exact compare-and-swap; and
@@ -138,6 +139,15 @@ Records and root changes commit atomically. A root is published only after its
 resulting closure is complete and valid. Unrelated revision races can be
 retried; an observed root mismatch is returned as
 `ConditionalPublishResult::RootMismatch` without overwriting the changed name.
+
+`publish_closures` verifies staged or existing targets with normal format and
+link checks before atomically publishing records and requested witnesses.
+Staged-object and target counts are each limited by `max_batch_objects`.
+Existing witnesses may be reused; this is a completeness check, not a fresh
+corruption audit. Only the targets gain witnesses, and a built-in raw blob
+needs none because its record proves its own closure. The mutation retains
+the checked graphs for its lifetime, but their witnesses do not become
+permanent roots.
 
 ## Stable reads and retention
 

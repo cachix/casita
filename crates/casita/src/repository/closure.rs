@@ -330,7 +330,7 @@ async fn overlay_record(
 ///
 /// Staged records still win over committed ones; only the keys the overlay
 /// cannot answer reach the state backend, and they reach it in one call.
-async fn overlay_records(
+pub(super) async fn overlay_records(
     snapshot: &dyn MetadataSnapshot,
     overlay: &BTreeMap<ObjectKey, ObjectRecord>,
     keys: &[ObjectKey],
