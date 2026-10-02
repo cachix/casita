@@ -446,6 +446,20 @@ impl FormatRegistry {
         self.builtin
     }
 
+    /// Whether a present record alone proves its complete closure.
+    ///
+    /// A built-in raw blob has no links and its identity is the payload digest
+    /// the record binds, so its closure is the record and that payload. Both
+    /// outlive the record under the same rules as a stored witness, so the
+    /// repository derives this instead of storing one witness per blob.
+    #[cfg(feature = "native")]
+    pub(crate) fn intrinsically_complete(&self, record: &ObjectRecord) -> bool {
+        self.builtin
+            && record.links().is_empty()
+            && record.key().namespace().as_str() == crate::object::BLOB_NAMESPACE
+            && record.key().native_id() == record.payload().digest().as_bytes().as_slice()
+    }
+
     /// Resolve the verifier for an exact namespace.
     pub fn get(&self, namespace: &NamespaceId) -> Option<&Arc<dyn ObjectFormat>> {
         self.formats.get(namespace)

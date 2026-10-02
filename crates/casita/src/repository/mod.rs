@@ -329,6 +329,8 @@ where
     }
 }
 
+#[cfg(test)]
+mod closure_benchmarks;
 #[cfg(all(test, unix))]
 mod collection_benchmark;
 #[cfg(test)]

@@ -1672,6 +1672,20 @@
       ]
     },
     {
+      "id": "raw-blob-closures",
+      "suite_id": "state-and-publication",
+      "title": "Raw blob publication without stored closure witnesses",
+      "kind": "module",
+      "target": "benchmarks.suites.native_probes",
+      "default_arguments": [
+        "--probe",
+        "raw-blob-closures"
+      ],
+      "profiles": [
+        "custom"
+      ]
+    },
+    {
       "id": "logical-state",
       "suite_id": "state-and-publication",
       "title": "Logical state shard scaling",

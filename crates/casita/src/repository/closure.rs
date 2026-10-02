@@ -67,7 +67,8 @@ where
     /// Check a committed graph is complete, trusting closures already verified.
     ///
     /// This is a fast precondition check rather than a fresh audit: closures
-    /// already verified for the snapshot may be trusted.
+    /// already verified for the snapshot may be trusted, and a present
+    /// built-in raw blob is complete without reading its payload.
     pub async fn verify_closure_incremental(
         &self,
         root: &ObjectKey,
@@ -139,7 +140,8 @@ pub(crate) enum ClosureAudit {
     /// This is what `fsck` owes its caller: only reading the bytes back can
     /// find storage that decayed under a graph that is still well formed.
     Exhaustive,
-    /// Stop at objects whose closure the repository already verified.
+    /// Stop at objects whose closure the repository already verified, or
+    /// whose record alone proves it, as for a built-in raw blob.
     ///
     /// Records are immutable and only collection removes them, so a verified
     /// closure stays verified and re-reading it proves nothing new. This is
@@ -234,7 +236,11 @@ pub(super) async fn verify_closure_with<PS: BlobStore>(
             // these marks with the objects they vouch for, and a walk that
             // trusted a mark without looking would be unable to notice if one
             // ever outlived its object.
-            if settled {
+            // A built-in raw blob's record is its own completeness proof.
+            if settled
+                || (matches!(audit, ClosureAudit::Incremental)
+                    && formats.intrinsically_complete(&record))
+            {
                 continue;
             }
             let Some(format) = formats.get(key.namespace()) else {

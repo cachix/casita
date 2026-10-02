@@ -1023,7 +1023,18 @@ where
                     let trust_construction = self.repository.formats.is_builtin();
                     let mut newly_verified = Vec::new();
                     if trust_construction {
-                        newly_verified.extend(constructed_closures.iter().cloned());
+                        // A raw blob's record already proves its closure, so a
+                        // witness per file would only add metadata writes.
+                        newly_verified.extend(
+                            constructed_closures
+                                .iter()
+                                .filter(|key| {
+                                    !overlay.get(*key).is_some_and(|record| {
+                                        self.repository.formats.intrinsically_complete(record)
+                                    })
+                                })
+                                .cloned(),
+                        );
                     } else {
                         // Construction proves the built-in rules, not those a
                         // replacement verifier adds under the same namespace.
@@ -1046,6 +1057,10 @@ where
                     }
                     for change in &root_changes {
                         if let RootChange::Set { target, .. } = change {
+                            // Named targets keep a stored witness even where
+                            // completeness is derived: fast application root
+                            // changes accept only a persisted one.
+                            newly_verified.push(target.clone());
                             if trust_construction && constructed_closures.contains(target) {
                                 // The target record is part of this exact overlay, and
                                 // the private caller established its complete closure

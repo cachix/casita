@@ -100,6 +100,12 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Changed
 
+- Publishing a built-in raw blob no longer stores a closure witness for it,
+  and incremental closure checks no longer open its payload. A blob record has
+  no links and names its own payload, so its presence already proves a
+  complete closure. Imports no longer record a witness for every file, and the
+  import cache recognizes any present blob. Named root targets still keep a
+  witness.
 - On macOS, repositories whose state is a `TursoMetadataStore`, including
   `Repository::local` and custom compositions, flush the drive cache
   (`F_FULLFSYNC`) before each deletion batch. Commits sync only to the drive's

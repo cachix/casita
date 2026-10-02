@@ -4881,7 +4881,7 @@ async fn filesystem_nar_reread_bypasses_recognition() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn ingest_cache_requires_a_validated_closure_witness() {
+async fn ingest_cache_recognizes_present_raw_blobs() {
     let temporary = tempfile::tempdir().unwrap();
     let source = temporary.path().join("source");
     std::fs::create_dir(&source).unwrap();
@@ -4916,25 +4916,18 @@ async fn ingest_cache_requires_a_validated_closure_witness() {
         .remember(&[(identity, digest)])
         .await
         .unwrap();
-
-    let mutation = repository.mutation_session().await.unwrap();
+    // No witness is stored for a raw blob: its present record is the proof.
     assert_eq!(
-        mutation
-            .recognize_files(vec![Some(identity)])
+        repository
+            .metadata()
+            .snapshot()
+            .await
+            .unwrap()
+            .validated_closures(std::slice::from_ref(&key))
             .await
             .unwrap(),
-        vec![None],
-        "an unrooted object without a closure witness must be reread"
+        vec![false]
     );
-    mutation
-        .publish_rooted(
-            Vec::new(),
-            RootName::try_from("blobs/validated").unwrap(),
-            key,
-        )
-        .await
-        .unwrap();
-    drop(mutation);
 
     let mutation = repository.mutation_session().await.unwrap();
     let mut changed = identity;
@@ -4957,6 +4950,23 @@ async fn ingest_cache_requires_a_validated_closure_witness() {
             .await
             .unwrap()
             .is_empty()
+    );
+    drop(mutation);
+
+    // Once collection removes the unrooted record, the remembered identity no
+    // longer names committed content and the file must be read again.
+    crate::flush_repository_leases().await.unwrap();
+    assert_eq!(
+        repository.collect().await.unwrap().removed.logical_objects,
+        1
+    );
+    let mutation = repository.mutation_session().await.unwrap();
+    assert_eq!(
+        mutation
+            .recognize_files(vec![Some(identity)])
+            .await
+            .unwrap(),
+        vec![None]
     );
 }
 
