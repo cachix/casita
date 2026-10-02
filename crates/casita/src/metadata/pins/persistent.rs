@@ -197,7 +197,12 @@ impl FilePinStore {
             let mut temporary = tempfile::NamedTempFile::new_in(self.parent()).map_err(backend)?;
             temporary.write_all(bytes).map_err(backend)?;
             temporary.as_file().sync_all().map_err(backend)?;
-            temporary.persist(&self.path).map_err(backend)?;
+            let temporary = temporary.into_temp_path();
+            crate::durable_rename::replace(&temporary, &self.path).map_err(backend)?;
+            // The rename consumed the temporary name.
+            let _ = temporary.keep();
+            // Windows flushed the renamed file; it cannot open directories.
+            #[cfg(unix)]
             std::fs::File::open(self.parent())
                 .and_then(|directory| directory.sync_all())
                 .map_err(backend)?;

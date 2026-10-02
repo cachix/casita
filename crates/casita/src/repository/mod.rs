@@ -329,7 +329,7 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod collection_benchmark;
 #[cfg(test)]
 mod fsck_benchmark;

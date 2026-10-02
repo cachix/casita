@@ -194,7 +194,7 @@ async fn cancelled_publisher_retains_catalog_until_commit_settles() {
             gate: Some(gate.clone()),
         },
     ));
-    let publisher = {
+    let mut publisher = {
         let repository = repository.clone();
         tokio::spawn(async move {
             let session = repository.mutation_session().await.unwrap();
@@ -202,7 +202,11 @@ async fn cancelled_publisher_retains_catalog_until_commit_settles() {
             session.publish_unrooted(vec![staged]).await.unwrap();
         })
     };
-    gate.entered.notified().await;
+    // A publisher that fails before its commit never reaches the gate.
+    tokio::select! {
+        _ = gate.entered.notified() => {}
+        result = &mut publisher => panic!("publisher ended before its commit: {result:?}"),
+    }
     publisher.abort();
     assert!(publisher.await.unwrap_err().is_cancelled());
     let inventory = pins.inventory().await.unwrap();

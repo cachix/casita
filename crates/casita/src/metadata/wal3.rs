@@ -3164,7 +3164,9 @@ mod tests {
                 .stderr(Stdio::from(log.as_file().try_clone().unwrap()))
                 .spawn()
                 .expect("rustfs from devenv.nix must start");
-            let deadline = Instant::now() + Duration::from_secs(10);
+            // A cold start on Windows runners can take well over ten seconds;
+            // readiness returns as soon as the server answers.
+            let deadline = Instant::now() + Duration::from_secs(60);
             while Instant::now() < deadline {
                 if Self::ready(address) {
                     return Self {
@@ -3179,7 +3181,7 @@ mod tests {
             let _ = child.kill();
             let _ = child.wait();
             panic!(
-                "rustfs did not become ready on {address} within ten seconds\n{}",
+                "rustfs did not become ready on {address} within sixty seconds\n{}",
                 Self::log_tail(&log)
             );
         }

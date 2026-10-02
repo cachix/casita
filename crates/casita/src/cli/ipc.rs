@@ -14,7 +14,9 @@ mod restore;
 #[cfg(test)]
 mod tests;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Resource bounds for the local IPC listener.

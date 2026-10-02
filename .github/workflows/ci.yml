@@ -188,8 +188,8 @@ jobs:
         run: |
           $archive = Join-Path $env:RUNNER_TEMP 'rustfs.zip'
           $destination = Join-Path $env:RUNNER_TEMP 'rustfs'
-          Invoke-WebRequest 'https://github.com/rustfs/rustfs/releases/download/1.0.0-rc.1/rustfs-windows-x86_64-v1.0.0-rc.1.zip' -OutFile $archive
-          $expected = 'b651331be114a4907e499f851fcf0cfd22c790a61a2af3354c7b9850ead38dc6'
+          Invoke-WebRequest 'https://github.com/rustfs/rustfs/releases/download/1.0.0/rustfs-windows-x86_64-v1.0.0.zip' -OutFile $archive
+          $expected = '4ccf5858ce8e6f70f01af2394c8cc0e0878ee77faa6c20d3179153476554b7d8'
           if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
             throw 'RustFS archive checksum mismatch'
           }
