@@ -25,8 +25,8 @@ print("test result: ok. 1 passed; 0 failed;")
 '''
 
 
-def write_probe(path, audits="objects", peak="min(batch, witnesses)", builtin="3", policy='"stored-blobs"'):
-    """A fake probe; its defaults reproduce a correct stored-blobs probe."""
+def write_probe(path, audits="objects", peak="min(batch, witnesses)", builtin="2", policy='"derived-blobs"'):
+    """A fake probe; its defaults reproduce a correct derived-blobs probe."""
     path.write_text("#!" + sys.executable + "\n"
                     + FAKE_PROBE.replace("AUDITS", audits).replace("PEAK", peak)
                     .replace("BUILTIN", builtin).replace("POLICY", policy))
@@ -59,7 +59,7 @@ class GitClosureAuditBenchmarkTests(unittest.TestCase):
             report = json.loads(output.read_text())
             self.assertTrue(report["complete"])
             artifact, = report["artifacts"]
-            self.assertEqual(artifact["witness_policy"], "stored-blobs")
+            self.assertEqual(artifact["witness_policy"], "derived-blobs")
             self.assertEqual(report["configuration"]["commits"], [16, 64])
             self.assertEqual(report["configuration"]["publication_batch_objects"], [64, 4096])
             # 48 objects fit one 64-object witness batch; 192 objects need three.
@@ -89,13 +89,14 @@ class GitClosureAuditBenchmarkTests(unittest.TestCase):
             row = dict(commits=4, registry="builtin", publication_batch_objects=64,
                        objects=12, imported_objects=12, reused_objects=0, warm_imported_objects=0,
                        warm_source_bytes=0, link_audits=None, root="r", wall_nanos=1,
-                       witnesses=12, witness_commits=1, max_witness_batch=12,
+                       witnesses=8, witness_commits=1, max_witness_batch=8,
                        correctness=suite.CORRECTNESS)
-            suite.check_row(row, 4, "builtin", 64, "stored-blobs")
+            suite.check_row(row, 4, "builtin", 64, "derived-blobs")
+            suite.check_row({**row, "witnesses": 12, "max_witness_batch": 12}, 4, "builtin", 64, "stored-blobs")
             for audits in [0, 12]:
                 with self.assertRaisesRegex(suite.common.BenchmarkError, "builtin registry recorded"):
-                    suite.check_row({**row, "link_audits": audits}, 4, "builtin", 64, "stored-blobs")
-            custom = {**row, "registry": "custom", "link_audits": 144}
+                    suite.check_row({**row, "link_audits": audits}, 4, "builtin", 64, "derived-blobs")
+            custom = {**row, "registry": "custom", "link_audits": 144, "witnesses": 12, "max_witness_batch": 12}
             with self.assertRaisesRegex(suite.common.BenchmarkError, "expected 12"):
                 suite.check_row(custom, 4, "custom", 64, "stored-blobs")
             suite.check_row(custom, 4, "custom", 64, "stored-blobs", "baseline")
@@ -106,7 +107,7 @@ class GitClosureAuditBenchmarkTests(unittest.TestCase):
                                  ("witnesses", True)]:
                 with self.subTest(field=field, value=value):
                     with self.assertRaises(suite.common.BenchmarkError):
-                        suite.check_row({**row, field: value}, 4, "builtin", 64, "stored-blobs")
+                        suite.check_row({**row, field: value}, 4, "builtin", 64, "derived-blobs")
 
     def test_rejects_witness_commits_beyond_the_publication_batch(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -123,10 +124,17 @@ class GitClosureAuditBenchmarkTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             probe = root / "probe"
-            # A stored-blobs probe whose built-in imports skip blob witnesses.
-            write_probe(probe, builtin="2")
-            with self.assertRaisesRegex(suite.common.BenchmarkError, "witness policy 'stored-blobs' recorded"):
-                suite.main(arguments(probe, root / "r.json", registry="builtin"))
+            # Each policy holds a probe to its own built-in witness count: a
+            # derived-blobs probe that still witnesses blobs fails, as does a
+            # stored-blobs probe that skips them.
+            write_probe(probe, builtin="3", policy='"stored-blobs"')
+            self.assertEqual(suite.main(arguments(probe, root / "r.json", registry="builtin")), 0)
+            for declared, builtin in [("derived-blobs", "3"), ("stored-blobs", "2")]:
+                with self.subTest(declared=declared):
+                    write_probe(probe, builtin=builtin, policy=f'"{declared}"')
+                    with self.assertRaisesRegex(suite.common.BenchmarkError,
+                                                f"witness policy '{declared}' recorded"):
+                        suite.main(arguments(probe, root / "r.json", registry="builtin"))
             for policy in ['"unknown"', "None"]:
                 with self.subTest(policy=policy):
                     write_probe(probe, policy=policy)
@@ -148,7 +156,7 @@ class GitClosureAuditBenchmarkTests(unittest.TestCase):
             self.assertEqual([p["variant"] for p in report["processes"]],
                              ["baseline", "candidate", "candidate", "baseline"])
             self.assertEqual([(a["variant"], a["witness_policy"]) for a in report["artifacts"]],
-                             [("baseline", "stored-blobs"), ("candidate", "stored-blobs")])
+                             [("baseline", "derived-blobs"), ("candidate", "derived-blobs")])
             summary, = report["paired_summary"]
             self.assertEqual((summary["baseline_link_audits"], summary["candidate_link_audits"]), (144, 12))
             self.assertEqual(summary["candidate_max_witness_batch"], 12)
@@ -159,6 +167,25 @@ class GitClosureAuditBenchmarkTests(unittest.TestCase):
             rows[-1]["root"] = "different root"
             with self.assertRaisesRegex(suite.common.BenchmarkError, "root"):
                 suite.summarize_pairs(rows)
+
+    def test_paired_runs_hold_each_artifact_to_its_own_policy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            probe, baseline = root / "probe", root / "baseline"
+            write_probe(probe)
+            # The preceding revision: built-in imports witnessed every blob.
+            write_probe(baseline, builtin="3", policy='"stored-blobs"')
+            output = root / "paired.json"
+            self.assertEqual(suite.main(["--probe-binary", str(probe), "--baseline-binary", str(baseline),
+                                         "--no-build", "--output", str(output), "--commits", "16",
+                                         "--registry", "builtin", "--publication-batch-objects", "16"]), 0)
+            report = json.loads(output.read_text())
+            self.assertEqual([(a["variant"], a["witness_policy"]) for a in report["artifacts"]],
+                             [("baseline", "stored-blobs"), ("candidate", "derived-blobs")])
+            summary, = report["paired_summary"]
+            self.assertEqual((summary["baseline_witnesses"], summary["candidate_witnesses"]), (48, 32))
+            self.assertEqual((summary["baseline_max_witness_batch"], summary["candidate_max_witness_batch"]),
+                             (16, 16))
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ from __future__ import annotations
 from benchmarks.suites import repository as common
 
 # Whether built-in imports store a witness for every present Git blob.
-STORES_BLOB_WITNESSES = {"stored-blobs": True}
+STORES_BLOB_WITNESSES = {"stored-blobs": True, "derived-blobs": False}
 
 
 def declared(artifact, row):

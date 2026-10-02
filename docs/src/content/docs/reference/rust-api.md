@@ -43,11 +43,12 @@ reuses complete stored subtrees across unrelated revisions and repositories.
 It creates no named roots or serving-view inventory. The returned
 `GitClosureImportOutcome` contains a `report` and a retained `reader`; keep the
 reader alive until application roots have been published. A fully stored
-selection does not access the source directory. Completeness records are
-committed in bounded batches, and only once the whole selection is proven
-complete; repeating an interrupted import completes them. Report counters
-describe work performed and reuse boundaries, not the size of the complete
-reachable graph.
+selection does not access the source directory. A present blob is complete
+on its own, so imports store a completeness record for a blob only when it is
+a selected root. Completeness records are committed in bounded batches, and
+only once the whole selection is proven complete; repeating an interrupted
+import completes them. Report counters describe work performed and reuse
+boundaries, not the size of the complete reachable graph.
 
 `Reader` implements Tokio `AsyncRead` and `AsyncSeek`. It keeps the selected
 object's content protected from collection until dropped. `VerifiedReader`

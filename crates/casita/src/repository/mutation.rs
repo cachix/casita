@@ -1340,7 +1340,7 @@ where
         // object the walk verifies; `false` only the target, planned below.
         let mut walks = Vec::new();
         if trust_construction {
-            // A raw blob's record already proves its closure, so a witness
+            // A blob's record already proves its closure, so a witness
             // per file would only add metadata writes.
             newly_verified.extend(
                 constructed_closures
@@ -1395,7 +1395,7 @@ where
                     },
                 });
             };
-            // A present raw blob is complete; the pins keep its payload.
+            // A present built-in blob is complete; the pins keep its payload.
             if !formats.intrinsically_complete(&record) {
                 newly_verified.push(target.clone());
                 walks.push((target, false));

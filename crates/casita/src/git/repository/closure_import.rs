@@ -1,5 +1,6 @@
 //! Inventory-free Git closure ingestion. Stored records prove their own native
-//! identities; only a validated closure proves it is safe to stop descending.
+//! identities; only a validated closure, or a built-in blob's presence, proves
+//! it is safe to stop descending.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -194,6 +195,7 @@ pub(crate) async fn import<PS: BlobStore, SS: MetadataStore>(
     // Protect the existing graph before inspecting records. New objects are
     // protected by the mutation's staging pin; both protections overlap until
     // selected roots and all their now-complete links have been retained.
+    let formats = repository.formats();
     let hold = repository.retention_hold().await?;
     let snapshot = hold.snapshot();
     let area = repository.spill_area();
@@ -236,38 +238,77 @@ pub(crate) async fn import<PS: BlobStore, SS: MetadataStore>(
             ))
             .into());
         }
-        // Complete boundaries need only a presence/witness probe, not their
-        // potentially huge link arrays. Persistent backends answer this from
-        // payload-summary columns without decoding the object record.
-        let complete = snapshot
-            .validated_payload_batch(&keys)
-            .await
-            .map_err(RepositoryError::from)?;
+        // A present built-in Git blob is complete by derivation: it needs a
+        // presence probe only, and no witness unless it was selected, since
+        // fast application root changes accept only a stored one.
+        let (leaves, keys): (Vec<_>, Vec<_>) = keys
+            .into_iter()
+            .partition(|key| formats.complete_when_present(key));
+        let mut missing = VecDeque::new();
         let mut unresolved = Vec::new();
-        for (key, complete) in keys.into_iter().zip(complete) {
-            if complete.is_some() {
-                report.reused_objects += 1;
-            } else {
-                unresolved.push(key);
+        if !leaves.is_empty() {
+            let present = snapshot
+                .object_payload_batch(&leaves)
+                .await
+                .map_err(RepositoryError::from)?;
+            let mut selected = Vec::new();
+            for (key, present) in leaves.into_iter().zip(present) {
+                if roots.binary_search(&key).is_ok() {
+                    selected.push(key.clone());
+                }
+                if present.is_some() {
+                    report.reused_objects += 1;
+                } else {
+                    missing.push_back(key);
+                }
+            }
+            if !selected.is_empty() {
+                let witnessed = snapshot
+                    .validated_closures(&selected)
+                    .await
+                    .map_err(RepositoryError::from)?;
+                unresolved.extend(
+                    selected
+                        .into_iter()
+                        .zip(witnessed)
+                        .filter_map(|(key, witnessed)| (!witnessed).then_some(key)),
+                );
             }
         }
-        let records = snapshot
-            .object_batch(&unresolved)
-            .await
-            .map_err(RepositoryError::from)?;
-        let mut missing = VecDeque::new();
-        for (key, record) in unresolved.iter().zip(records) {
-            if let Some(record) = record {
-                report.reused_objects += 1;
-                for child in record.links() {
-                    queue
-                        .push((None, child.clone()))
-                        .await
-                        .map_err(RepositoryError::from)?;
+        if !keys.is_empty() {
+            // Complete boundaries need only a presence/witness probe, not their
+            // potentially huge link arrays. Persistent backends answer this from
+            // payload-summary columns without decoding the object record.
+            let complete = snapshot
+                .validated_payload_batch(&keys)
+                .await
+                .map_err(RepositoryError::from)?;
+            let mut linked = Vec::new();
+            for (key, complete) in keys.into_iter().zip(complete) {
+                if complete.is_some() {
+                    report.reused_objects += 1;
+                } else {
+                    linked.push(key);
                 }
-            } else {
-                missing.push_back(key.clone());
             }
+            let records = snapshot
+                .object_batch(&linked)
+                .await
+                .map_err(RepositoryError::from)?;
+            for (key, record) in linked.iter().zip(records) {
+                if let Some(record) = record {
+                    report.reused_objects += 1;
+                    for child in record.links() {
+                        queue
+                            .push((None, child.clone()))
+                            .await
+                            .map_err(RepositoryError::from)?;
+                    }
+                } else {
+                    missing.push_back(key.clone());
+                }
+            }
+            unresolved.extend(linked);
         }
         // Visited keys are already distinct. Each but a root was first reached
         // from an earlier frontier, which fixes when its witness publishes.
@@ -342,7 +383,8 @@ pub(crate) async fn import<PS: BlobStore, SS: MetadataStore>(
         session.publish_unrooted(staged).await?;
     }
     // Only now does every discovered native record have all its canonical
-    // dependencies. Native Git formats have no additional verify_links rules.
+    // dependencies. Built-in formats add no rules beyond construction, and a
+    // custom registry audits its own before any mark becomes visible.
     // Mark in bounded batches without rereading payloads or retaining an O(N)
     // in-memory inventory. A failed discovery cannot publish any false marks.
     session

@@ -9,19 +9,25 @@ from benchmarks import dashboard, revisions
 from benchmarks.suites import git_closure_audit, git_closure_import
 from benchmarks.tests import test_git_closure_audit as audit
 from benchmarks.tests import test_git_closure_import as closure_import
+from benchmarks.tests import test_git_witness_policy as policy
 
 # Each suite's forwarded arguments select two values of every dimension they
 # vary, so a report merging any two configurations would be caught.
 SUITES = [
-    ("git-closure-audit", audit.write_probe,
+    ("git-closure-audit", policy.audit_probe,
      ["--commits", "4,8", "--registry", "both", "--publication-batch-objects", "4,64"],
      ["cold-import"],
      {"commits": [4, 8], "registry": ["builtin", "custom"], "publication_batch_objects": [4, 64]}),
-    ("git-closure-import", closure_import.write_probe,
+    ("git-closure-import", policy.import_probe,
      ["--counts", "3,4", "--max-buffered-bytes", "1024,2048", "--backend", "both", "--layout", "both"],
      ["cold", "subtree-delta", "warm", "wide-delta"],
      {"files": [3, 4], "max_buffered_bytes": [1024, 2048], "backend": ["memory", "local"],
       "packed": [False, True]}),
+    # The manifest's own arguments select this suite's single workload.
+    ("git-closure-import-small-files", policy.import_probe, [],
+     ["cold", "subtree-delta", "warm", "wide-delta"],
+     {"files": [16384], "file_bytes": [64], "max_buffered_bytes": [67108864], "backend": ["local"],
+      "packed": [True], "concurrency": [16]}),
 ]
 ROUNDS = 2
 
@@ -45,8 +51,9 @@ class GitClosureReportTests(unittest.TestCase):
                 root = pathlib.Path(directory)
                 series = [revisions.RevisionSpec(label, label, label, digit * 40)
                           for label, digit in [("before", "a"), ("after", "b")]]
-                for revision in series:
-                    write_probe(root / revision.label)
+                # The revisions on either side of derived Git blob completeness.
+                for revision, declared in zip(series, ["stored-blobs", "derived-blobs"]):
+                    write_probe(root / revision.label, declared, declared)
                 output = root / "output"
                 with (
                     mock.patch.object(revisions, "resolve_revisions", return_value=series),

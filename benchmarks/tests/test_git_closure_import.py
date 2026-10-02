@@ -29,8 +29,8 @@ print("test result: ok. 1 passed; 0 failed;")
 STORED = 'count + {"cold": 0, "warm": 0, "subtree-delta": 1, "wide-delta": 2}[operation]'
 
 
-def write_probe(path, policy='"stored-blobs"', blob_witnesses=STORED):
-    """A fake probe; its defaults reproduce a correct stored-blobs probe."""
+def write_probe(path, policy='"derived-blobs"', blob_witnesses="0"):
+    """A fake probe; its defaults reproduce a correct derived-blobs probe."""
     path.write_text("#!" + sys.executable + "\n"
                     + FAKE_PROBE.replace("POLICY", policy).replace("BLOB_WITNESSES", blob_witnesses))
     path.chmod(0o755)
@@ -169,17 +169,22 @@ class GitClosureBenchmarkTests(unittest.TestCase):
             probe = root / "probe"
             args = ["--probe-binary", str(probe), "--no-build", "--output", str(root / "r.json"),
                     "--counts", "3", "--max-buffered-bytes", "1024", "--backend", "memory", "--layout", "loose"]
-            write_probe(probe)
-            self.assertEqual(suite.main(args), 0)
-            report = json.loads((root / "r.json").read_text())
-            self.assertEqual([row["blob_witnesses"] for row in report["samples"]], [3, 3, 4, 5])
-            self.assertEqual(report["artifacts"][0]["witness_policy"], "stored-blobs")
-            # A delta blob left unwitnessed, or no count at all.
-            for blob_witnesses in ["count", "None"]:
-                with self.subTest(blob_witnesses=blob_witnesses):
-                    write_probe(probe, blob_witnesses=blob_witnesses)
+            for declared, blob_witnesses, expected in [("derived-blobs", "0", [0, 0, 0, 0]),
+                                                       ("stored-blobs", STORED, [3, 3, 4, 5])]:
+                with self.subTest(declared=declared):
+                    write_probe(probe, policy=f'"{declared}"', blob_witnesses=blob_witnesses)
+                    self.assertEqual(suite.main(args), 0)
+                    report = json.loads((root / "r.json").read_text())
+                    self.assertEqual([row["blob_witnesses"] for row in report["samples"]], expected)
+                    self.assertEqual(report["artifacts"][0]["witness_policy"], declared)
+            # Witnessed blobs under derived-blobs; a delta blob left unwitnessed
+            # under stored-blobs; or no count at all.
+            for declared, blob_witnesses in [("derived-blobs", STORED), ("derived-blobs", "1"),
+                                             ("stored-blobs", "count"), ("derived-blobs", "None")]:
+                with self.subTest(declared=declared, blob_witnesses=blob_witnesses):
+                    write_probe(probe, policy=f'"{declared}"', blob_witnesses=blob_witnesses)
                     with self.assertRaisesRegex(suite.common.BenchmarkError,
-                                                "under witness policy 'stored-blobs' stored"):
+                                                f"under witness policy '{declared}' stored"):
                         suite.main(args)
             for policy in ['"unknown"', "None"]:
                 with self.subTest(policy=policy):

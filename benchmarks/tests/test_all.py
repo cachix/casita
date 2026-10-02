@@ -23,6 +23,18 @@ class AllSuiteTests(unittest.TestCase):
         self.assertIn("/binaries/git_closure_import", args)
         self.assertIn("--no-build", args)
 
+    def test_small_file_closure_imports_share_the_probe_with_a_fixed_workload(self):
+        commands = runner.build_commands(["git-closure-import", "git-closure-import-small-files"],
+                                         pathlib.Path("/build"))
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(commands[0][commands[0].index("--test") + 1], "git_closure_import")
+        args = runner.suite_arguments("git-closure-import-small-files", pathlib.Path("/binaries"), "smoke", 1)
+        self.assertIn("/binaries/git_closure_import", args)
+        entry, = [entry for entry in cli.entrypoints() if entry["id"] == "git-closure-import-small-files"]
+        workload = entry["default_arguments"]
+        self.assertEqual(workload[workload.index("--counts") + 1], "16384")
+        self.assertEqual(workload[workload.index("--file-bytes") + 1], "64")
+
     def test_git_closure_audit_builds_and_receives_its_custom_format_probe(self):
         commands = runner.build_commands(["git-closure-audit"], pathlib.Path("/build"))
         self.assertEqual(len(commands), 1)

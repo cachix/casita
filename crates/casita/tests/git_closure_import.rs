@@ -11,9 +11,10 @@ use casita::experimental::{
 use casita::import::GitClosureImport;
 
 /// The closure witnesses this revision's imports store, declared for the
-/// benchmark harness rather than inferred from what the probe measures:
-/// built-in imports witness every Git blob they import.
-const WITNESS_POLICY: &str = "stored-blobs";
+/// benchmark harness rather than inferred from what the probe measures: a
+/// present built-in Git blob is complete without a witness, so imports store
+/// none for one unless it was selected.
+const WITNESS_POLICY: &str = "derived-blobs";
 
 struct Source(tempfile::TempDir);
 impl Source {
@@ -421,6 +422,144 @@ async fn a_session_import_retains_its_closure_for_the_session() {
     );
 }
 
+/// A present built-in Git blob is its own completeness proof. Imports record
+/// no witness for it unless it was selected, and still stop there later.
+#[tokio::test]
+async fn git_blobs_derive_completeness_without_witness_rows() {
+    let source = Source::new("sha1");
+    let leaf_oid = source.blob(b"leaf contents");
+    let selected = source.blob(b"selected contents");
+    let root = tree(&source.tree(&format!("100644 blob {leaf_oid}\tfile\n")));
+    let leaf = key(GitObjectFormat::Sha1, GitObjectKind::Blob, &leaf_oid);
+    let selected = key(GitObjectFormat::Sha1, GitObjectKind::Blob, &selected);
+    let repository = Repository::<MemoryBlobStore, MemoryMetadataStore>::memory().unwrap();
+    let imported = repository
+        .import(source.request(vec![root.clone(), selected.clone()]))
+        .await
+        .unwrap();
+    assert_eq!(imported.report.imported_objects, 3);
+    // Selected roots keep the stored witness fast root changes require.
+    let witnesses = |keys: Vec<ObjectKey>| {
+        let repository = &repository;
+        async move {
+            repository
+                .metadata()
+                .snapshot()
+                .await
+                .unwrap()
+                .validated_closures(&keys)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(
+        witnesses(vec![root.clone(), leaf.clone(), selected.clone()]).await,
+        [true, false, true]
+    );
+    assert_eq!(
+        repository.verify_closure(&root).await.unwrap(),
+        ClosureStatus::Complete { objects: 2 }
+    );
+
+    let warm = repository
+        .import(GitClosureImport::new(
+            source.0.path().join("nonexistent"),
+            [root.clone(), selected.clone()],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(warm.report.imported_objects, 0);
+    assert_eq!(warm.report.reused_objects, 2);
+    assert_eq!(warm.report.source_bytes, 0);
+
+    // A new tree over the unwitnessed blob reuses it on presence alone.
+    let added = source.blob(b"added contents");
+    let changed = tree(&source.tree(&format!(
+        "100644 blob {leaf_oid}\tfile\n100644 blob {added}\tnew\n"
+    )));
+    let delta = repository
+        .import(source.request(vec![changed.clone()]))
+        .await
+        .unwrap();
+    assert_eq!(delta.report.imported_objects, 2);
+    assert_eq!(delta.report.reused_objects, 1);
+    assert_eq!(
+        witnesses(vec![
+            changed.clone(),
+            key(GitObjectFormat::Sha1, GitObjectKind::Blob, &added)
+        ])
+        .await,
+        [true, false]
+    );
+    assert_eq!(
+        repository.verify_closure(&changed).await.unwrap(),
+        ClosureStatus::Complete { objects: 3 }
+    );
+}
+
+#[path = "support/counting_blob_store.rs"]
+mod counting_blob_store;
+
+/// Publishing a new tree over present Git blobs reads only the tree: the
+/// incremental check settles each unwitnessed blob from its record.
+#[tokio::test]
+async fn incremental_checks_settle_git_blobs_without_reading_them() {
+    use std::sync::atomic::Ordering;
+    const FILES: usize = 8;
+    let source = Source::new("sha1");
+    let mut entries = String::new();
+    for index in 0..FILES {
+        let blob = source.blob(format!("file {index}").as_bytes());
+        entries.push_str(&format!("100644 blob {blob}\tfile{index}\n"));
+    }
+    let first = tree(&source.tree(&entries));
+    let payloads = counting_blob_store::CountingBlobStore::new();
+    let reads = payloads.reads.clone();
+    let repository = Repository::new(payloads, MemoryMetadataStore::new().unwrap());
+    let imported = repository
+        .import(source.request(vec![first]))
+        .await
+        .unwrap();
+    let oid = source.tree(&format!(
+        "{entries}120000 blob {}\tlink\n",
+        source.blob(b"file0")
+    ));
+    let body = Command::new("git")
+        .arg("-C")
+        .arg(source.0.path())
+        .args(["cat-file", "tree", &oid])
+        .output()
+        .unwrap()
+        .stdout;
+    let session = repository.mutation_session().await.unwrap();
+    let link = source.blob(b"file0");
+    let link = session
+        .stage_object(
+            key(GitObjectFormat::Sha1, GitObjectKind::Blob, &link),
+            b"file0",
+        )
+        .await
+        .unwrap();
+    let staged = session.stage_object(tree(&oid), &body).await.unwrap();
+    reads.store(0, Ordering::SeqCst);
+    session
+        .publish_rooted(
+            vec![link, staged],
+            "changed".try_into().unwrap(),
+            tree(&oid),
+        )
+        .await
+        .unwrap();
+    // Only the tree is opened. Stored and newly staged blobs alike are
+    // settled from their records.
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        repository.verify_closure(&tree(&oid)).await.unwrap(),
+        ClosureStatus::Complete { objects: FILES + 2 }
+    );
+    drop(imported);
+}
+
 /// Permanent workload: benchmark run git-closure-import. Correctness audits
 /// deliberately run outside the timed region.
 #[tokio::test]
@@ -576,6 +715,7 @@ async fn run_git_closure_benchmark<PS: casita::experimental::BlobStore, SS: Meta
             .count();
         let stored_blobs = match WITNESS_POLICY {
             "stored-blobs" => blobs.len(),
+            "derived-blobs" => 0,
             policy => panic!("unknown witness policy {policy}"),
         };
         assert_eq!(blob_witnesses, stored_blobs);

@@ -2866,6 +2866,23 @@ variant and complete workload: backend, layout, file count and size, content,
 concurrency and source window. Only repetitions of one configuration share an
 observation.
 
+`git-closure-import-small-files` registers the workload where storing a
+witness per blob was a large share of import cost: 16384 64-byte files from
+a packed source into a local repository, with a 64 MiB source window and 16
+objects staged concurrently. It uses the same probe and correctness gates,
+and is included in `benchmark all`. Deriving Git blob completeness was
+measured on it against the last `stored-blobs` revision:
+
+```sh
+benchmark run git-closure-import-small-files --repetitions 11 --baseline-binary /path/to/baseline --probe-binary /path/to/candidate --no-build --output /tmp/git-closure-derived-blobs.json
+```
+
+Over eleven pairs, cold imports fell from a median 4.46 s to 3.10 s, a median
+paired reduction of 31% (23% to 44%), as the stored blob witnesses fell from
+16384 to none. Wide deltas probe every present blob either way and stayed
+within noise: a median 3% reduction, with pairs from 26% slower to 9% faster.
+The host was shared.
+
 ## Git closure audit
 
 `git-closure-audit` imports one packed linear Git history whose commits each
@@ -2887,11 +2904,12 @@ implies, in full batches of the configured size.
 
 Every sample also checks exact imported counts, a source-free warm import and
 an exhaustive closure verification outside the timed region. Defaults straddle
-publication batching: 16 commits (48 objects) fit one 64-object witness batch
-while 64 commits span three, and 4096 commits span three default
-4096-object batches. Custom registries can only be configured over in-memory
-stores, so every case uses the memory backend. The suite is included in
-`benchmark all`.
+publication batching for custom registries, which witness every object: 16
+commits (48 objects) fit one 64-object witness batch while 64 commits span
+three, and 4096 commits span three default 4096-object batches. Built-in
+registries under `derived-blobs` witness only trees and commits, two per
+commit. Custom registries can only be configured over in-memory stores, so
+every case uses the memory backend. The suite is included in `benchmark all`.
 
 ```sh
 benchmark run git-closure-audit --profile smoke --output /tmp/git-closure-audit-smoke.json
@@ -2911,10 +2929,12 @@ publication batch and variant.
 
 Both Git closure probes declare a witness policy: a constant in their source
 naming the closure witnesses their revision's imports store. Under
-`stored-blobs`, imports witness every object they import. The harness never
-infers a policy from what a probe measured, so a regression fails the policy
-its own revision declares. Each probe asserts its own measurements against its
-declaration, and the harness holds every artifact exactly to it, rejects an
-unknown or changing one, and records it with the artifact. `benchmark
-revisions` therefore checks every revision strictly, including revisions on
-either side of a deliberate witness change.
+`stored-blobs`, imports witness every object they import. Under
+`derived-blobs`, a present built-in Git blob is complete without a witness, so
+built-in imports store none for one unless it is a selected root. The harness
+never infers a policy from what a probe measured, so a regression fails the
+policy its own revision declares. Each probe asserts its own measurements
+against its declaration, and the harness holds every artifact exactly to it,
+rejects an unknown or changing one, and records it with the artifact.
+`benchmark revisions` therefore checks every revision strictly, including
+revisions on either side of a deliberate witness change.

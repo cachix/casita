@@ -619,6 +619,16 @@
       "correctness": ["exact imported and reused object counts", "blob witnesses exactly as each probe's declared witness policy requires", "exhaustive closure verification", "zero source bytes for warm imports"]
     },
     {
+      "id": "git-closure-import-small-files",
+      "suite_id": "native-git",
+      "title": "Git closure imports of many small files, where stored witnesses per blob were a large share of cost",
+      "kind": "module",
+      "target": "benchmarks.suites.git_closure_import",
+      "default_arguments": ["--counts", "16384", "--file-bytes", "64", "--max-buffered-bytes", "67108864", "--concurrency", "16", "--layout", "packed", "--backend", "local"],
+      "profiles": ["smoke", "standard"],
+      "correctness": ["exact imported and reused object counts", "blob witnesses exactly as each probe's declared witness policy requires", "exhaustive closure verification", "zero source bytes for warm imports"]
+    },
+    {
       "id": "git-closure-audit",
       "suite_id": "native-git",
       "title": "Git closure import audits of linear histories with built-in and custom registries",

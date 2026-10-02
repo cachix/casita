@@ -171,9 +171,11 @@ def main(argv=None):
             for field in ("lockfile_sha256", "features", "default_features", "rustc_version", "rustflags"):
                 if artifacts[0]["build"].get(field) != artifacts[1]["build"].get(field):
                     raise common.BenchmarkError(f"paired build manifests differ in {field}")
-    # Each commit adds three objects. With 64-object witness batches, 16 commits
-    # fit in one batch and 64 span three. The default 4096-object batch holds
-    # 1024 commits in one batch, while 4096 commits span three.
+    # Each commit adds three objects. Custom registries witness all three, and
+    # built-in ones two under derived-blobs. With 64-object witness batches, 16
+    # commits fit in one batch while 64 span three or two. The default
+    # 4096-object batch holds 1024 commits in one batch, while 4096 commits span
+    # three or two.
     commits = args.commits or ([16, 64] if args.profile == "smoke" else [16, 64, 256, 1024, 4096])
     registries = ["builtin", "custom"] if args.registry == "both" else [args.registry]
     batches = args.publication_batch_objects

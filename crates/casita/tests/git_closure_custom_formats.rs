@@ -16,14 +16,16 @@ use std::sync::{
 use tokio::sync::Notify;
 
 /// The closure witnesses this revision's imports store, declared for the
-/// benchmark harness rather than inferred from what the probe measures:
-/// built-in imports witness every Git blob they import.
-const WITNESS_POLICY: &str = "stored-blobs";
+/// benchmark harness rather than inferred from what the probe measures: a
+/// present built-in Git blob is complete without a witness, so imports store
+/// none for one unless it was selected.
+const WITNESS_POLICY: &str = "derived-blobs";
 /// Witnesses a built-in import stores per linear-history commit under the
-/// declared policy: its commit, tree and blob. Custom registries witness all
-/// three under any policy.
+/// declared policy: its commit and tree, and its blob only under
+/// stored-blobs. Custom registries witness all three under any policy.
 const BUILTIN_WITNESSES_PER_COMMIT: usize = match WITNESS_POLICY.as_bytes() {
     b"stored-blobs" => 3,
+    b"derived-blobs" => 2,
     _ => panic!("unknown witness policy"),
 };
 

@@ -146,8 +146,8 @@ retried; an observed root mismatch is returned as
 link checks before atomically publishing records and requested witnesses.
 Staged-object and target counts are each limited by `max_batch_objects`.
 Existing witnesses may be reused; this is a completeness check, not a fresh
-corruption audit. Only the targets gain witnesses, and a built-in raw blob
-needs none because its record proves its own closure. The mutation retains
+corruption audit. Only the targets gain witnesses, and a built-in raw or Git
+blob needs none because its record proves its own closure. The mutation retains
 the checked graphs for its lifetime, but their witnesses do not become
 permanent roots.
 

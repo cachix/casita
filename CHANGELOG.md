@@ -127,6 +127,10 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
   complete closure. Imports no longer record a witness for every file, and the
   import cache recognizes any present blob. Named root targets still keep a
   witness.
+- Built-in Git blobs, like raw blobs, need no stored closure witness. Git
+  closure imports record witnesses only for trees, commits, tags and selected
+  roots, probe blobs for presence alone, and incremental closure checks settle
+  stored or staged Git blobs without opening their payloads.
 - Republishing objects or witnesses that already exist no longer rewrites
   them. Turso stores a new object's witness with its row and updates only
   rows still unwitnessed; WAL3 deltas carry only objects and witnesses the
