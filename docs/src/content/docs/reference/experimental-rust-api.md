@@ -118,8 +118,10 @@ The main staging methods are:
 
 - `stage_blob` and `stage_blob_reader` for raw payloads;
 - `stage_object` for a caller-selected generic key and payload;
-- `stage_directory` for canonical directory data; and
-- `stage_existing` when the payload already exists in the same store.
+- `stage_directory` for canonical directory data;
+- `stage_existing` when the payload already exists in the same store; and
+- `stage_git_blob_file` and `stage_git_blob_files` to reuse stored native Git
+  blobs as ordinary files without rereading their bytes (built-in formats only).
 
 Staging returns `StagedObject`, a sealed value tied to that exact repository
 instance. Namespace verification has already reproduced its identity and

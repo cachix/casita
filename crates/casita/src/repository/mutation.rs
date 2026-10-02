@@ -608,6 +608,115 @@ where
         Ok(())
     }
 
+    /// Register a stored, repository-verified native Git blob as an ordinary
+    /// file without reading or writing its payload again. Git blob bodies are
+    /// exactly file contents; their verified records already authenticate the
+    /// raw payload digest and length. Other Git kinds are rejected.
+    #[cfg(feature = "git")]
+    #[tracing::instrument(name = "repository.stage_git_blob_file", level = "debug", skip_all)]
+    pub async fn stage_git_blob_file<'hold>(
+        &'hold self,
+        key: &ObjectKey,
+    ) -> Result<StagedObject<'hold>, RepositoryError> {
+        let mut staged = self.stage_git_blob_files(std::slice::from_ref(key)).await?;
+        Ok(staged.pop().expect("one staged file per Git blob"))
+    }
+
+    /// Register stored native Git blobs as ordinary files, in order, with one
+    /// metadata read, one protection request and one recheck for the batch.
+    ///
+    /// The count is bounded by `max_batch_objects`. A repository with a
+    /// replacement format registry must stage file bytes normally: its blob
+    /// verifier may impose rules a Git record does not prove.
+    #[cfg(feature = "git")]
+    #[tracing::instrument(
+        name = "repository.stage_git_blob_files",
+        level = "debug",
+        skip_all,
+        fields(blobs = keys.len())
+    )]
+    pub async fn stage_git_blob_files<'hold>(
+        &'hold self,
+        keys: &[ObjectKey],
+    ) -> Result<Vec<StagedObject<'hold>>, RepositoryError> {
+        if keys.len() > self.repository.limits.max_batch_objects {
+            return Err(RepositoryError::LimitExceeded(format!(
+                "registration has {} Git blobs, limit is {}",
+                keys.len(),
+                self.repository.limits.max_batch_objects
+            )));
+        }
+        if !self.repository.formats.is_builtin() {
+            return Err(RepositoryError::InvalidInput(
+                "Git blob registration requires the built-in format registry".into(),
+            ));
+        }
+        for key in keys {
+            let (_, kind, _) = crate::git::git_key_parts(key)
+                .map_err(|error| RepositoryError::InvalidInput(error.to_string()))?;
+            if kind != crate::git::GitObjectKind::Blob {
+                return Err(RepositoryError::InvalidInput(format!(
+                    "plain files require a native Git blob, not {key}"
+                )));
+            }
+        }
+        self.write_scope()
+            .run(async {
+                // Read metadata first to discover all required protections.
+                // Recheck after admission: collection may have removed a
+                // candidate before the receiving mutation could protect it.
+                let records = {
+                    let (snapshot, _metadata_pin) =
+                        crate::metadata::read_snapshot(self.repository.state.as_ref()).await?;
+                    snapshot.object_batch(keys).await?
+                };
+                let mut verified = Vec::with_capacity(keys.len());
+                let mut resources = BTreeSet::new();
+                for (key, record) in keys.iter().zip(&records) {
+                    let record = record
+                        .as_ref()
+                        .ok_or_else(|| RepositoryError::Absent(key.to_string()))?;
+                    if !record.links().is_empty() {
+                        return Err(RepositoryError::InvalidInput(
+                            "Git blobs cannot have forward links".into(),
+                        ));
+                    }
+                    let file = BlobFormat::seal_written(
+                        record.payload(),
+                        record.payload_size(),
+                        &self.repository.limits,
+                    )?;
+                    resources.insert(crate::metadata::PinResource::Object(key.clone()));
+                    resources.insert(crate::metadata::PinResource::Object(
+                        file.record().key().clone(),
+                    ));
+                    resources.insert(crate::metadata::PinResource::Blob(record.payload()));
+                    verified.push(file);
+                }
+                self.pin.protect(resources).await?;
+                let (current, _current_pin) =
+                    crate::metadata::read_snapshot(self.repository.state.as_ref()).await?;
+                for ((key, before), after) in keys
+                    .iter()
+                    .zip(&records)
+                    .zip(current.object_batch(keys).await?)
+                {
+                    if before.as_ref() != after.as_ref() {
+                        return Err(RepositoryError::Absent(key.to_string()));
+                    }
+                }
+                Ok(verified
+                    .into_iter()
+                    .map(|verified| StagedObject {
+                        verified,
+                        repository: self.repository.staging_identity.clone(),
+                        _hold: std::marker::PhantomData,
+                    })
+                    .collect())
+            })
+            .await
+    }
+
     /// Verify an already durable payload under an exact logical key.
     #[tracing::instrument(name = "repository.stage_existing", level = "debug", skip_all)]
     pub async fn stage_existing<'hold>(

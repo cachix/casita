@@ -592,6 +592,15 @@
       ]
     },
     {
+      "id": "git-blob-file",
+      "suite_id": "native-git",
+      "title": "Register verified Git blob contents as files without payload rereads",
+      "kind": "module",
+      "target": "benchmarks.suites.git_blob_file",
+      "profiles": ["smoke", "standard"],
+      "correctness": ["identical file identities", "exact payload lengths", "complete closures", "byte-for-byte readback"]
+    },
+    {
       "id": "git-import-profile",
       "suite_id": "native-git",
       "title": "Stage-level profiling of git-scale initial, unchanged and incremental imports",

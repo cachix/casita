@@ -11,6 +11,43 @@ from benchmarks import all as runner
 from benchmarks import cli
 
 class AllSuiteTests(unittest.TestCase):
+    def test_build_retains_registered_integration_probe(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            probe = root / "git_blob_file"
+            probe.write_bytes(b"integration probe")
+
+            def build(command, **kwargs):
+                self.assertIn("test", command)
+                self.assertEqual(command[command.index("--test") + 1], "git_blob_file")
+                kwargs["stdout"].write(json.dumps({
+                    "reason": "compiler-artifact",
+                    "target": {"kind": ["test"], "name": "git_blob_file"},
+                    "executable": str(probe),
+                }) + "\n")
+
+            with mock.patch.object(runner.subprocess, "run", side_effect=build):
+                binaries = runner.build_binaries(root, root / "build", ["git-blob-file"])
+            self.assertEqual((binaries / "git_blob_file").read_bytes(), b"integration probe")
+            artifacts = json.loads((root / "artifacts.json").read_text())
+            self.assertEqual(artifacts["git_blob_file"]["sha256"], runner.fingerprint(probe))
+
+    def test_git_blob_file_builds_and_receives_its_integration_probe(self):
+        commands = runner.build_commands(["git-blob-file"], pathlib.Path("/build"))
+        self.assertEqual(len(commands), 1)
+        command = commands[0]
+        self.assertIn("test", command)
+        self.assertEqual(command[command.index("--test") + 1], "git_blob_file")
+        self.assertIn("--no-default-features", command)
+        self.assertEqual(command[command.index("--features") + 1], "native,git,experimental")
+        self.assertNotIn("--all-features", command)
+        from benchmarks.revisions import SUITE_BUILD_SPECS
+        with mock.patch.dict(SUITE_BUILD_SPECS, {"alias-probe": SUITE_BUILD_SPECS["git-blob-file"]}):
+            self.assertEqual(runner.build_commands(["git-blob-file", "alias-probe"], pathlib.Path("/build")), commands)
+        args = runner.suite_arguments("git-blob-file", pathlib.Path("/binaries"), "smoke", 1)
+        self.assertIn("/binaries/git_blob_file", args)
+        self.assertIn("--no-build", args)
+
     def test_rustfs_protocol_matrix_retains_failed_cases_in_all_ledger(self):
         with tempfile.TemporaryDirectory() as directory:
             output = pathlib.Path(directory) / "results"

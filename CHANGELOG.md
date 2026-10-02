@@ -13,6 +13,11 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Added
 
+- `MutationSession::stage_git_blob_file` and `stage_git_blob_files` register
+  stored verified native Git blobs as ordinary files without reading or
+  writing their payloads again. A batch takes one metadata read, one
+  protection request and one recheck. The receiving mutation pins the reused
+  bytes, and repositories with a replacement format registry refuse it.
 - `MutationSession::publish_closures` atomically publishes records and checks
   bounded closure targets without creating named roots. Only the targets gain
   reusable witnesses, raw blobs need none, and the mutation keeps the checked

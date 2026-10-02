@@ -2756,3 +2756,25 @@ for exact source, binary, dependency, and result provenance.
 The [root-prefix](root-prefix.md) suite checks indexed named-root ranges at
 255 and 257 matches, plus sparse and dense prefixes in a 4,096-root store.
 It is registered in `manifest.json` and included in `benchmark all`.
+
+## Verified Git blob files
+
+`benchmark run git-blob-file` compares metadata-only registration of stored Git
+blobs with rereading the stored payload in the same binary. It is included in
+`benchmark all`; every sample checks identity, length, complete closure and exact
+readback. Single files cover empty and one-byte files and both sides of 64 KiB
+on memory and local storage; the standard profile adds both sides of 4 MiB.
+Batches register 64 (smoke) or 1024 (standard) distinct files around 64 KiB in
+one `stage_git_blob_files` call against one reread per file. Timing covers each
+strategy's metadata reads and staging and publishing the files with
+`publish_closures`; fixture creation, session setup and audits are excluded.
+Selections with no supported case, such as batches of 4 MiB files, are rejected
+before anything is built.
+
+```sh
+benchmark run git-blob-file --profile smoke --output /tmp/git-blob-file.json
+```
+
+Use `--repetitions 7 --cpu-affinity 0,1,2,3` for paired investigation runs, choosing
+CPUs allowed on the host. Frozen integration executables can be supplied through
+`--probe-binary` with `--no-build`.`--file-bytes` and `--files` override the profile's cases.
