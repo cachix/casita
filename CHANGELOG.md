@@ -195,6 +195,10 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Fixed
 
+- Traversals that spill to temporary storage open their spill database on
+  the blocking pool, like every later statement, instead of parsing its schema
+  on the caller's stack. Deep publications with small spill limits could
+  overflow the stack of a debug build.
 - An S3 repository no longer becomes unreadable after a commit raced a WAL
   collection run by another handle. The collection appends a checkpoint of the
   unchanged state, so the commit found its log position taken, saw the same
