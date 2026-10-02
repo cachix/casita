@@ -392,7 +392,7 @@ fn commit_prepared(root: &FsPath, prepared: Vec<PreparedLocalPut>) -> io::Result
             .ok_or_else(|| io::Error::other("durable object path has no parent"))?;
         #[cfg(test)]
         super::crash_tests::file_checkpoint("before-rename", &object.destination);
-        crate::durable_rename::rename_write_through(&object.temporary, &object.destination)?;
+        crate::durable_rename::replace(&object.temporary, &object.destination)?;
         #[cfg(test)]
         super::crash_tests::file_checkpoint("after-rename", &object.destination);
         parents.push(parent.to_path_buf());

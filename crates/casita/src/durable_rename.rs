@@ -7,10 +7,14 @@ use std::path::Path;
 ///
 /// The caller must flush the file's data first. Unix has no per-rename flush:
 /// callers sync the parent directory. Windows cannot open directories to flush
-/// them, so the renamed file is flushed instead; NTFS records the new name in
-/// the file's own metadata, which that flush commits. The rename uses POSIX
-/// semantics, so it replaces a destination other processes still have open.
-pub(crate) fn rename_write_through(from: &Path, to: &Path) -> io::Result<()> {
+/// them, so the renamed file is flushed instead. That relies on NTFS keeping
+/// the new name in the file's own metadata, which the flush commits; Windows
+/// documents no stronger rename durability. The rename uses POSIX semantics,
+/// so it replaces a destination other processes still have open.
+///
+/// A failed Windows flush returns an error after `to` was already replaced,
+/// the same outcome as a failed directory sync after the rename on Unix.
+pub(crate) fn replace(from: &Path, to: &Path) -> io::Result<()> {
     std::fs::rename(from, to)?;
     #[cfg(windows)]
     std::fs::OpenOptions::new()
@@ -31,7 +35,7 @@ mod tests {
         let to = directory.path().join("current");
         std::fs::write(&from, b"new").unwrap();
         std::fs::write(&to, b"old").unwrap();
-        rename_write_through(&from, &to).unwrap();
+        replace(&from, &to).unwrap();
         assert_eq!(std::fs::read(&to).unwrap(), b"new");
         assert!(!from.exists());
     }
@@ -42,7 +46,7 @@ mod tests {
         let from = directory.path().join("new");
         let to = directory.path().join("absent");
         std::fs::write(&from, b"new").unwrap();
-        rename_write_through(&from, &to).unwrap();
+        replace(&from, &to).unwrap();
         assert_eq!(std::fs::read(&to).unwrap(), b"new");
     }
 
@@ -56,7 +60,7 @@ mod tests {
         std::fs::write(&from, b"new").unwrap();
         std::fs::write(&to, b"old").unwrap();
         let reader = std::fs::File::open(&to).unwrap();
-        rename_write_through(&from, &to).unwrap();
+        replace(&from, &to).unwrap();
         drop(reader);
         assert_eq!(std::fs::read(&to).unwrap(), b"new");
     }
@@ -64,7 +68,7 @@ mod tests {
     #[test]
     fn a_missing_source_is_an_error() {
         let directory = tempfile::tempdir().unwrap();
-        let error = rename_write_through(
+        let error = replace(
             &directory.path().join("missing"),
             &directory.path().join("to"),
         )
@@ -84,7 +88,7 @@ mod tests {
         let from = deep.join("new");
         let to = deep.join("current");
         std::fs::write(&from, b"new").unwrap();
-        rename_write_through(&from, &to).unwrap();
+        replace(&from, &to).unwrap();
         assert_eq!(std::fs::read(&to).unwrap(), b"new");
     }
 }
