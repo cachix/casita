@@ -9,7 +9,7 @@ use std::task::{Context, Poll};
 
 use async_trait::async_trait;
 use futures::future::{FusedFuture, FutureExt};
-use futures::stream::{FuturesUnordered, StreamExt, TryStreamExt};
+use futures::stream::{FuturesUnordered, StreamExt};
 use object_store::{ObjectStore, path::Path};
 
 use super::manifest::encode_manifest;
@@ -23,7 +23,7 @@ use crate::byte_budget::ByteBudget;
 use crate::digest::BlobId;
 use crate::error::Error;
 use crate::metadata::{PinResource, WritePins};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Open a writer whose duplex reader feeds the background upload pipeline.
 #[allow(clippy::too_many_arguments)]
@@ -65,6 +65,10 @@ pub(super) fn open(
         _pins: pins,
     })
 }
+
+/// Upload windows of completed metadata a writer buffers behind its earliest
+/// pending chunk before it stops admitting new chunks.
+const REORDER_WINDOWS: usize = 16;
 
 /// Read `reader` to EOF, chunking it with FastCDC (min/max sized at half and
 /// double the average), deduplicating and uploading each chunk, and writing the
@@ -163,14 +167,25 @@ async fn chunk_and_upload(
         return Ok((blob_digest, size));
     }
 
-    let chunks: Vec<ChunkMeta> = {
+    let mut manifest = super::pages::ChunkManifest::new(super::pages::Pages {
+        objects: object_store.clone(),
+        base: base_path.clone(),
+        immutable: immutable_cache,
+    });
+    {
         use tokio::io::AsyncReadExt;
         let mut source = std::io::Cursor::new(head).chain(&mut hashing);
         let mut chunker = fastcdc::v2020::AsyncStreamCDC::new(&mut source, min, avg, max);
         let stream = chunker.as_stream();
         futures::pin_mut!(stream);
         let mut uploads = FuturesUnordered::new();
-        let mut chunks = Vec::new();
+        let mut reordered = BTreeMap::new();
+        let mut next_offset = 0;
+        // Uploads keep flowing behind a straggler until its peers have each
+        // completed REORDER_WINDOWS more uploads. An entry is only chunk
+        // metadata, so even a wide window costs kilobytes.
+        let reorder_limit =
+            super::pages::FANOUT.max(concurrency.get().saturating_mul(REORDER_WINDOWS));
         // A waiting reservation keeps its place in the budget's FIFO queue
         // while this writer drains completions, rather than requeueing behind
         // other writers each time one of its own uploads finishes.
@@ -178,6 +193,26 @@ async fn chunk_and_upload(
         futures::pin_mut!(admission);
 
         loop {
+            // Bound completed metadata behind a straggler. In-flight uploads
+            // may contribute at most another concurrency-window of entries.
+            if reordered.len() >= reorder_limit {
+                // Budget is useless until the straggler completes. Leave the
+                // queue rather than hold units other writers could use.
+                admission.set(None.into());
+                let completed = uploads
+                    .next()
+                    .await
+                    .ok_or_else(|| io::Error::other("missing earlier chunk upload"))??;
+                append_completed(
+                    &mut manifest,
+                    &mut reordered,
+                    &mut next_offset,
+                    completed,
+                    &mut uploads,
+                )
+                .await?;
+                continue;
+            }
             // Reserve the maximum possible output before asking FastCDC to
             // allocate the next chunk. The permit follows that chunk through
             // hashing, compression, and upload. If the shared budget is full,
@@ -198,28 +233,43 @@ async fn chunk_and_upload(
                     tokio::select! {
                         permit = &mut admission => permit,
                         completed = uploads.next() => {
-                            chunks.push(completed.expect("the upload queue is nonempty")?);
+                            append_completed(
+                                &mut manifest,
+                                &mut reordered,
+                                &mut next_offset,
+                                completed.expect("the upload queue is nonempty")?,
+                                &mut uploads,
+                            )
+                            .await?;
                             continue;
                         }
                     }
                 };
                 permit.expect("admission was pending")
             };
-            // A producer can pause below the upload window. Keep driving
-            // admitted storage work while waiting for its next source chunk.
             let chunk = {
                 let next = stream.next();
                 futures::pin_mut!(next);
                 match futures::poll!(next.as_mut()) {
                     Poll::Ready(chunk) => chunk,
-                    Poll::Pending => loop {
-                        tokio::select! {
-                            chunk = &mut next => break chunk,
-                            completed = uploads.next(), if !uploads.is_empty() => {
-                                chunks.push(completed.expect("nonempty uploads")?);
+                    Poll::Pending => {
+                        // Keep driving admitted uploads while the producer pauses.
+                        loop {
+                            tokio::select! {
+                                chunk = &mut next => break chunk,
+                                completed = uploads.next(), if !uploads.is_empty() => {
+                                    append_completed(
+                                        &mut manifest,
+                                        &mut reordered,
+                                        &mut next_offset,
+                                        completed.expect("nonempty uploads")?,
+                                        &mut uploads,
+                                    )
+                                    .await?;
+                                }
                             }
                         }
-                    },
+                    }
                 }
             };
             let Some(chunk) = chunk else {
@@ -253,38 +303,62 @@ async fn chunk_and_upload(
             });
 
             if uploads.len() == concurrency.get() {
-                chunks.push(
-                    uploads
-                        .next()
-                        .await
-                        .expect("the upload queue is nonempty")?,
-                );
+                let completed = uploads
+                    .next()
+                    .await
+                    .expect("the upload queue is nonempty")?;
+                append_completed(
+                    &mut manifest,
+                    &mut reordered,
+                    &mut next_offset,
+                    completed,
+                    &mut uploads,
+                )
+                .await?;
             }
         }
 
-        chunks.extend(uploads.try_collect::<Vec<_>>().await?);
-        // Completion order controls admission; durable metadata follows source order.
-        chunks.sort_unstable_by_key(|(offset, _)| *offset);
-        chunks.into_iter().map(|(_, chunk)| chunk).collect()
-    };
+        while let Some(completed) = uploads.next().await {
+            append_completed(
+                &mut manifest,
+                &mut reordered,
+                &mut next_offset,
+                completed?,
+                &mut uploads,
+            )
+            .await?;
+        }
+        if !reordered.is_empty() {
+            return Err(io::Error::other("incomplete chunk manifest order"));
+        }
+    }
+
+    // Every hashed byte must belong to exactly one manifest entry; the blob
+    // identity would otherwise name content the manifest cannot reproduce.
+    if manifest.size() != hashing.size() {
+        return Err(io::Error::other(
+            "chunk manifest does not cover the hashed payload",
+        ));
+    }
 
     let (blob_digest, outboard) = hashing.finish()?;
     pins.protect(blob_resources(&base_path, blob_digest, outboard.len))
         .await?;
-    let blob_size = chunks.iter().map(|c| c.size).sum();
+    let blob_size = manifest.size();
 
     // A single chunk is already stored under the blob digest, so its manifest
     // is redundant. The empty blob retains its empty manifest.
-    let elide = chunks.len() == 1 && chunks[0].digest == single_chunk_id(blob_digest);
+    let elide = manifest.single_chunk() == Some(single_chunk_id(blob_digest));
     if !elide {
-        store_manifest(
+        let bytes = manifest.finish().await?;
+        put_object(
             &object_store,
-            &base_path,
-            blob_digest,
-            &chunks,
+            &blob_path(&base_path, &blob_digest),
+            bytes,
             immutable_cache,
         )
-        .await?;
+        .await
+        .map_err(io::Error::other)?;
         if let Some(packed) = &packed_chunks {
             packed.register_manifest(blob_digest);
         }
@@ -300,6 +374,47 @@ async fn chunk_and_upload(
     )
     .await?;
     Ok((blob_digest, blob_size))
+}
+
+// Restore source order without retaining every completed chunk. Pages are
+// emitted as soon as their contiguous prefix is available.
+async fn append_completed<F>(
+    manifest: &mut super::pages::ChunkManifest,
+    reordered: &mut BTreeMap<u64, ChunkMeta>,
+    next_offset: &mut u64,
+    (offset, chunk): (u64, ChunkMeta),
+    uploads: &mut FuturesUnordered<F>,
+) -> io::Result<()>
+where
+    F: Future<Output = io::Result<(u64, ChunkMeta)>>,
+{
+    if reordered.insert(offset, chunk).is_some() {
+        return Err(io::Error::other("duplicate chunk offset"));
+    }
+    while let Some(chunk) = reordered.remove(next_offset) {
+        let end = next_offset
+            .checked_add(chunk.size)
+            .ok_or_else(|| io::Error::other("chunk offset overflow"))?;
+        let saving = manifest.push(chunk);
+        futures::pin_mut!(saving);
+        loop {
+            // An upload may own the shared pin-protection gate across ledger
+            // I/O. Page writes need that gate too, so continue polling uploads
+            // while saving a leaf. No new source chunks are admitted here;
+            // extra completions fit within the existing concurrency window.
+            tokio::select! {
+                result = &mut saving => { result?; break; }
+                completed = uploads.next(), if !uploads.is_empty() => {
+                    let (offset, chunk) = completed.expect("nonempty uploads")?;
+                    if reordered.insert(offset, chunk).is_some() {
+                        return Err(io::Error::other("duplicate chunk offset"));
+                    }
+                }
+            }
+        }
+        *next_offset = end;
+    }
+    Ok(())
 }
 
 // The Bao root path is known with the blob identity. Admit it before sidecar
@@ -510,3 +625,6 @@ impl BlobWriter for ChunkedBlobWriter {
         }
     }
 }
+
+#[cfg(test)]
+mod pin_tests;

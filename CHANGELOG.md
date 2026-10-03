@@ -113,6 +113,11 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Changed
 
+- Chunked blob writes store manifest pages as their source-ordered prefix
+  completes. Completed metadata behind a straggler is bounded to 16 upload
+  windows, with a minimum of 64 entries, plus in-flight uploads. A stalled
+  writer releases queued memory admission, and publication checks that the
+  manifest covers every hashed byte. Encodings and blob identities are unchanged.
 - Chunked blob writes refill their upload window whenever any upload
   completes and keep driving uploads while source reads are pending.
 - Publishing a built-in raw blob no longer stores a closure witness for it,

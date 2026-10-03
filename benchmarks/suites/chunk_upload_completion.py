@@ -24,7 +24,7 @@ def main(argv=None):
     parser.add_argument("--profile", choices=("smoke", "standard"), default="standard")
     parser.add_argument("--file-bytes", type=positive_csv)
     parser.add_argument("--budgets", type=positive_csv)
-    parser.add_argument("--delays-ms", type=delays_csv, default=[0, 8])
+    parser.add_argument("--delays-ms", type=delays_csv)
     parser.add_argument("--concurrency", type=positive_csv)
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--probe-binary", type=pathlib.Path)
@@ -70,11 +70,15 @@ def main(argv=None):
                     raise common.BenchmarkError(f"paired builds differ in {field}")
     sizes = args.file_bytes or ([65536] if args.profile == "smoke" else [511, 512, 513, 2047, 2048, 2049, 65536, 1048576])
     budgets = args.budgets or ([196607, 196608, 196609] if args.profile == "smoke" else [65535, 65536, 65537, 196607, 196608, 196609, 262143, 262144, 262145, 1048576, 4194304])
-    # The default upload window and one wide enough for the 64 KiB units of
-    # a 4 MiB budget to admit 32 uploads.
-    concurrencies = args.concurrency or ([4] if args.profile == "smoke" else [4, 32])
+    # The reorder window is max(64, 16 * concurrency): 2 is below its 64-entry
+    # floor, 4 meets it, and 32, which the 64 KiB units of a 4 MiB budget
+    # fully admit, scales past it.
+    concurrencies = args.concurrency or ([4] if args.profile == "smoke" else [2, 4, 32])
+    # An 8 ms straggler stays within the reorder window of 32 uploads; a
+    # 50 ms straggler fills the window the writer buffers behind it.
+    delays = args.delays_ms or ([0, 8] if args.profile == "smoke" else [0, 8, 50])
     result = dict(schema_version=1, result_schema="casita.chunk-upload-completion.v1", suite_id="native-git", complete=False, artifacts=artifacts,
-        configuration=dict(file_bytes=sizes, budgets=budgets, delays_ms=args.delays_ms, repetitions=args.repetitions,
+        configuration=dict(file_bytes=sizes, budgets=budgets, delays_ms=delays, repetitions=args.repetitions,
             cpu_affinity=args.cpu_affinity, upload_concurrency=concurrencies, average_chunk_bytes=1024,
             timing="payload write only; deterministic source generation and exhaustive chunk/readback audits excluded",
             memory_measurement="whole-process RSS includes fixture and audit buffers"), samples=[], processes=[], paired_summary=[])
@@ -82,7 +86,7 @@ def main(argv=None):
         work = pathlib.Path(temporary)
         result["environment"] = common.environment_metadata(work)
         try:
-            for size, budget, delay, concurrency in itertools.product(sizes, budgets, args.delays_ms, concurrencies):
+            for size, budget, delay, concurrency in itertools.product(sizes, budgets, delays, concurrencies):
                 reductions = []
                 for repetition in range(args.repetitions):
                     pair = {}

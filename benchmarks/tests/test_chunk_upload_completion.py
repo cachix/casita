@@ -73,15 +73,18 @@ class ChunkCompletionTests(unittest.TestCase):
             self.assertEqual([sample["concurrency"] for sample in result["samples"]], [4, 32])
             self.assertEqual(result["configuration"]["upload_concurrency"], [4, 32])
 
-    def test_standard_profile_covers_both_upload_windows(self):
+    def test_standard_profile_covers_both_upload_windows_and_straggler_lengths(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = pathlib.Path(temporary)
             probe = self.probe(directory / "probe")
             output = directory / "result.json"
             self.assertEqual(suite.main(["--no-build", "--probe-binary", str(probe), "--profile", "standard",
-                "--file-bytes", "65536", "--budgets", "4194304", "--delays-ms", "8",
-                "--output", str(output)]), 0)
-            self.assertEqual(json.loads(output.read_text())["configuration"]["upload_concurrency"], [4, 32])
+                "--file-bytes", "65536", "--budgets", "4194304", "--output", str(output)]), 0)
+            configuration = json.loads(output.read_text())["configuration"]
+            # Both sides of the 64-entry reorder floor and the scaled window.
+            self.assertEqual(configuration["upload_concurrency"], [2, 4, 32])
+            # Stragglers on both sides of the 32-upload reorder window.
+            self.assertEqual(configuration["delays_ms"], [0, 8, 50])
 
     def test_a_probe_ignoring_its_concurrency_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
