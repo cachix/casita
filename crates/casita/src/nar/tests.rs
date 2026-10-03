@@ -442,6 +442,53 @@ async fn concurrent_verification_coalesces_and_conflicts_quarantine() {
 }
 
 #[tokio::test]
+async fn directory_reads_enforce_current_repository_limits() {
+    let payloads = crate::blob::MemoryBlobStore::new();
+    let metadata = crate::metadata::MemoryMetadataStore::new().unwrap();
+    let repository = Repository {
+        inner: crate::repository::Repository::new(payloads.clone(), metadata.clone())
+            .into_builtin(),
+    };
+    let nar = directory(&[]);
+    let report = repository
+        .import(NarImport::new(nar.as_slice()))
+        .await
+        .unwrap();
+    let Node::Directory { digest, .. } = report.root() else {
+        panic!("expected directory root");
+    };
+    let key = ObjectKey::directory(*digest);
+    for (max_metadata_bytes, max_payload_bytes) in [(7, 8), (8, 7), (8, 8)] {
+        let repository = Repository {
+            inner: crate::repository::Repository::with_formats(
+                payloads.clone(),
+                metadata.clone(),
+                crate::format::FormatRegistry::builtin(),
+                crate::format::FormatLimits {
+                    max_metadata_bytes,
+                    max_payload_bytes,
+                    ..Default::default()
+                },
+            )
+            .into_builtin(),
+        };
+        let reader = repository.retained_reader().await.unwrap();
+        let result = stream::read_directory(&reader, &key).await;
+        if max_metadata_bytes.min(max_payload_bytes) == 7 {
+            let error = result.unwrap_err();
+            assert_eq!(error.kind(), crate::ErrorKind::InvalidInput);
+            assert!(
+                error
+                    .to_string()
+                    .contains("directory payload exceeds 7 bytes")
+            );
+        } else {
+            assert_eq!(result.unwrap(), crate::Directory::new());
+        }
+    }
+}
+
+#[tokio::test]
 async fn nested_git_order_and_canonical_roundtrip() {
     let repo = Repository::memory().unwrap();
     let empty = directory(&[]);

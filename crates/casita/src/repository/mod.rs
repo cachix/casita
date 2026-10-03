@@ -32,7 +32,7 @@ use crate::path::{PathComponent, SymlinkTarget};
 use crate::spill::{
     FrozenSpillSet, SpillArea, SpillLimits, SpillMetrics, SpillSet, TraversalQueue,
 };
-use crate::{BlobGc, BlobId, ChunkId, Digest, DirectoryId, Node};
+use crate::{BlobGc, BlobId, ChunkId, DirectoryId, Node};
 
 // Implementation modules share only repository-scoped state. Public names
 // remain re-exported here for the application and experimental facades.

@@ -9,7 +9,7 @@ use casita::experimental::{
 };
 use casita::{experimental::MetadataStore as _, import::Importer as _};
 use futures::{StreamExt, TryStreamExt};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWriteExt};
 
 #[cfg(test)]
 use super::LogFormat;
@@ -140,35 +140,18 @@ where
     }
     let hold = repository.retention_hold().await?;
     require_complete(&key, hold.verify_closure(&key).await?)?;
-    let (record, reader) = hold
+    let (record, mut reader) = hold
         .open_payload(&key)
         .await?
         .ok_or_else(|| casita::experimental::RepositoryError::Absent(format!("object {key}")))?;
-    let limit = repository.limits().max_metadata_bytes;
-    let mut encoded = Vec::new();
-    reader
-        .take(limit.saturating_add(1))
-        .read_to_end(&mut encoded)
-        .await?;
-    if encoded.len() as u64 > limit {
-        return Err(
-            casita::experimental::RepositoryError::LimitExceeded(format!(
-                "directory payload exceeds {limit} bytes"
-            ))
-            .into(),
-        );
-    }
-    if encoded.len() as u64 != record.payload_size() {
-        return Err(casita::experimental::RepositoryError::Metadata(
-            casita::experimental::MetadataError::Corruption(format!(
-                "object {key} declares {} bytes but {} were read",
-                record.payload_size(),
-                encoded.len()
-            )),
-        )
-        .into());
-    }
-    let directory = casita::experimental::Directory::decode(&encoded)?;
+    let limits = repository.limits();
+    let directory = casita::experimental::read_directory_payload(
+        &key,
+        &record,
+        &mut *reader,
+        limits.max_metadata_bytes.min(limits.max_payload_bytes),
+    )
+    .await?;
     for (name, node) in directory.nodes() {
         match node {
             Node::Directory { digest, size } => {
