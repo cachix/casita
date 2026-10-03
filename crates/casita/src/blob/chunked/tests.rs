@@ -3209,16 +3209,12 @@ async fn blob_coadmits_known_identities_and_bao_path() {
         let bytes = vec![size as u8; size];
         let blob = write_blob(&store, &bytes).await;
         let inventory = ledger.inventory().await.unwrap();
-        // Packed storage can coadmit a sole chunk after EOF, except at the
-        // maximum. Loose storage emits at the minimum before the blob identity
-        // is known, so it needs one later protection edit for that identity.
+        // Both layouts coadmit a sole chunk, including its loose path, with
+        // the blob after EOF. Only a chunk cut at the maximum is emitted before
+        // the blob identity is known, so it needs one later protection edit.
         assert_eq!(
             inventory.revision - before,
-            if size == average as usize * 2 || (layout == "loose" && size >= average as usize / 2) {
-                2
-            } else {
-                1
-            },
+            if size == average as usize * 2 { 2 } else { 1 },
             "layout={layout} average={average} size={size}"
         );
         let resources = &inventory.pins[&token].resources;

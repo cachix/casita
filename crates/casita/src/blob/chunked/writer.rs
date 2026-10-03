@@ -206,7 +206,8 @@ async fn chunk_and_upload(
                     Some((blob, outboard_len)) => {
                         let chunk_id = single_chunk_id(blob);
                         let mut resources = blob_resources(base_path, blob, outboard_len);
-                        resources.insert(PinResource::Chunk(chunk_id));
+                        // Admit the loose path with the known blob identity.
+                        resources.extend(uploader.protection_resources(chunk_id));
                         pins.protect(resources).await?;
                         uploader
                             .upload_prehashed(chunk.data, chunk_id, permit)
