@@ -1139,9 +1139,26 @@ impl LoadedState {
     }
 }
 
+/// The logical operation stays the same when contention moves its append.
+/// A collection keeps its prepared replacement state in the append plan.
+enum CommitIntent {
+    Delta(StateDelta),
+    Collection,
+}
+
+impl CommitIntent {
+    fn delta(&self) -> Option<&StateDelta> {
+        match self {
+            Self::Delta(delta) => Some(delta),
+            Self::Collection => None,
+        }
+    }
+}
+
 /// A record to append after one loaded log view, and what to cache once it
 /// lands there.
 struct PlannedAppend {
+    required_position: wal3::LogPosition,
     record: Vec<u8>,
     /// The state after the append; a checkpoint record encodes exactly this.
     state: StateData,
@@ -1582,8 +1599,12 @@ impl Wal3MetadataStore {
             if let Some(delta) = &mut delta {
                 delta.revision = result.revision;
             }
+            let intent = match delta {
+                Some(delta) => CommitIntent::Delta(delta),
+                None => CommitIntent::Collection,
+            };
             let mut plan = self
-                .plan_append(&mut view, next, delta, &mut checkpoint_lease)
+                .plan_append(&mut view, next, &intent, &mut checkpoint_lease)
                 .await?;
             #[cfg(test)]
             if plan.delta_base.is_none()
@@ -1599,7 +1620,7 @@ impl Wal3MetadataStore {
                         plan.record.clone(),
                         Some(
                             wal3::AppendOptions::default()
-                                .with_required_fragment_start(view.next_write_position),
+                                .with_required_fragment_start(plan.required_position),
                         ),
                     )
                     .await
@@ -1617,12 +1638,11 @@ impl Wal3MetadataStore {
                                 "invalid wal3 manifest after commit: {error}"
                             ))
                         })?;
-                        // The append required the position `view` ends at,
-                        // so nothing was appended since `view` was loaded and
-                        // the record occupies exactly that position.
+                        // The record landed at the position required by its
+                        // plan, which is also the base of a new checkpoint.
                         let (base_position, tail_deltas) = match plan.delta_base {
                             Some(base_position) => (base_position, plan.tail_deltas),
-                            None => (view.next_write_position, Vec::new()),
+                            None => (plan.required_position, Vec::new()),
                         };
                         self.cache_loaded(LoadedState {
                             state: Some(plan.state),
@@ -1636,40 +1656,42 @@ impl Wal3MetadataStore {
                         })?;
                         return Ok(result);
                     }
-                    Ok(wal3::AppendOutcome::Contended(wal3::AppendContention::Retryable)) => {
-                        tracing::debug!(
-                            attempt = attempt + 1,
-                            contention = "retryable",
-                            "WAL3 append contended"
-                        );
-                        let reloaded = self.load_state_at_manifest().await?;
-                        let actual_revision = reloaded
-                            .state
-                            .as_ref()
-                            .ok_or_else(|| {
-                                MetadataError::Corruption(
-                                    "wal3 contention left no state record".to_owned(),
-                                )
-                            })?
-                            .revision;
-                        if actual_revision == result.revision {
-                            self.cache_loaded(reloaded)?;
-                            self.record_successful_append();
+                    Ok(wal3::AppendOutcome::Contended(contention)) => {
+                        match contention {
+                            wal3::AppendContention::Indeterminate => tracing::warn!(
+                                attempt = attempt + 1,
+                                ?contention,
+                                "reconciling WAL3 append contention"
+                            ),
+                            _ => tracing::debug!(
+                                attempt = attempt + 1,
+                                ?contention,
+                                "reconciling WAL3 append contention"
+                            ),
+                        }
+                        let Some(reloaded) = reconcile_contention(
+                            self,
+                            expected,
+                            result.revision,
+                            checkpoint_lease.as_ref(),
+                        )
+                        .await? else {
                             return Ok(result);
-                        }
-                        if actual_revision != expected {
-                            return Err(MetadataError::StaleRevision {
-                                expected,
-                                actual: actual_revision,
-                            });
-                        }
-                        if let Some(lease) = &checkpoint_lease
-                            && !self.object_shards.owns_barrier(lease).await?
-                        {
-                            return Err(MetadataError::Transient(
-                                "logical checkpoint publication was fenced by maintenance"
-                                    .to_owned(),
-                            ));
+                        };
+                        match contention {
+                            wal3::AppendContention::Retryable => {}
+                            wal3::AppendContention::Indeterminate => {
+                                return Err(MetadataError::Backend(
+                                    "wal3 could not determine whether the contended commit became durable"
+                                        .to_owned(),
+                                ));
+                            }
+                            wal3::AppendContention::Durable => {
+                                return Err(MetadataError::Backend(
+                                    "wal3 reported a durable commit that is absent from the stable manifest"
+                                        .to_owned(),
+                                ));
+                            }
                         }
                         if !view.describes_same_log(&reloaded) {
                             // An append kept the revision but moved the log,
@@ -1682,11 +1704,10 @@ impl Wal3MetadataStore {
                                 self.admit_loaded(expected, reloaded).await?;
                             read_pins.extend(read_pin);
                             view = admitted;
-                            let delta = plan.tail_deltas.pop();
-                            let next = match &delta {
+                            let next = match &intent {
                                 // Replay the delta exactly as loading this
                                 // log will, so the cache matches a reload.
-                                Some(delta) => {
+                                CommitIntent::Delta(delta) => {
                                     let mut state = view.state.take().ok_or_else(|| {
                                         MetadataError::Corruption(
                                             "initialized wal3 log has no state record".to_owned(),
@@ -1697,44 +1718,14 @@ impl Wal3MetadataStore {
                                 }
                                 // A collection's checkpoint is its whole state
                                 // and names no earlier record.
-                                None => plan.state,
+                                CommitIntent::Collection => plan.state,
                             };
                             plan = self
-                                .plan_append(&mut view, next, delta, &mut checkpoint_lease)
+                                .plan_append(&mut view, next, &intent, &mut checkpoint_lease)
                                 .await?;
                         }
                         let delay_ms = 1_u64 << attempt.min(6);
                         tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                    }
-                    Ok(wal3::AppendOutcome::Contended(wal3::AppendContention::Indeterminate)) => {
-                        tracing::warn!(
-                            attempt = attempt + 1,
-                            contention = "indeterminate",
-                            "reconciling WAL3 append contention"
-                        );
-                        return reconcile_contention(
-                            self,
-                            expected,
-                            result,
-                            wal3::AppendContention::Indeterminate,
-                            checkpoint_lease.as_ref(),
-                        )
-                        .await;
-                    }
-                    Ok(wal3::AppendOutcome::Contended(wal3::AppendContention::Durable)) => {
-                        tracing::debug!(
-                            attempt = attempt + 1,
-                            contention = "durable",
-                            "reconciling WAL3 append contention"
-                        );
-                        return reconcile_contention(
-                            self,
-                            expected,
-                            result,
-                            wal3::AppendContention::Durable,
-                            checkpoint_lease.as_ref(),
-                        )
-                        .await;
                     }
                     Err(error) => return Err(wal3_error(error)),
                 }
@@ -1806,21 +1797,22 @@ impl Wal3MetadataStore {
         ))
     }
 
-    /// Build the record that appends `next` after `view`. `delta` is `None`
-    /// for a collection, whose record is always a checkpoint.
+    /// Build the physical append for this intent against the admitted view.
+    /// A collection always starts a new checkpoint without the prior tail.
     async fn plan_append(
         &self,
         view: &mut LoadedState,
         next: StateData,
-        delta: Option<StateDelta>,
+        intent: &CommitIntent,
         checkpoint_lease: &mut Option<super::wal3_shard::ShardBarrierLease>,
     ) -> Result<PlannedAppend, MetadataError> {
         // Collection is an exact replacement and must not retain or republish
         // pre-collection additions from the old cumulative tail.
         let base_position = view.base_position()?;
-        let tail_deltas = take_commit_tail(&mut view.tail_deltas, delta);
+        let tail_deltas = take_commit_tail(&mut view.tail_deltas, intent.delta().cloned());
         if let Some(delta_record) = encode_commit_delta(base_position, &tail_deltas) {
             return Ok(PlannedAppend {
+                required_position: view.next_write_position,
                 record: delta_record,
                 state: next,
                 tail_deltas,
@@ -1834,6 +1826,7 @@ impl Wal3MetadataStore {
         let state = compact_state_objects(&self.object_shards, &next).await?;
         let record = encode_state(&state)?;
         Ok(PlannedAppend {
+            required_position: view.next_write_position,
             checkpoint_bytes: record.len() as u64,
             record,
             state,
@@ -1843,13 +1836,15 @@ impl Wal3MetadataStore {
     }
 }
 
+/// Reload after any contended append. `None` confirms this commit landed;
+/// `Some` is the unchanged logical revision on which a retry may be planned.
+/// A conflicting revision or lost checkpoint barrier prevents retry.
 async fn reconcile_contention(
     store: &Wal3MetadataStore,
     expected: RepositoryRevision,
-    result: CommitResult,
-    outcome: wal3::AppendContention,
+    committed: RepositoryRevision,
     checkpoint_lease: Option<&super::wal3_shard::ShardBarrierLease>,
-) -> Result<CommitResult, MetadataError> {
+) -> Result<Option<LoadedState>, MetadataError> {
     let loaded = store.load_state_at_manifest().await?;
     let actual = loaded
         .state
@@ -1858,10 +1853,10 @@ async fn reconcile_contention(
             MetadataError::Corruption("wal3 contention left no state record".to_owned())
         })?
         .revision;
-    if actual == result.revision {
+    if actual == committed {
         store.cache_loaded(loaded)?;
         store.record_successful_append();
-        return Ok(result);
+        return Ok(None);
     }
     if actual != expected {
         return Err(MetadataError::StaleRevision { expected, actual });
@@ -1873,17 +1868,7 @@ async fn reconcile_contention(
             "logical checkpoint publication was fenced by maintenance".to_owned(),
         ));
     }
-    match outcome {
-        wal3::AppendContention::Retryable => Err(MetadataError::Transient(
-            "wal3 rejected a commit without advancing the log".to_owned(),
-        )),
-        wal3::AppendContention::Indeterminate => Err(MetadataError::Backend(
-            "wal3 could not determine whether the contended commit became durable".to_owned(),
-        )),
-        wal3::AppendContention::Durable => Err(MetadataError::Backend(
-            "wal3 reported a durable commit that is absent from the stable manifest".to_owned(),
-        )),
-    }
+    Ok(Some(loaded))
 }
 
 fn next_generation(generation: u64) -> Result<u64, MetadataError> {
