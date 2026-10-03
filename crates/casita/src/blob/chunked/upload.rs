@@ -63,14 +63,23 @@ impl ChunkUploader<'_> {
         let mut data = Some(data);
         self.pins.protect(self.protection_resources(digest)).await?;
         let _claim = self.chunk_index.claim_upload(digest).await;
+        let path = chunk_path(self.base_path, &digest);
+        // Packed catalogs are authoritative. Loose stores also deduplicate
+        // against writes from other processes, with at most one probe.
         let present = if let Some(packed) = self.packed_chunks {
             packed.probe_for_write(&digest).await?
+        } else if self.pins.is_empty() {
+            if self.chunk_index.contains(&digest) {
+                true
+            } else if head_exists(self.object_store, &path).await? {
+                self.chunk_index.insert(digest);
+                true
+            } else {
+                false
+            }
         } else {
-            let path = chunk_path(self.base_path, &digest);
             let resource = PinResource::StorageObject(path.to_string());
-            if self.pins.is_empty() {
-                self.chunk_index.contains(&digest)
-            } else if self.pins.known_present(&resource) {
+            if self.pins.known_present(&resource) {
                 true
             } else if head_exists(self.object_store, &path).await? {
                 self.pins.remember_present(resource);
@@ -80,33 +89,29 @@ impl ChunkUploader<'_> {
             }
         };
         if !present {
-            let path = chunk_path(self.base_path, &digest);
-            // Packed catalogs are authoritative; loose stores also deduplicate
-            // against writes from other processes.
-            let remote_present = if self.packed_chunks.is_some() {
-                false
+            let data = data.take().expect("chunk bytes are consumed once");
+            let (compressed, returned_guard) = tokio::task::spawn_blocking(move || {
+                let compressed =
+                    crate::compression::compress(&data, zstd::DEFAULT_COMPRESSION_LEVEL);
+                (compressed, guard)
+            })
+            .await
+            .map_err(io::Error::other)?;
+            guard = returned_guard;
+            let compressed = compressed.map_err(io::Error::other)?;
+            if let Some(packed) = self.packed_chunks {
+                packed
+                    .put(ChunkMeta { digest, size }, compressed.into())
+                    .await?;
             } else {
-                head_exists(self.object_store, &path).await?
-            };
-            if !remote_present {
-                let data = data.take().expect("chunk bytes are consumed once");
-                let (compressed, returned_guard) = tokio::task::spawn_blocking(move || {
-                    let compressed =
-                        crate::compression::compress(&data, zstd::DEFAULT_COMPRESSION_LEVEL);
-                    (compressed, guard)
-                })
-                .await
-                .map_err(io::Error::other)?;
-                guard = returned_guard;
-                let compressed = compressed.map_err(io::Error::other)?;
-                if let Some(packed) = self.packed_chunks {
-                    packed
-                        .put(ChunkMeta { digest, size }, compressed.into())
-                        .await?;
-                } else {
-                    put_object(self.object_store, &path, compressed, self.immutable_cache)
-                        .await
-                        .map_err(io::Error::other)?;
+                put_object(self.object_store, &path, compressed, self.immutable_cache)
+                    .await
+                    .map_err(io::Error::other)?;
+                // The pins protected this path before the write, so it stays
+                // present for their lifetime exactly as after a probe hit.
+                if !self.pins.is_empty() {
+                    self.pins
+                        .remember_present(PinResource::StorageObject(path.to_string()));
                 }
             }
             self.chunk_index.insert(digest);
