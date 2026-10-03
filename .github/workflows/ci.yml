@@ -208,7 +208,8 @@ jobs:
       - run: cargo test --no-default-features --features experimental
 
   # reformat with the pinned toolchain and commit any changes back, so a
-  # contributor without the local git-hook still lands formatted code.
+  # contributor without the local git-hook still lands formatted code. The
+  # workflow token cannot push to a fork, so fork PRs are checked instead.
   fmt:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -217,6 +218,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ github.head_ref || github.ref_name }}
       - uses: cachix/install-nix-action@v31
       - uses: cachix/cachix-action@v16
@@ -224,8 +226,12 @@ jobs:
           name: devenv
       - name: Install devenv
         run: nix profile add nixpkgs#devenv
-      - run: devenv shell -- cargo fmt --all
-      - uses: stefanzweifel/git-auto-commit-action@v5
+      - if: github.event.pull_request.head.repo.fork
+        run: devenv shell -- cargo fmt --all --check
+      - if: ${{ !github.event.pull_request.head.repo.fork }}
+        run: devenv shell -- cargo fmt --all
+      - if: ${{ !github.event.pull_request.head.repo.fork }}
+        uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "style: cargo fmt"
           # the commit runs outside the devenv shell, so the prek pre-commit
