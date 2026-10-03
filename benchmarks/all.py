@@ -29,6 +29,7 @@ SMOKE = {
     "memory-publication": ["--profile", "smoke"],
     "memory-index-lifecycle": ["--profile", "smoke"],
     "mutation-catalog": ["--profile", "smoke"],
+    "mutation-pin-admission": ["--profile", "smoke"],
     "filesystem-outputs": ["--profile", "smoke"],
     "output-import": ["--profile", "smoke"],
     "git-import-profile": ["--profile", "smoke"],

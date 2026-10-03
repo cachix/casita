@@ -570,6 +570,17 @@
       ]
     },
     {
+      "id": "mutation-pin-admission",
+      "suite_id": "state-and-publication",
+      "title": "Mutation admission with empty and populated catalog pins",
+      "kind": "module",
+      "target": "benchmarks.suites.mutation_pin_admission",
+      "profiles": [
+        "smoke",
+        "standard"
+      ]
+    },
+    {
       "id": "filesystem-outputs",
       "suite_id": "state-and-publication",
       "title": "Separate filesystem roots through shared traversal and publication",
