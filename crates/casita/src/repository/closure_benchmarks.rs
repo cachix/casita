@@ -10,6 +10,7 @@
 //! witnesses, is the control.
 
 use super::*;
+use crate::Digest;
 use std::time::Instant;
 
 /// Kept in step with `RAW_BLOB_BATCHES` in `benchmarks/suites/native_probes.py`.
