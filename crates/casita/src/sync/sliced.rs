@@ -948,7 +948,7 @@ async fn drain(
 
 /// Decode arbitrary bytes as a literal-only frame for fuzzing; every outcome
 /// is acceptable except a panic or unbounded allocation.
-#[cfg(any(feature = "fuzzing", test))]
+#[cfg(feature = "fuzzing")]
 pub fn fuzz_decode(bytes: &[u8]) {
     let expected = BlobId::new(Digest::from([0u8; 32]));
     let mut output = Vec::new();
