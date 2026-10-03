@@ -440,6 +440,7 @@ struct ChaosObjectStore {
     resume: Arc<Notify>,
     paused_once: AtomicBool,
     manifest_puts: AtomicUsize,
+    chunk_puts: AtomicUsize,
     paused_chunk_puts: AtomicUsize,
     chunk_read_bytes: AtomicUsize,
     metadata_read_bytes: AtomicUsize,
@@ -532,6 +533,7 @@ impl ChaosObjectStore {
             resume: Arc::new(Notify::new()),
             paused_once: AtomicBool::new(false),
             manifest_puts: AtomicUsize::new(0),
+            chunk_puts: AtomicUsize::new(0),
             chunk_read_bytes: AtomicUsize::new(0),
             metadata_read_bytes: AtomicUsize::new(0),
             metadata_write_bytes: AtomicUsize::new(0),
@@ -640,6 +642,9 @@ impl ObjectStore for ChaosObjectStore {
         }
         if location.as_ref().starts_with("blobs/") {
             self.manifest_puts.fetch_add(1, Ordering::SeqCst);
+        }
+        if location.as_ref().starts_with("chunks/") {
+            self.chunk_puts.fetch_add(1, Ordering::SeqCst);
         }
         self.pause_before_manifest_put(location).await;
         if self.should_fail("put", location) {
@@ -1259,6 +1264,26 @@ async fn chunk_upload_concurrency_bounds_pending_backend_writes() {
         .await
         .unwrap();
     }
+}
+
+/// Repeating content yields identical chunks in one upload window. Each must be
+/// written once: besides the wasted write, two staged uploads of one path fail
+/// with access denied on Windows (apache/arrow-rs-object-store#714).
+#[tokio::test]
+async fn identical_chunks_uploaded_together_are_written_once() {
+    let backend = Arc::new(ChaosObjectStore::new(ChaosFault::ReadChunk));
+    let store = ChunkedBlobStore::new(backend.clone(), Path::default(), 1024)
+        .with_chunk_upload_concurrency(std::num::NonZeroUsize::new(8).unwrap());
+    let data: Vec<u8> = (0..60_000).map(|index| (index % 251) as u8).collect();
+    let digest = write_blob(&store, &data).await;
+    let chunks = store.chunks(&digest).await.unwrap().unwrap();
+    let distinct: std::collections::HashSet<_> = chunks.iter().map(|chunk| chunk.digest).collect();
+    assert!(
+        chunks.len() > distinct.len(),
+        "the fixture must repeat chunks"
+    );
+    assert_eq!(backend.chunk_puts.load(Ordering::SeqCst), distinct.len());
+    assert_eq!(read_blob(&store, &digest).await, Some(data));
 }
 
 #[tokio::test]

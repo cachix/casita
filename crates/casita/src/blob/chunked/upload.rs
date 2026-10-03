@@ -52,6 +52,7 @@ impl ChunkUploader<'_> {
     pub async fn upload_prehashed(&self, data: Vec<u8>, digest: ChunkId) -> io::Result<ChunkMeta> {
         let size = data.len() as u64;
         self.pins.protect(self.protection_resources(digest)).await?;
+        let _claim = self.chunk_index.claim_upload(digest).await;
         let present = if let Some(packed) = self.packed_chunks {
             packed.probe_for_write(&digest).await?
         } else {
