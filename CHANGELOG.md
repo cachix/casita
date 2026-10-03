@@ -106,6 +106,11 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
   complete closure. Imports no longer record a witness for every file, and the
   import cache recognizes any present blob. Named root targets still keep a
   witness.
+- Republishing objects or witnesses that already exist no longer rewrites
+  them. Turso stores a new object's witness with its row and updates only
+  rows still unwitnessed; WAL3 deltas carry only objects and witnesses the
+  commit adds, so republished batches no longer re-encode into every later
+  tail record.
 - On macOS, repositories whose state is a `TursoMetadataStore`, including
   `Repository::local` and custom compositions, flush the drive cache
   (`F_FULLFSYNC`) before each deletion batch. Commits sync only to the drive's

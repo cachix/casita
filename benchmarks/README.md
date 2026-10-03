@@ -27,15 +27,15 @@ local-storage WAL3 repositories. Each batch is published as an import's
 filesystem-constructed closure, the path that formerly stored a 70-byte witness
 per blob; the batch sizes straddle the roughly 700- and 1,100-blob points where
 those witnesses would cross WAL3 tail limits. The same batches are then
-republished unchanged, which must insert no objects, and a disjoint range is
-published unrooted as a control that never stored blob witnesses. Every case
-gates the inserted counts, that no blob in either range gained a closure
-witness, that an incremental check of a directory rooted over the first 1024
-blobs settles at the root's witness, and that an audit of it still reaches
-every blob. WAL3 cases report fragment and shard writes and stored bytes for
-the constructed, republished and unrooted phases. Nanoseconds are totals across
-`--blobs`, which must be at least 4096 so every batch is full; the smoke
-profile uses exactly that. The suite runs in
+republished unchanged, which must insert no objects, so WAL3 deltas carry none,
+and a disjoint range is published unrooted as a control that never stored blob
+witnesses. Every case gates the inserted counts, that no blob in either range
+gained a closure witness, that an incremental check of a directory rooted over
+the first 1024 blobs settles at the root's witness, and that an audit of it
+still reaches every blob. WAL3 cases report fragment and shard writes and
+stored bytes for the constructed, republished and unrooted phases. Nanoseconds
+are totals across `--blobs`, which must be at least 4096 so every batch is
+full; the smoke profile uses exactly that. The suite runs in
 `benchmark all --suites raw-blob-closures`; `--bin-dir` or `--probe-binary` may
 supply an existing `casita-lib-test` executable, which must be built with the
 `s3` feature so the WAL3 cases run.
