@@ -1292,6 +1292,66 @@ async fn identical_chunks_uploaded_together_are_written_once() {
 }
 
 #[tokio::test]
+async fn waiting_chunk_admission_keeps_its_budget_queue_position() {
+    use std::future::Future;
+    use std::task::Poll;
+    // A writer that requeued its reservation whenever one of its own uploads
+    // finished would lose the race against a later waiter in about half of
+    // these rounds. Keeping the queued reservation wins every round.
+    for round in 0..16 {
+        let backend = Arc::new(ChaosObjectStore::new(ChaosFault::PauseChunkUploads));
+        backend.arm();
+        // Two 64 KiB admission units hold two maximum-sized 2 KiB chunks.
+        let store = ChunkedBlobStore::new(backend.clone(), Path::default(), 1024)
+            .with_chunk_memory_budget_bytes(2 * 64 * 1024);
+        let budget = store.chunk_memory_budget.clone();
+        let mut data = vec![0; 100_000];
+        blake3::Hasher::new().finalize_xof().fill(&mut data);
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let writer = write_blob(&store, &data);
+            tokio::pin!(writer);
+            // Both admitted uploads wait in storage, so the writer has queued
+            // its next reservation before either of them was first polled.
+            while backend.paused_chunk_puts.load(Ordering::SeqCst) < 2 {
+                tokio::select! {
+                    _ = &mut writer => panic!("writer completed while uploads were paused"),
+                    _ = backend.reached.notified() => {},
+                }
+            }
+            // Boxed so dropping it below also leaves the budget's queue.
+            let mut competitor = Box::pin(budget.reserve(1));
+            assert!(futures::poll!(competitor.as_mut()).is_pending());
+            // The unit released by one finished upload belongs to the writer.
+            backend.resume.notify_one();
+            while backend.paused_chunk_puts.load(Ordering::SeqCst) < 3 {
+                tokio::select! {
+                    _ = &mut writer => panic!("writer completed while uploads were paused"),
+                    _ = backend.reached.notified() => {},
+                    _ = &mut competitor => panic!("a later waiter overtook the writer in round {round}"),
+                }
+            }
+            futures::future::poll_fn(|cx| {
+                assert!(writer.as_mut().poll(cx).is_pending());
+                assert!(competitor.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            drop(competitor);
+            backend.disarm();
+            backend.resume.notify_waiters();
+            let digest = writer.await;
+            assert_eq!(digest, BlobId::new(blake3::hash(&data).into()));
+            assert_eq!(
+                read_blob(&store, &digest).await.as_deref(),
+                Some(data.as_slice())
+            );
+        })
+        .await
+        .unwrap();
+    }
+}
+
+#[tokio::test]
 async fn chunk_budget_smaller_than_the_upload_window_still_makes_progress() {
     for concurrency in [1, 2, 32, 64] {
         let backend = Arc::new(object_store::memory::InMemory::new());

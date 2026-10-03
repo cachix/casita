@@ -1,0 +1,220 @@
+{
+  "schema_version": 1,
+  "result_schema": "casita.chunk-upload-completion.v1",
+  "complete": true,
+  "configuration": {
+    "file_bytes": [
+      1048576
+    ],
+    "budgets": [
+      4194304
+    ],
+    "delays_ms": [
+      0,
+      50
+    ],
+    "repetitions": 5,
+    "cpu_affinity": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "upload_concurrency": [
+      4,
+      32
+    ],
+    "average_chunk_bytes": 1024,
+    "timing": "payload write only; deterministic source generation and exhaustive chunk/readback audits excluded",
+    "memory_measurement": "whole-process RSS includes fixture and audit buffers"
+  },
+  "paired_summary": [
+    {
+      "file_bytes": 1048576,
+      "budget": 4194304,
+      "delay_ms": 0,
+      "concurrency": 4,
+      "pairs": 5,
+      "enough_samples": true,
+      "median_paired_reduction_percent": -9.466452095464595,
+      "minimum_paired_reduction_percent": -20.638301452299125,
+      "maximum_paired_reduction_percent": 20.195012720228856
+    },
+    {
+      "file_bytes": 1048576,
+      "budget": 4194304,
+      "delay_ms": 0,
+      "concurrency": 32,
+      "pairs": 5,
+      "enough_samples": true,
+      "median_paired_reduction_percent": -9.246083447263654,
+      "minimum_paired_reduction_percent": -34.735815097342225,
+      "maximum_paired_reduction_percent": 14.197524063001943
+    },
+    {
+      "file_bytes": 1048576,
+      "budget": 4194304,
+      "delay_ms": 50,
+      "concurrency": 4,
+      "pairs": 5,
+      "enough_samples": true,
+      "median_paired_reduction_percent": 68.39280189825708,
+      "minimum_paired_reduction_percent": 68.36476887999098,
+      "maximum_paired_reduction_percent": 68.52845207546756
+    },
+    {
+      "file_bytes": 1048576,
+      "budget": 4194304,
+      "delay_ms": 50,
+      "concurrency": 32,
+      "pairs": 5,
+      "enough_samples": true,
+      "median_paired_reduction_percent": 79.58689669505038,
+      "minimum_paired_reduction_percent": 79.32338796027705,
+      "maximum_paired_reduction_percent": 79.69363015536788
+    }
+  ],
+  "samples": [
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 0, "wall_seconds": 0.020248135, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 4, "wall_nanos": 20248135, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 0, "wall_seconds": 0.022164915, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 4, "wall_nanos": 22164915, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 1, "wall_seconds": 0.02079253, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 4, "wall_nanos": 20792530, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 1, "wall_seconds": 0.01723543, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 4, "wall_nanos": 17235430, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 2, "wall_seconds": 0.019414565, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 4, "wall_nanos": 19414565, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 2, "wall_seconds": 0.019000104, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 4, "wall_nanos": 19000104, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 3, "wall_seconds": 0.016934414, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 4, "wall_nanos": 16934414, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 3, "wall_seconds": 0.021219744, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 4, "wall_nanos": 21219744, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 4, "wall_seconds": 0.017547509, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 4, "wall_nanos": 17547509, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 4, "wall_seconds": 0.019965192, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 4, "wall_nanos": 19965192, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 0, "wall_seconds": 0.02323484, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 32, "wall_nanos": 23234840, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 0, "wall_seconds": 0.019936068, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 32, "wall_nanos": 19936068, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 1, "wall_seconds": 0.01945436, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 32, "wall_nanos": 19454360, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 1, "wall_seconds": 0.017023431, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 32, "wall_nanos": 17023431, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 2, "wall_seconds": 0.01850388, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 32, "wall_nanos": 18503880, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 2, "wall_seconds": 0.019535022, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 32, "wall_nanos": 19535022, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 3, "wall_seconds": 0.019710682, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 32, "wall_nanos": 19710682, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 3, "wall_seconds": 0.018042461, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 32, "wall_nanos": 18042461, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 4, "wall_seconds": 0.018319953, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 32, "wall_nanos": 18319953, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 4, "wall_seconds": 0.024683538, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 32, "wall_nanos": 24683538, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 0, "wall_seconds": 5.333862961, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 4, "wall_nanos": 5333862961, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 0, "wall_seconds": 1.678649238, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 4, "wall_nanos": 1678649238, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 1, "wall_seconds": 1.679229741, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 4, "wall_nanos": 1679229741, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 1, "wall_seconds": 5.31416393, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 4, "wall_nanos": 5314163930, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 2, "wall_seconds": 5.313704275, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 4, "wall_nanos": 5313704275, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 2, "wall_seconds": 1.680112594, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 4, "wall_nanos": 1680112594, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 3, "wall_seconds": 1.676744921, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 4, "wall_nanos": 1676744921, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 3, "wall_seconds": 5.30494641, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 4, "wall_nanos": 5304946410, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 4, "wall_seconds": 5.304014915, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 4, "wall_nanos": 5304014915, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 4, "wall_seconds": 1.677937377, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 4, "wall_nanos": 1677937377, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 0, "wall_seconds": 1.186369606, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 32, "wall_nanos": 1186369606, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 0, "wall_seconds": 0.243951374, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 32, "wall_nanos": 243951374, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 1, "wall_seconds": 0.242399852, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 32, "wall_nanos": 242399852, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 1, "wall_seconds": 1.193494977, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 32, "wall_nanos": 1193494977, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 2, "wall_seconds": 1.190830318, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 32, "wall_nanos": 1190830318, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 2, "wall_seconds": 0.243085423, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 32, "wall_nanos": 243085423, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 3, "wall_seconds": 0.245718612, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 32, "wall_nanos": 245718612, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 3, "wall_seconds": 1.18838914, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 32, "wall_nanos": 1188389140, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 4, "wall_seconds": 1.191618452, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 32, "wall_nanos": 1191618452, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 4, "wall_seconds": 0.24197445, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 32, "wall_nanos": 241974450, "root": "blake3-I7zyWZAF6k7A0l3tjBZgQNW3bjqVWjSyxqYsH2EjTPk", "correctness": "reference FastCDC chunks and verified full readback; all uploads completed"}
+  ],
+  "comparison": {
+    "baseline": "fix: coadmit a lone chunk's loose path with its blob",
+    "candidate": "perf: admit chunk uploads in completion order",
+    "note": "Built before review-only documentation, comment, and formatting cleanup. Commit 6 is not included."
+  },
+  "environment": {
+    "captured_at_utc": "2026-10-04T07:38:01.926644+00:00",
+    "platform": "Linux-7.2.6-x86_64-with-glibc2.42",
+    "kernel": "7.2.6",
+    "architecture": "x86_64",
+    "cpu": "AMD Ryzen AI 9 HX 370 w/ Radeon 890M",
+    "logical_cpus": 24,
+    "memory_bytes": 100488892416,
+    "cpu_governor": "performance",
+    "filesystem": "zfs zroot/root rw,noatime,xattr,posixacl,casesensitive",
+    "python": "3.13.14",
+    "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+    "cargo": "cargo 1.96.0 (30a34c682 2026-05-25)"
+  },
+  "artifacts": [
+    {
+      "variant": "baseline",
+      "sha256": "1456cfa1bb74236f9d8ec8d315441199a18d3ad39372faaa6770b109c56f37ae",
+      "build": {
+        "source_revision": "d49985b1b94c99945caf98092634ff11e8afa21d",
+        "executable_sha256": "1456cfa1bb74236f9d8ec8d315441199a18d3ad39372faaa6770b109c56f37ae",
+        "lockfile_sha256": "c616e3ded6fd4749056e0788d6ec8c87d8e1494d549041960e9055c507f39585",
+        "fixture_sha256": "1b1af4553040affe1b0bff433e593a7cfd0f51594085b2d5b8bb6f832db6f4c2",
+        "features": [
+          "native",
+          "experimental"
+        ],
+        "default_features": false,
+        "rustc_version": "rustc 1.96.0 (ac68faa20 2026-05-25)\nbinary: rustc\ncommit-hash: ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96\ncommit-date: 2026-05-25\nhost: x86_64-unknown-linux-gnu\nrelease: 1.96.0\nLLVM version: 22.1.2\n",
+        "rustflags": "",
+        "profile": "release",
+        "casita_package_cleaned_before_build": true
+      }
+    },
+    {
+      "variant": "candidate",
+      "sha256": "17406cda08ee39cf88c931a9b83d2fe9932b69c43b899926ca65b8b186c6b5c3",
+      "build": {
+        "source_revision": "e474d66d1264f40c34df6e9e4c746d5f5cdaea3c",
+        "executable_sha256": "17406cda08ee39cf88c931a9b83d2fe9932b69c43b899926ca65b8b186c6b5c3",
+        "lockfile_sha256": "c616e3ded6fd4749056e0788d6ec8c87d8e1494d549041960e9055c507f39585",
+        "fixture_sha256": "1b1af4553040affe1b0bff433e593a7cfd0f51594085b2d5b8bb6f832db6f4c2",
+        "features": [
+          "native",
+          "experimental"
+        ],
+        "default_features": false,
+        "rustc_version": "rustc 1.96.0 (ac68faa20 2026-05-25)\nbinary: rustc\ncommit-hash: ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96\ncommit-date: 2026-05-25\nhost: x86_64-unknown-linux-gnu\nrelease: 1.96.0\nLLVM version: 22.1.2\n",
+        "rustflags": "",
+        "profile": "release",
+        "casita_package_cleaned_before_build": true
+      }
+    }
+  ],
+  "processes": [
+    {"wall_seconds": 0.04763768, "user_seconds": 0.04, "system_seconds": 0.02, "max_rss_bytes": 8331264, "exit_code": 0, "variant": "baseline", "repetition": 0, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 4},
+    {"wall_seconds": 0.048430433, "user_seconds": 0.04, "system_seconds": 0.02, "max_rss_bytes": 7131136, "exit_code": 0, "variant": "candidate", "repetition": 0, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 4},
+    {"wall_seconds": 0.042335444, "user_seconds": 0.04, "system_seconds": 0.02, "max_rss_bytes": 7262208, "exit_code": 0, "variant": "candidate", "repetition": 1, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 4},
+    {"wall_seconds": 0.039648474, "user_seconds": 0.03, "system_seconds": 0.02, "max_rss_bytes": 7507968, "exit_code": 0, "variant": "baseline", "repetition": 1, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 4},
+    {"wall_seconds": 0.041123061, "user_seconds": 0.04, "system_seconds": 0.02, "max_rss_bytes": 7974912, "exit_code": 0, "variant": "baseline", "repetition": 2, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 4},
+    {"wall_seconds": 0.055039681, "user_seconds": 0.04, "system_seconds": 0.02, "max_rss_bytes": 7786496, "exit_code": 0, "variant": "candidate", "repetition": 2, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 4},
+    {"wall_seconds": 0.038533092, "user_seconds": 0.03, "system_seconds": 0.02, "max_rss_bytes": 7340032, "exit_code": 0, "variant": "candidate", "repetition": 3, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 4},
+    {"wall_seconds": 0.043598042, "user_seconds": 0.04, "system_seconds": 0.02, "max_rss_bytes": 7901184, "exit_code": 0, "variant": "baseline", "repetition": 3, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 4},
+    {"wall_seconds": 0.03878668, "user_seconds": 0.03, "system_seconds": 0.02, "max_rss_bytes": 7299072, "exit_code": 0, "variant": "baseline", "repetition": 4, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 4},
+    {"wall_seconds": 0.043931329, "user_seconds": 0.04, "system_seconds": 0.02, "max_rss_bytes": 7127040, "exit_code": 0, "variant": "candidate", "repetition": 4, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 4},
+    {"wall_seconds": 0.047630898, "user_seconds": 0.05, "system_seconds": 0.03, "max_rss_bytes": 11608064, "exit_code": 0, "variant": "baseline", "repetition": 0, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 32},
+    {"wall_seconds": 0.044358444, "user_seconds": 0.05, "system_seconds": 0.02, "max_rss_bytes": 12636160, "exit_code": 0, "variant": "candidate", "repetition": 0, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 32},
+    {"wall_seconds": 0.058282288, "user_seconds": 0.04, "system_seconds": 0.03, "max_rss_bytes": 12394496, "exit_code": 0, "variant": "candidate", "repetition": 1, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 32},
+    {"wall_seconds": 0.038910804, "user_seconds": 0.04, "system_seconds": 0.02, "max_rss_bytes": 8810496, "exit_code": 0, "variant": "baseline", "repetition": 1, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 32},
+    {"wall_seconds": 0.04063438, "user_seconds": 0.04, "system_seconds": 0.02, "max_rss_bytes": 10403840, "exit_code": 0, "variant": "baseline", "repetition": 2, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 32},
+    {"wall_seconds": 0.043174063, "user_seconds": 0.04, "system_seconds": 0.03, "max_rss_bytes": 13008896, "exit_code": 0, "variant": "candidate", "repetition": 2, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 32},
+    {"wall_seconds": 0.042700031, "user_seconds": 0.04, "system_seconds": 0.03, "max_rss_bytes": 13185024, "exit_code": 0, "variant": "candidate", "repetition": 3, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 32},
+    {"wall_seconds": 0.039975961, "user_seconds": 0.04, "system_seconds": 0.03, "max_rss_bytes": 10391552, "exit_code": 0, "variant": "baseline", "repetition": 3, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 32},
+    {"wall_seconds": 0.042060646, "user_seconds": 0.04, "system_seconds": 0.03, "max_rss_bytes": 8859648, "exit_code": 0, "variant": "baseline", "repetition": 4, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 32},
+    {"wall_seconds": 0.050438766, "user_seconds": 0.04, "system_seconds": 0.04, "max_rss_bytes": 12963840, "exit_code": 0, "variant": "candidate", "repetition": 4, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 0, "concurrency": 32},
+    {"wall_seconds": 5.363874164, "user_seconds": 0.08, "system_seconds": 0.04, "max_rss_bytes": 7798784, "exit_code": 0, "variant": "baseline", "repetition": 0, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 4},
+    {"wall_seconds": 1.702480982, "user_seconds": 0.07, "system_seconds": 0.03, "max_rss_bytes": 7344128, "exit_code": 0, "variant": "candidate", "repetition": 0, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 4},
+    {"wall_seconds": 1.70165199, "user_seconds": 0.07, "system_seconds": 0.03, "max_rss_bytes": 7348224, "exit_code": 0, "variant": "candidate", "repetition": 1, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 4},
+    {"wall_seconds": 5.335989847, "user_seconds": 0.08, "system_seconds": 0.03, "max_rss_bytes": 7360512, "exit_code": 0, "variant": "baseline", "repetition": 1, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 4},
+    {"wall_seconds": 5.340698706, "user_seconds": 0.08, "system_seconds": 0.04, "max_rss_bytes": 7548928, "exit_code": 0, "variant": "baseline", "repetition": 2, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 4},
+    {"wall_seconds": 1.705609955, "user_seconds": 0.05, "system_seconds": 0.04, "max_rss_bytes": 6938624, "exit_code": 0, "variant": "candidate", "repetition": 2, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 4},
+    {"wall_seconds": 1.733830816, "user_seconds": 0.06, "system_seconds": 0.04, "max_rss_bytes": 7118848, "exit_code": 0, "variant": "candidate", "repetition": 3, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 4},
+    {"wall_seconds": 5.327523702, "user_seconds": 0.08, "system_seconds": 0.03, "max_rss_bytes": 7315456, "exit_code": 0, "variant": "baseline", "repetition": 3, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 4},
+    {"wall_seconds": 5.328685058, "user_seconds": 0.08, "system_seconds": 0.03, "max_rss_bytes": 7483392, "exit_code": 0, "variant": "baseline", "repetition": 4, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 4},
+    {"wall_seconds": 1.702064147, "user_seconds": 0.07, "system_seconds": 0.03, "max_rss_bytes": 7147520, "exit_code": 0, "variant": "candidate", "repetition": 4, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 4},
+    {"wall_seconds": 1.226959694, "user_seconds": 0.07, "system_seconds": 0.02, "max_rss_bytes": 9863168, "exit_code": 0, "variant": "baseline", "repetition": 0, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 32},
+    {"wall_seconds": 0.270706984, "user_seconds": 0.05, "system_seconds": 0.03, "max_rss_bytes": 13103104, "exit_code": 0, "variant": "candidate", "repetition": 0, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 32},
+    {"wall_seconds": 0.266295236, "user_seconds": 0.05, "system_seconds": 0.03, "max_rss_bytes": 13180928, "exit_code": 0, "variant": "candidate", "repetition": 1, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 32},
+    {"wall_seconds": 1.217790264, "user_seconds": 0.04, "system_seconds": 0.05, "max_rss_bytes": 11493376, "exit_code": 0, "variant": "baseline", "repetition": 1, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 32},
+    {"wall_seconds": 1.215823701, "user_seconds": 0.04, "system_seconds": 0.05, "max_rss_bytes": 12587008, "exit_code": 0, "variant": "baseline", "repetition": 2, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 32},
+    {"wall_seconds": 0.268155139, "user_seconds": 0.05, "system_seconds": 0.02, "max_rss_bytes": 9904128, "exit_code": 0, "variant": "candidate", "repetition": 2, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 32},
+    {"wall_seconds": 0.273734887, "user_seconds": 0.05, "system_seconds": 0.04, "max_rss_bytes": 12845056, "exit_code": 0, "variant": "candidate", "repetition": 3, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 32},
+    {"wall_seconds": 1.219106843, "user_seconds": 0.06, "system_seconds": 0.03, "max_rss_bytes": 11857920, "exit_code": 0, "variant": "baseline", "repetition": 3, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 32},
+    {"wall_seconds": 1.216374658, "user_seconds": 0.06, "system_seconds": 0.04, "max_rss_bytes": 13238272, "exit_code": 0, "variant": "baseline", "repetition": 4, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 32},
+    {"wall_seconds": 0.281113023, "user_seconds": 0.05, "system_seconds": 0.03, "max_rss_bytes": 13250560, "exit_code": 0, "variant": "candidate", "repetition": 4, "file_bytes": 1048576, "budget": 4194304, "delay_ms": 50, "concurrency": 32}
+  ]
+}

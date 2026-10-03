@@ -8,7 +8,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
-use futures::stream::{FuturesOrdered, StreamExt, TryStreamExt};
+use futures::future::{FusedFuture, FutureExt};
+use futures::stream::{FuturesUnordered, StreamExt, TryStreamExt};
 use object_store::{ObjectStore, path::Path};
 
 use super::manifest::encode_manifest;
@@ -168,8 +169,13 @@ async fn chunk_and_upload(
         let mut chunker = fastcdc::v2020::AsyncStreamCDC::new(&mut source, min, avg, max);
         let stream = chunker.as_stream();
         futures::pin_mut!(stream);
-        let mut uploads = FuturesOrdered::new();
+        let mut uploads = FuturesUnordered::new();
         let mut chunks = Vec::new();
+        // A waiting reservation keeps its place in the budget's FIFO queue
+        // while this writer drains completions, rather than requeueing behind
+        // other writers each time one of its own uploads finishes.
+        let admission = futures::future::OptionFuture::from(None);
+        futures::pin_mut!(admission);
 
         loop {
             // Reserve the maximum possible output before asking FastCDC to
@@ -178,18 +184,45 @@ async fn chunk_and_upload(
             // keep polling this writer's queued uploads so their permits can be
             // released; merely waiting for admission here would deadlock a
             // budget smaller than the per-writer concurrency window.
-            let permit = if uploads.is_empty() {
-                memory_budget.reserve(max).await
+            let permit = if admission.is_terminated()
+                && let Some(permit) = memory_budget.try_reserve(max)
+            {
+                permit
             } else {
-                tokio::select! {
-                    permit = memory_budget.reserve(max) => permit,
-                    completed = uploads.next() => {
-                        chunks.push(completed.expect("the upload queue is nonempty")?);
-                        continue;
+                if admission.is_terminated() {
+                    admission.set(Some(memory_budget.reserve(max).fuse()).into());
+                }
+                let permit = if uploads.is_empty() {
+                    (&mut admission).await
+                } else {
+                    tokio::select! {
+                        permit = &mut admission => permit,
+                        completed = uploads.next() => {
+                            chunks.push(completed.expect("the upload queue is nonempty")?);
+                            continue;
+                        }
                     }
+                };
+                permit.expect("admission was pending")
+            };
+            // A producer can pause below the upload window. Keep driving
+            // admitted storage work while waiting for its next source chunk.
+            let chunk = {
+                let next = stream.next();
+                futures::pin_mut!(next);
+                match futures::poll!(next.as_mut()) {
+                    Poll::Ready(chunk) => chunk,
+                    Poll::Pending => loop {
+                        tokio::select! {
+                            chunk = &mut next => break chunk,
+                            completed = uploads.next(), if !uploads.is_empty() => {
+                                chunks.push(completed.expect("nonempty uploads")?);
+                            }
+                        }
+                    },
                 }
             };
-            let Some(chunk) = stream.next().await else {
+            let Some(chunk) = chunk else {
                 drop(permit);
                 break;
             };
@@ -201,8 +234,9 @@ async fn chunk_and_upload(
             let uploader = &uploader;
             let pins = &pins;
             let base_path = &base_path;
-            uploads.push_back(async move {
-                match completed {
+            uploads.push(async move {
+                let offset = chunk.offset;
+                let meta = match completed {
                     Some((blob, outboard_len)) => {
                         let chunk_id = single_chunk_id(blob);
                         let mut resources = blob_resources(base_path, blob, outboard_len);
@@ -214,7 +248,8 @@ async fn chunk_and_upload(
                             .await
                     }
                     None => uploader.upload(chunk.data, permit).await,
-                }
+                }?;
+                Ok::<_, io::Error>((offset, meta))
             });
 
             if uploads.len() == concurrency.get() {
@@ -228,7 +263,9 @@ async fn chunk_and_upload(
         }
 
         chunks.extend(uploads.try_collect::<Vec<_>>().await?);
-        chunks
+        // Completion order controls admission; durable metadata follows source order.
+        chunks.sort_unstable_by_key(|(offset, _)| *offset);
+        chunks.into_iter().map(|(_, chunk)| chunk).collect()
     };
 
     let (blob_digest, outboard) = hashing.finish()?;
