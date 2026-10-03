@@ -2,8 +2,11 @@
 //! facts beside its validated-closure marks. They are not an application
 //! metadata namespace, a portable object, or a GC root.
 use std::collections::BTreeMap;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
+use std::task::{Context, Poll};
+use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::Mutex as AsyncMutex;
 
 use super::{Facts, NarError};
@@ -341,6 +344,25 @@ impl ReadHealth {
         Self {
             store,
             pending: None,
+        }
+    }
+    /// Deliver queued invalidation before polling the payload again. Damaged
+    /// reads invalidate associations before their error reaches the caller.
+    pub(crate) fn poll_read<R: AsyncRead + Unpin + ?Sized>(
+        &mut self,
+        reader: &mut R,
+        cx: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        if let Some(result) = self.poll(cx) {
+            return result;
+        }
+        match Pin::new(reader).poll_read(cx, buffer) {
+            Poll::Ready(Err(error)) => {
+                self.failed(error);
+                self.poll(cx).expect("queued invalidation")
+            }
+            other => other,
         }
     }
     pub(crate) fn poll(

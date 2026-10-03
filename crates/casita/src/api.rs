@@ -455,16 +455,10 @@ impl AsyncRead for VerifiedReader {
         cx: &mut Context<'_>,
         buffer: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        if let Some(result) = self.nar_health.poll(cx) {
-            return result;
-        }
-        match Pin::new(&mut *self.inner).poll_read(cx, buffer) {
-            Poll::Ready(Err(error)) => {
-                self.nar_health.failed(error);
-                self.nar_health.poll(cx).expect("queued invalidation")
-            }
-            other => other,
-        }
+        let Self {
+            inner, nar_health, ..
+        } = &mut *self;
+        nar_health.poll_read(&mut **inner, cx, buffer)
     }
 }
 
@@ -487,16 +481,10 @@ impl AsyncRead for Reader {
         cx: &mut Context<'_>,
         buffer: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        if let Some(result) = self.nar_health.poll(cx) {
-            return result;
-        }
-        match Pin::new(&mut *self.inner).poll_read(cx, buffer) {
-            Poll::Ready(Err(error)) => {
-                self.nar_health.failed(error);
-                self.nar_health.poll(cx).expect("queued invalidation")
-            }
-            other => other,
-        }
+        let Self {
+            inner, nar_health, ..
+        } = &mut *self;
+        nar_health.poll_read(&mut **inner, cx, buffer)
     }
 }
 
