@@ -480,6 +480,23 @@
   ],
   "entrypoints": [
     {
+      "id": "chunk-upload-completion",
+      "suite_id": "native-git",
+      "title": "Chunk upload stragglers with canonical manifest and verified readback gates",
+      "kind": "module",
+      "target": "benchmarks.suites.chunk_upload_completion",
+      "profiles": [
+        "smoke",
+        "standard"
+      ],
+      "correctness": [
+        "independent FastCDC boundaries and chunk hashes",
+        "verified full readback",
+        "all started uploads completed",
+        "identical paired blob identity"
+      ]
+    },
+    {
       "id": "pin-protocol-s3",
       "suite_id": "state-and-publication",
       "title": "Pin protocol prototypes on RustFS with independent writers, GC and fault readback gates",

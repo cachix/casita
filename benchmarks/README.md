@@ -2800,3 +2800,53 @@ streaming memory footprint. Source decoding is outside this measurement.
 benchmark run git-verified-stream --profile smoke --output /tmp/git-verified-stream-smoke.json
 benchmark run git-verified-stream --backend both --repetitions 7 --cpu-affinity 0,1,2,3 --output /tmp/git-verified-stream-paired.json
 ```
+
+### Chunk upload completion
+
+`chunk-upload-completion` compares production writers using separate immutable
+executables. Controlled stragglers delay one in eight chunk puts; `--delays-ms 0`
+provides the zero-delay control. The timer covers the payload write only. Every
+sample verifies independent FastCDC boundaries and hashes, exact blob identity,
+full Bao-verified readback, and that all started uploads finished. Standard cases
+cover the 512-byte chunker minimum, 2048-byte maximum, and byte-budget admission
+on both sides of one-upload and four-upload windows. Reservations round up in
+64 KiB units even for small chunks; 64 KiB therefore permits only one upload.
+`--concurrency` sets the per-writer upload window: 4 by default, with standard
+runs adding 32, the production default, which a 4 MiB budget fully admits. It
+is included in `benchmark all`.
+
+```sh
+cargo test --release -p casita --no-default-features --features native,experimental --test chunk_upload_completion --no-run
+benchmark run chunk-upload-completion --profile smoke --probe-binary /path/to/probe --no-build --output /tmp/chunk-completion-smoke.json
+benchmark run chunk-upload-completion --file-bytes 65536,1048576 --budgets 196607,196608,196609,1048576,4194304 --delays-ms 0,8 --concurrency 4,32 --repetitions 5 --cpu-affinity 0,1,2,3 --baseline-binary /path/to/before --probe-binary /path/to/after --no-build --output /tmp/chunk-completion-paired.json
+```
+
+Build each source checkout in its own Cargo target directory, freeze both
+executables before subsequent builds, and preserve the same Cargo.lock and
+settings. Optional `.build.json` fingerprints are checked before comparing.
+Reports retain failed gates, every sample, and paired ranges;
+synthetic storage-delay results are not end-to-end Git import speedups.
+
+Measured against the parent of `perf: admit chunk uploads in completion order`
+(source-order completion), with 1 MiB writes, a 4 MiB budget, and five alternating
+pairs on four pinned physical cores. Builds used Rust 1.96.0, release mode, and
+identical fixtures and lockfiles. Times below are medians; the percentage is the
+median paired time reduction, so negative values mean slower writes.
+
+| Uploads | Straggler delay (ms) | Parent | Completion order | Time reduction |
+| --- | --- | --- | --- | --- |
+| 4 | 0 | 0.0194 s | 0.0200 s | -9.5% |
+| 32 | 0 | 0.0183 s | 0.0197 s | -9.2% |
+| 4 | 50 | 5.3137 s | 1.6786 s | +68.4% |
+| 32 | 50 | 1.1908 s | 0.2431 s | +79.6% |
+
+These measurements isolate completion scheduling before hash batching. The
+zero-delay pairs spanned both gains and regressions; five pairs do not establish
+a stable difference without storage delays. Synthetic delayed storage does not
+predict end-to-end Git import speedups.
+[Samples and build fingerprints](reports/2026-10-04-chunk-writer/completion.json)
+retain all five pairs for each configuration.
+
+```sh
+benchmark run chunk-upload-completion --file-bytes 1048576 --budgets 4194304 --delays-ms 0,50 --concurrency 4,32 --repetitions 5 --cpu-affinity 0,1,2,3 --baseline-binary /path/to/parent --probe-binary /path/to/completion-order --no-build --output /tmp/chunk-completion-parent.json
+```
