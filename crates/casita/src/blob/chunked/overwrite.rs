@@ -115,7 +115,7 @@ impl ChunkedBlobStore {
                 immutable_cache: self.immutable_cache,
                 pins: &pins,
             }
-            .upload(data, ())
+            .upload(data)
             .await?;
             edits.insert(start, Edit::Chunk(new));
             position = finish;

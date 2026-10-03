@@ -113,6 +113,9 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Changed
 
+- Chunk hashing batches up to four chunks and 1 MiB per blocking job;
+  larger individual chunks run alone. A lone chunk of at most 4 KiB
+  is hashed inline.
 - Chunked blob writes store manifest pages as their source-ordered prefix
   completes. Completed metadata behind a straggler is bounded to 16 upload
   windows, with a minimum of 64 entries, plus in-flight uploads. A stalled

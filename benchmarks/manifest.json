@@ -480,6 +480,23 @@
   ],
   "entrypoints": [
     {
+      "id": "chunk-hash-batch",
+      "suite_id": "native-git",
+      "title": "Bounded chunk hash jobs across count, byte and admission boundaries",
+      "kind": "module",
+      "target": "benchmarks.suites.chunk_hash_batch",
+      "profiles": [
+        "smoke",
+        "standard"
+      ],
+      "correctness": [
+        "independent BLAKE3 and FastCDC",
+        "exhaustive verified readback",
+        "identical paired chunk metadata",
+        "zero duplicate chunk writes"
+      ]
+    },
+    {
       "id": "chunk-manifest-stream",
       "suite_id": "native-git",
       "title": "Streaming manifest construction with bounded fixtures and exact manifest identities",

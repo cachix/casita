@@ -38,16 +38,15 @@ impl ChunkUploader<'_> {
         resources
     }
 
-    pub async fn upload(&self, data: Vec<u8>, guard: impl Send + 'static) -> io::Result<ChunkMeta> {
-        // A cancelled caller cannot stop a running blocking task. Its guard
-        // must follow the bytes, including while the task is still queued.
-        let (digest, data, guard) = tokio::task::spawn_blocking(move || {
+    /// Overwrites hash one replacement chunk; streaming writes use HashBatch.
+    pub async fn upload(&self, data: Vec<u8>) -> io::Result<ChunkMeta> {
+        let (digest, data) = tokio::task::spawn_blocking(move || {
             let digest = ChunkId::new(blake3::hash(&data).into());
-            (digest, data, guard)
+            (digest, data)
         })
         .await
         .map_err(io::Error::other)?;
-        self.upload_prehashed(data, digest, guard).await
+        self.upload_prehashed(data, digest, ()).await
     }
 
     /// The digest must come from this writer's own hashing of these bytes.

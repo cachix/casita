@@ -12,6 +12,7 @@ use futures::future::{FusedFuture, FutureExt};
 use futures::stream::{FuturesUnordered, StreamExt};
 use object_store::{ObjectStore, path::Path};
 
+use super::hash_batch::{HashBatch, Hashed};
 use super::manifest::encode_manifest;
 use super::upload::ChunkUploader;
 use super::{blob_path, put_object, single_chunk_id};
@@ -179,6 +180,7 @@ async fn chunk_and_upload(
         let stream = chunker.as_stream();
         futures::pin_mut!(stream);
         let mut uploads = FuturesUnordered::new();
+        let mut hashes = HashBatch::default();
         let mut reordered = BTreeMap::new();
         let mut next_offset = 0;
         // Uploads keep flowing behind a straggler until its peers have each
@@ -199,6 +201,7 @@ async fn chunk_and_upload(
                 // Budget is useless until the straggler completes. Leave the
                 // queue rather than hold units other writers could use.
                 admission.set(None.into());
+                hashes.flush();
                 let completed = uploads
                     .next()
                     .await
@@ -224,6 +227,7 @@ async fn chunk_and_upload(
             {
                 permit
             } else {
+                hashes.flush();
                 if admission.is_terminated() {
                     admission.set(Some(memory_budget.reserve(max).fuse()).into());
                 }
@@ -253,7 +257,9 @@ async fn chunk_and_upload(
                 match futures::poll!(next.as_mut()) {
                     Poll::Ready(chunk) => chunk,
                     Poll::Pending => {
-                        // Keep driving admitted uploads while the producer pauses.
+                        // A producer may pause before the group is full. Submit
+                        // its partial job and keep driving storage while waiting.
+                        hashes.flush();
                         loop {
                             tokio::select! {
                                 chunk = &mut next => break chunk,
@@ -281,28 +287,37 @@ async fn chunk_and_upload(
             // the first chunk. Reuse the whole-blob hash only when that chunk
             // covers every observed byte. No lookahead or extra buffering.
             let completed = completion.single_blob(chunk.offset, chunk.data.len());
+            let offset = chunk.offset;
+            let hashed = match completed {
+                Some((blob, _)) => {
+                    futures::future::Either::Left(futures::future::ready(Ok(Hashed {
+                        data: chunk.data,
+                        digest: single_chunk_id(blob),
+                        guard: permit,
+                    })))
+                }
+                None => futures::future::Either::Right(hashes.push(chunk.data, permit)),
+            };
             let uploader = &uploader;
             let pins = &pins;
             let base_path = &base_path;
             uploads.push(async move {
-                let offset = chunk.offset;
-                let meta = match completed {
-                    Some((blob, outboard_len)) => {
-                        let chunk_id = single_chunk_id(blob);
-                        let mut resources = blob_resources(base_path, blob, outboard_len);
-                        // Admit the loose path with the known blob identity.
-                        resources.extend(uploader.protection_resources(chunk_id));
-                        pins.protect(resources).await?;
-                        uploader
-                            .upload_prehashed(chunk.data, chunk_id, permit)
-                            .await
-                    }
-                    None => uploader.upload(chunk.data, permit).await,
-                }?;
+                let hashed = hashed.await.map_err(io::Error::other)?;
+                if let Some((blob, outboard_len)) = completed {
+                    // As for a small file: admit the chunk and its loose path
+                    // with the blob, so the upload needs no protection of its own.
+                    let mut resources = blob_resources(base_path, blob, outboard_len);
+                    resources.extend(uploader.protection_resources(hashed.digest));
+                    pins.protect(resources).await?;
+                }
+                let meta = uploader
+                    .upload_prehashed(hashed.data, hashed.digest, hashed.guard)
+                    .await?;
                 Ok::<_, io::Error>((offset, meta))
             });
 
             if uploads.len() == concurrency.get() {
+                hashes.flush();
                 let completed = uploads
                     .next()
                     .await
@@ -318,6 +333,7 @@ async fn chunk_and_upload(
             }
         }
 
+        hashes.flush();
         while let Some(completed) = uploads.next().await {
             append_completed(
                 &mut manifest,
