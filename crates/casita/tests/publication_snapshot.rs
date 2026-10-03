@@ -133,3 +133,100 @@ async fn releasing_the_snapshot_preserves_exact_revision_conflicts() {
     assert_eq!(snapshot.root(&name).await.unwrap(), None);
     assert_eq!(snapshot.object(&key).await.unwrap(), None);
 }
+
+#[path = "support/counting_blob_store.rs"]
+mod counting_blob_store;
+
+/// Pins retain every closure a publication verified, so a retry after a
+/// refused commit reuses its proofs instead of reading the graph again.
+#[tokio::test]
+async fn refused_commits_reuse_closure_proofs() {
+    use casita::{Directory, Node, PathComponent};
+    let mut reads_by_race = Vec::new();
+    for race in [false, true] {
+        let state = store(race);
+        let payloads = counting_blob_store::CountingBlobStore::new();
+        let reads = payloads.reads.clone();
+        let repository = Repository::new(payloads, state.clone());
+        let session = repository.mutation_session().await.unwrap();
+        let child = Directory::new();
+        let parent = Directory::try_from_iter([(
+            PathComponent::try_from("child").unwrap(),
+            Node::Directory {
+                digest: child.digest(),
+                size: child.size(),
+            },
+        )])
+        .unwrap();
+        let child = session.stage_directory(&child).await.unwrap();
+        let parent = session.stage_directory(&parent).await.unwrap();
+        let target = parent.record().key().clone();
+        reads.store(0, Ordering::SeqCst);
+        session
+            .publish_rooted(
+                vec![child, parent],
+                RootName::try_from("proofs").unwrap(),
+                target,
+            )
+            .await
+            .unwrap();
+        assert_eq!(state.commits.load(Ordering::SeqCst), 1 + usize::from(race));
+        reads_by_race.push(reads.load(Ordering::SeqCst));
+    }
+    assert!(reads_by_race[0] > 0);
+    assert_eq!(reads_by_race[0], reads_by_race[1]);
+}
+
+/// Every walk in one publication stops at objects an earlier walk proved, so
+/// nested root changes read each shared directory once rather than once per
+/// enclosing root.
+#[tokio::test]
+async fn overlapping_root_changes_check_shared_descendants_once() {
+    use casita::{Directory, Node, PathComponent};
+    const DEPTH: usize = 16;
+    let state = store(false);
+    let payloads = counting_blob_store::CountingBlobStore::new();
+    let reads = payloads.reads.clone();
+    let repository = Repository::new(payloads, state.clone());
+    let session = repository.mutation_session().await.unwrap();
+    let mut directory = Directory::new();
+    let mut staged = Vec::new();
+    let mut roots = Vec::new();
+    for level in 0..DEPTH {
+        let object = session.stage_directory(&directory).await.unwrap();
+        roots.push(RootChange::Set {
+            name: RootName::try_from(format!("level-{level}").as_str()).unwrap(),
+            target: object.record().key().clone(),
+        });
+        staged.push(object);
+        directory = Directory::try_from_iter([(
+            PathComponent::try_from("child").unwrap(),
+            Node::Directory {
+                digest: directory.digest(),
+                size: directory.size(),
+            },
+        )])
+        .unwrap();
+    }
+    // The outermost root is checked first; its closure holds every later root.
+    roots.reverse();
+    reads.store(0, Ordering::SeqCst);
+    session.publish(staged, roots.clone()).await.unwrap();
+    // Checking a directory reads its payload and its child directory's. Only
+    // the first walk checks anything; one walk per root would read ~DEPTH².
+    assert_eq!(reads.load(Ordering::SeqCst), 2 * DEPTH - 1);
+    let snapshot = state.inner.snapshot().await.unwrap();
+    for change in roots {
+        let RootChange::Set { name, target } = change else {
+            unreachable!("only root sets were requested")
+        };
+        assert_eq!(snapshot.root(&name).await.unwrap(), Some(target.clone()));
+        assert_eq!(
+            snapshot
+                .validated_closures(std::slice::from_ref(&target))
+                .await
+                .unwrap(),
+            [true]
+        );
+    }
+}

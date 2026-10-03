@@ -666,7 +666,7 @@ impl<K: SpillKey> SpillSet<K> {
         }
         let pending_entries = self.memory.len();
         if self.storage.is_none() {
-            self.storage = Some(SpillDb::open(&self.area, self.kind, SET_SCHEMA)?);
+            self.storage = Some(SpillDb::open(&self.area, self.kind, SET_SCHEMA).await?);
             tracing::info!(kind = self.kind, "spill set moved to temporary storage");
         }
         let storage = self.storage.as_ref().expect("just opened");
@@ -860,7 +860,7 @@ impl TraversalQueue {
         }
         let pending_entries = self.tail.len();
         if self.storage.is_none() {
-            self.storage = Some(SpillDb::open(&self.area, "queue", QUEUE_SCHEMA)?);
+            self.storage = Some(SpillDb::open(&self.area, "queue", QUEUE_SCHEMA).await?);
             tracing::info!("traversal queue moved to temporary storage");
         }
         let storage = self.storage.as_ref().expect("just opened");
@@ -1020,11 +1020,17 @@ struct SpillFiles {
 }
 
 impl SpillDb {
-    fn open(area: &SpillArea, kind: &'static str, schema: &str) -> Result<Self, Error> {
+    /// Create the temporary database on the blocking pool.
+    ///
+    /// Turso parses and performs file I/O synchronously inside `poll`, so
+    /// opening follows the same rule as every statement: off the executor and
+    /// off the caller's stack, which a deep traversal may have mostly spent.
+    async fn open(area: &SpillArea, kind: &'static str, schema: &str) -> Result<Self, Error> {
         let (path, lock) = area.reserve(kind)?;
         // The guard is built before the database, so an open that fails part
         // way (a full filesystem is the obvious way) still removes what it
-        // created. Declared first, it also drops last.
+        // created. It travels with the open: if the caller is cancelled, the
+        // finished open drops it after the database, not before.
         let files = SpillFiles {
             lock_path: path.with_extension("lock"),
             path: path.clone(),
@@ -1035,17 +1041,20 @@ impl SpillDb {
             .ok_or_else(|| Error::from(format!("spill path {} is not UTF-8", path.display())))?
             .to_owned();
         let schema = schema.to_owned();
-        let (database, connection) = futures::executor::block_on(async move {
-            let database = Builder::new_local(&path_str).build().await?;
-            let connection = database.connect()?;
-            // Spill state is rebuilt from scratch after any interruption, so
-            // durability buys nothing and costs an fsync per batch.
-            connection
-                .execute_batch("PRAGMA synchronous = OFF;")
-                .await?;
-            connection.execute_batch(&schema).await?;
-            Ok::<_, Error>((database, connection))
-        })?;
+        let (connection, database, files) = tokio::task::spawn_blocking(move || {
+            futures::executor::block_on(async move {
+                let database = Builder::new_local(&path_str).build().await?;
+                let connection = database.connect()?;
+                // Spill state is rebuilt from scratch after any interruption,
+                // so durability buys nothing and costs an fsync per batch.
+                connection
+                    .execute_batch("PRAGMA synchronous = OFF;")
+                    .await?;
+                connection.execute_batch(&schema).await?;
+                Ok::<_, Error>((connection, database, files))
+            })
+        })
+        .await??;
         area.budget.files_opened.fetch_add(1, Ordering::AcqRel);
         #[cfg(test)]
         pause_after_spill_open(&path);

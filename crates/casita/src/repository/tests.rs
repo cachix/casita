@@ -4881,7 +4881,7 @@ async fn filesystem_nar_reread_bypasses_recognition() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn ingest_cache_requires_a_validated_closure_witness() {
+async fn ingest_cache_recognizes_present_raw_blobs() {
     let temporary = tempfile::tempdir().unwrap();
     let source = temporary.path().join("source");
     std::fs::create_dir(&source).unwrap();
@@ -4916,25 +4916,18 @@ async fn ingest_cache_requires_a_validated_closure_witness() {
         .remember(&[(identity, digest)])
         .await
         .unwrap();
-
-    let mutation = repository.mutation_session().await.unwrap();
+    // No witness is stored for a raw blob: its present record is the proof.
     assert_eq!(
-        mutation
-            .recognize_files(vec![Some(identity)])
+        repository
+            .metadata()
+            .snapshot()
+            .await
+            .unwrap()
+            .validated_closures(std::slice::from_ref(&key))
             .await
             .unwrap(),
-        vec![None],
-        "an unrooted object without a closure witness must be reread"
+        vec![false]
     );
-    mutation
-        .publish_rooted(
-            Vec::new(),
-            RootName::try_from("blobs/validated").unwrap(),
-            key,
-        )
-        .await
-        .unwrap();
-    drop(mutation);
 
     let mutation = repository.mutation_session().await.unwrap();
     let mut changed = identity;
@@ -4957,6 +4950,23 @@ async fn ingest_cache_requires_a_validated_closure_witness() {
             .await
             .unwrap()
             .is_empty()
+    );
+    drop(mutation);
+
+    // Once collection removes the unrooted record, the remembered identity no
+    // longer names committed content and the file must be read again.
+    crate::flush_repository_leases().await.unwrap();
+    assert_eq!(
+        repository.collect().await.unwrap().removed.logical_objects,
+        1
+    );
+    let mutation = repository.mutation_session().await.unwrap();
+    assert_eq!(
+        mutation
+            .recognize_files(vec![Some(identity)])
+            .await
+            .unwrap(),
+        vec![None]
     );
 }
 
@@ -6137,4 +6147,76 @@ async fn metadata_reclaim_defers_while_a_catalog_publication_is_prepared() {
     drop(writer);
     assert!(result.is_ok(), "metadata reclaim failed: {result:?}");
     assert!(deferred, "busy reclaim must leave cleanup pending");
+}
+
+#[tokio::test]
+async fn unnamed_closure_walks_collect_no_inventory_beyond_the_spill_threshold() {
+    const DEPTH: usize = 64;
+    let repository = Repository::new(MemoryBlobStore::new(), MemoryMetadataStore::new().unwrap())
+        .with_spill_limits(SpillLimits {
+            max_memory_objects: 4,
+            ..SpillLimits::default()
+        });
+    let session = repository.mutation_session().await.unwrap();
+    // Two chains of nested directories, each far beyond the in-memory limit.
+    // Unrooted publication leaves every link unwitnessed, so each closure
+    // check below walks a whole chain.
+    let mut chains = Vec::new();
+    for label in ["unnamed", "named"] {
+        let mut child = crate::Directory::new();
+        let mut staged = vec![session.stage_directory(&child).await.unwrap()];
+        for depth in 0..DEPTH {
+            let parent = crate::Directory::try_from_iter([(
+                PathComponent::try_from(format!("{label}-{depth}").as_str()).unwrap(),
+                Node::Directory {
+                    digest: child.digest(),
+                    size: child.size(),
+                },
+            )])
+            .unwrap();
+            staged.push(session.stage_directory(&parent).await.unwrap());
+            child = parent;
+        }
+        let keys: Vec<_> = staged
+            .iter()
+            .map(|object| object.record().key().clone())
+            .collect();
+        session.publish_unrooted(staged).await.unwrap();
+        chains.push(keys);
+    }
+    let [unnamed, named] = <[Vec<ObjectKey>; 2]>::try_from(chains).unwrap();
+    let witnessed = |keys: Vec<ObjectKey>| {
+        let repository = repository.clone();
+        async move {
+            let snapshot = repository.metadata().snapshot().await.unwrap();
+            snapshot.validated_closures(&keys).await.unwrap()
+        }
+    };
+    assert_eq!(witnessed(unnamed.clone()).await, vec![false; DEPTH + 1]);
+
+    let top = unnamed[DEPTH].clone();
+    session
+        .publish_closures(Vec::new(), std::collections::BTreeSet::from([top]))
+        .await
+        .unwrap();
+    assert_eq!(
+        repository.publication_profile().witness_inventory_peak,
+        0,
+        "a target-only walk must not collect the objects it verifies"
+    );
+    let mut expected = vec![false; DEPTH + 1];
+    expected[DEPTH] = true;
+    assert_eq!(witnessed(unnamed).await, expected);
+
+    // A named root witnesses its whole verified closure, so that walk does
+    // collect every object it reads.
+    session
+        .publish_rooted(Vec::new(), "chain".parse().unwrap(), named[DEPTH].clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        repository.publication_profile().witness_inventory_peak,
+        DEPTH + 1
+    );
+    assert_eq!(witnessed(named).await, vec![true; DEPTH + 1]);
 }

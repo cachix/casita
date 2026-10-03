@@ -592,6 +592,24 @@
       ]
     },
     {
+      "id": "git-verified-stream",
+      "suite_id": "native-git",
+      "title": "One-pass native Git verification and payload storage",
+      "kind": "module",
+      "target": "benchmarks.suites.git_verified_stream",
+      "profiles": ["smoke", "standard"],
+      "correctness": ["identical native identities", "exact payload lengths", "complete closures", "byte-for-byte readback"]
+    },
+    {
+      "id": "git-blob-file",
+      "suite_id": "native-git",
+      "title": "Register verified Git blob contents as files without payload rereads",
+      "kind": "module",
+      "target": "benchmarks.suites.git_blob_file",
+      "profiles": ["smoke", "standard"],
+      "correctness": ["identical file identities", "exact payload lengths", "complete closures", "byte-for-byte readback"]
+    },
+    {
       "id": "git-import-profile",
       "suite_id": "native-git",
       "title": "Stage-level profiling of git-scale initial, unchanged and incremental imports",
@@ -1666,6 +1684,34 @@
       "default_arguments": [
         "--probe",
         "wal3-commit-preparation"
+      ],
+      "profiles": [
+        "custom"
+      ]
+    },
+    {
+      "id": "raw-blob-closures",
+      "suite_id": "state-and-publication",
+      "title": "Raw blob publication without stored closure witnesses",
+      "kind": "module",
+      "target": "benchmarks.suites.native_probes",
+      "default_arguments": [
+        "--probe",
+        "raw-blob-closures"
+      ],
+      "profiles": [
+        "custom"
+      ]
+    },
+    {
+      "id": "concurrent-publication",
+      "suite_id": "state-and-publication",
+      "title": "Concurrent rooted publications verifying closures under the commit lock",
+      "kind": "module",
+      "target": "benchmarks.suites.native_probes",
+      "default_arguments": [
+        "--probe",
+        "concurrent-publication"
       ],
       "profiles": [
         "custom"

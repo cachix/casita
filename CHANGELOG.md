@@ -13,6 +13,19 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Added
 
+- `MutationSession::stage_object_reader_with_size` verifies an exact-length
+  source while writing it, avoiding a verification reread of the stored payload.
+  Native identity, complete consumption, and backend digest and length remain
+  independently checked.
+- `MutationSession::stage_git_blob_file` and `stage_git_blob_files` register
+  stored verified native Git blobs as ordinary files without reading or
+  writing their payloads again. A batch takes one metadata read, one
+  protection request and one recheck. The receiving mutation pins the reused
+  bytes, and repositories with a replacement format registry refuse it.
+- `MutationSession::publish_closures` atomically publishes records and checks
+  bounded closure targets without creating named roots. Only the targets gain
+  reusable witnesses, raw blobs need none, and the mutation keeps the checked
+  graphs protected.
 - `RepositoryGeneration` orders the logical states of one repository.
   `MetadataReader::generation` and `RetainedReader::generation` report a
   reader's position in the commit order, so an application holding several
@@ -100,6 +113,20 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Changed
 
+- Publishing a built-in raw blob no longer stores a closure witness for it,
+  and incremental closure checks no longer open its payload. A blob record has
+  no links and names its own payload, so its presence already proves a
+  complete closure. Imports no longer record a witness for every file, and the
+  import cache recognizes any present blob. Named root targets still keep a
+  witness.
+- Republishing objects or witnesses that already exist no longer rewrites
+  them. Turso stores a new object's witness with its row and updates only
+  rows still unwitnessed; WAL3 deltas carry only objects and witnesses the
+  commit adds, so republished batches no longer re-encode into every later
+  tail record.
+- A publication whose commit is refused by a concurrent change no longer
+  walks its closures again on retry. Its pins retain every closure it proved,
+  so the proofs hold at the newer revision.
 - On macOS, repositories whose state is a `TursoMetadataStore`, including
   `Repository::local` and custom compositions, flush the drive cache
   (`F_FULLFSYNC`) before each deletion batch. Commits sync only to the drive's
@@ -195,6 +222,10 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Fixed
 
+- Traversals that spill to temporary storage open their spill database on
+  the blocking pool, like every later statement, instead of parsing its schema
+  on the caller's stack. Deep publications with small spill limits could
+  overflow the stack of a debug build.
 - An S3 repository no longer becomes unreadable after a commit raced a WAL
   collection run by another handle. The collection appends a checkpoint of the
   unchanged state, so the commit found its log position taken, saw the same
@@ -206,6 +237,11 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
   `wal3 delta revision chain is invalid`. A commit whose log moved under it is
   now rebuilt on the log as it is, and caches the position where its record
   actually lands.
+- Filesystem, NAR and Git imports into a repository built with a custom
+  `FormatRegistry` no longer bypass its verifiers' relational rules. Their
+  construction proofs cover only the built-in formats, so such imports now
+  audit each constructed closure before publishing it or its witnesses. The
+  walks of one publication share their proofs, so each object is read once.
 
 ### Security
 

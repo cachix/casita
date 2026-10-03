@@ -17,7 +17,13 @@ PROBES = {
     "catalog-durability": "blob::pack::benchmarks::benchmark_local_catalog_durable_publication",
     "logical-state": "metadata::wal3_shard::tests::benchmark_logical_state_shards_scale",
     "wal3-commit-preparation": "metadata::wal3::commit_benchmarks::benchmark_commit_preparation",
+    "raw-blob-closures": "repository::closure_benchmarks::benchmark_raw_blob_closures",
+    "concurrent-publication": "repository::closure_benchmarks::benchmark_concurrent_publication",
 }
+
+# Batch sizes of the raw-blob-closures probe (BATCHES in closure_benchmarks.rs).
+# Its --blobs must cover the largest, or that batch would run short.
+RAW_BLOB_BATCHES = (512, 1024, 4096)
 
 # Probes outside the default suites of their name prefix.
 SUITES = {"deletion-ordering": "collection-and-fsck"}
@@ -29,11 +35,17 @@ def main(argv=None):
     parser.add_argument("--iterations", type=int, default=100)
     parser.add_argument("--writers", type=int, default=4)
     parser.add_argument("--entries", type=int, default=65536)
+    parser.add_argument("--blobs", type=int, default=8192)
+    parser.add_argument("--depth", type=int, default=64)
+    parser.add_argument("--files", type=int, default=16)
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--output", type=pathlib.Path, required=True)
     args = parser.parse_args(argv)
-    if min(args.iterations, args.entries, args.repetitions) < 1 or args.writers < 2:
+    if min(args.iterations, args.entries, args.blobs, args.depth, args.files, args.repetitions) < 1 or args.writers < 2:
         parser.error("positive counts and at least two writers are required")
+    if args.probe == "raw-blob-closures" and args.blobs < max(RAW_BLOB_BATCHES):
+        parser.error(f"--blobs must be at least {max(RAW_BLOB_BATCHES)} to fill every "
+                     f"raw-blob-closures batch ({', '.join(map(str, RAW_BLOB_BATCHES))})")
     binary = (args.probe_binary or build_probe_binary()).resolve()
     env = {**os.environ, "CASITA_STATE_BENCH_ITERATIONS": str(args.iterations),
         "CASITA_STATE_BENCH_WRITERS": str(args.writers),
@@ -41,7 +53,10 @@ def main(argv=None):
         "CASITA_DELETION_ORDERING_BENCH_ITERATIONS": str(args.iterations),
         "CASITA_CATALOG_MARKER_BENCH_ITERATIONS": str(args.iterations),
         "CASITA_CATALOG_DURABILITY_BENCH_ITERATIONS": str(args.iterations),
-        "CASITA_LOGICAL_STATE_BENCH_ENTRIES": str(args.entries)}
+        "CASITA_LOGICAL_STATE_BENCH_ENTRIES": str(args.entries),
+        "CASITA_RAW_BLOB_BENCH_BLOBS": str(args.blobs),
+        "CASITA_PUBLICATION_BENCH_DEPTH": str(args.depth),
+        "CASITA_PUBLICATION_BENCH_FILES": str(args.files)}
     samples = []
     with tempfile.TemporaryDirectory(prefix="casita-native-probes-") as temporary:
         root = pathlib.Path(temporary)
@@ -56,6 +71,10 @@ def main(argv=None):
             metrics = {key: int(value) for key, value in re.findall(r"(?:^|\s)([a-z][a-z0-9_]+) (\d+)(?=\s|$)", output)}
             if not metrics:
                 raise common.BenchmarkError("probe emitted no metrics")
+            # The WAL3 cases, where the tail limits live, need the s3 feature.
+            if args.probe == "raw-blob-closures" and not any(key.startswith("wal3_") for key in metrics):
+                raise common.BenchmarkError("raw-blob-closures probe binary lacks the s3 feature: "
+                                            "no WAL3 case ran")
             samples.append({"status": "ok", "implementation": "casita", "operation": args.probe,
                 "repetition": repetition, **timing, "metrics": metrics, "stdout": output})
     common.write_atomic(args.output, json.dumps({"schema_version": 1,

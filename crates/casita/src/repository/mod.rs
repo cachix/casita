@@ -52,7 +52,7 @@ pub(crate) use closure::ClosureAudit;
 pub use closure::ClosureStatus;
 use closure::{
     BlobPayloadReader, CLOSURE_FRONTIER, ClosureVerifier, RepositoryDirectLinkView,
-    verify_closure_against, verify_closure_with,
+    overlay_records, verify_closure_against, verify_closure_with,
 };
 use collection::METADATA_RECLAIM_INTERVAL;
 pub use collection::{
@@ -329,6 +329,8 @@ where
     }
 }
 
+#[cfg(test)]
+mod closure_benchmarks;
 #[cfg(all(test, unix))]
 mod collection_benchmark;
 #[cfg(test)]

@@ -1199,27 +1199,18 @@ struct StateDelta {
 }
 
 impl StateDelta {
-    fn from_mutation(expected: RepositoryRevision, mutation: &MetadataMutation) -> Self {
-        let mut objects = mutation
-            .objects
-            .iter()
-            .map(|object| object.record().clone())
-            .collect::<Vec<_>>();
-        objects.sort_by(|left, right| left.key().cmp(right.key()));
-        // MetadataMutation permits idempotent reinsertion. Keep its durable delta
-        // canonical when the same verified record was supplied more than once.
-        // Conflicting records remain adjacent and apply_mutation rejects them.
-        objects.dedup();
-        let mut validated = mutation.validated_closures.clone();
-        validated.sort();
-        validated.dedup();
+    /// Start the durable delta of `mutation`. [`apply_mutation`] adds only the
+    /// objects and witnesses it changes: replay starts from the same state, so
+    /// republished records and witnesses would re-encode in every later tail
+    /// record without changing anything.
+    fn for_mutation(expected: RepositoryRevision, mutation: &MetadataMutation) -> Self {
         Self {
             expected,
             // Filled from apply_mutation's generated commit result.
             revision: expected,
-            objects,
+            objects: Vec::new(),
             roots: mutation.roots.values().cloned().collect(),
-            validated,
+            validated: Vec::new(),
             payload_catalog: mutation.payload_catalog.clone(),
         }
     }
@@ -1593,9 +1584,15 @@ impl Wal3MetadataStore {
             None
         };
         let outcome = async {
-            let mut delta = (!collection).then(|| StateDelta::from_mutation(expected, &mutation));
-            let (next, result) =
-                apply_mutation(&self.object_shards, current, mutation, retained).await?;
+            let mut delta = (!collection).then(|| StateDelta::for_mutation(expected, &mutation));
+            let (next, result) = apply_mutation(
+                &self.object_shards,
+                current,
+                mutation,
+                retained,
+                delta.as_mut(),
+            )
+            .await?;
             if let Some(delta) = &mut delta {
                 delta.revision = result.revision;
             }
@@ -1882,6 +1879,7 @@ async fn apply_mutation(
     mut state: StateData,
     mutation: MetadataMutation,
     retained: Option<Arc<dyn RetainedObjects>>,
+    mut delta: Option<&mut StateDelta>,
 ) -> Result<(StateData, CommitResult), MetadataError> {
     mutation.reject_mixed_collection()?;
     state.generation = next_generation(state.generation)?;
@@ -1971,11 +1969,19 @@ async fn apply_mutation(
                 Some((existing, _, _)) if existing == record => {}
                 Some(_) => return Err(MetadataError::ImmutableConflict(record.key().clone())),
                 None => {
+                    if let Some(delta) = delta.as_deref_mut() {
+                        delta.objects.push(record.clone());
+                    }
                     state.births.insert(record.key().clone(), state.generation);
                     state.objects.insert(record.key().clone(), record);
                     result.objects_inserted += 1;
                 }
             }
+        }
+        if let Some(delta) = delta.as_deref_mut() {
+            delta
+                .objects
+                .sort_by(|left, right| left.key().cmp(right.key()));
         }
         let mut newly_named = Vec::new();
         for change in mutation.roots.into_values() {
@@ -2006,6 +2012,9 @@ async fn apply_mutation(
         for key in newly_validated {
             match lookup_state_object(shards, &state, &key).await? {
                 Some((_, false, _)) => {
+                    if let Some(delta) = delta.as_deref_mut() {
+                        delta.validated.push(key.clone());
+                    }
                     state.validated.insert(key);
                 }
                 Some((_, true, _)) => {}
@@ -3654,9 +3663,10 @@ mod tests {
         let retained_source = mutation.retained_objects().unwrap().clone();
         let reader = ObjectShardStorage::new(storage, "state".to_owned(), total_bytes * 2);
 
-        let (collected, result) = apply_mutation(&reader, state, mutation, Some(retained_source))
-            .await
-            .unwrap();
+        let (collected, result) =
+            apply_mutation(&reader, state, mutation, Some(retained_source), None)
+                .await
+                .unwrap();
 
         assert_eq!(result.objects_removed, 0);
         assert_eq!(collected.base_objects, original);
@@ -3695,9 +3705,10 @@ mod tests {
         let retained_source = mutation.retained_objects().unwrap().clone();
         let reader = ObjectShardStorage::new(storage, "state".to_owned(), total_bytes * 2);
 
-        let (collected, result) = apply_mutation(&reader, state, mutation, Some(retained_source))
-            .await
-            .unwrap();
+        let (collected, result) =
+            apply_mutation(&reader, state, mutation, Some(retained_source), None)
+                .await
+                .unwrap();
 
         assert_eq!(result.objects_removed, 1);
         assert_eq!(reader.stats().get_requests, 3);
@@ -3780,6 +3791,115 @@ mod tests {
         let snapshot = reopened.opened_snapshot();
         assert_eq!(snapshot.revision(), committed.revision);
         assert!(snapshot.object(&key).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn republished_objects_and_witnesses_add_nothing_to_the_delta() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Arc::new(chroma_storage::Storage::Local(
+            chroma_storage::local::LocalStorage::new(directory.path().to_str().unwrap()),
+        ));
+        let store = Wal3MetadataStore::open(storage.clone(), "casita/state", "first")
+            .await
+            .unwrap();
+        let object = verified_blob(b"republished delta object").await;
+        let key = object.record().key().clone();
+        let name = RootName::try_from("republished").unwrap();
+        let mut revision = store.opened_snapshot().revision();
+        for named in [false, true] {
+            // The second commit also names the already witnessed object, so
+            // replay must accept a root whose witness predates its delta.
+            let mut mutation = MetadataMutation::new();
+            mutation
+                .add_object(object.clone())
+                .mark_validated_closures([key.clone()]);
+            if named {
+                mutation.set_root(name.clone(), key.clone());
+            }
+            revision = store.commit(&revision, mutation).await.unwrap().revision;
+        }
+        let loaded = store.load_state_at_manifest().await.unwrap();
+        let [first, second] = loaded.tail_deltas.as_slice() else {
+            panic!(
+                "expected two tail deltas, found {}",
+                loaded.tail_deltas.len()
+            );
+        };
+        assert_eq!(first.objects, vec![object.record().clone()]);
+        assert_eq!(first.validated, vec![key.clone()]);
+        assert!(second.objects.is_empty() && second.validated.is_empty());
+        assert_eq!(second.roots.len(), 1);
+        drop(store);
+
+        let reopened = Wal3MetadataStore::open(storage, "casita/state", "second")
+            .await
+            .unwrap();
+        let snapshot = reopened.opened_snapshot();
+        assert_eq!(snapshot.revision(), revision);
+        assert_eq!(snapshot.root(&name).await.unwrap(), Some(key.clone()));
+        assert_eq!(
+            snapshot.validated_closures(&[key]).await.unwrap(),
+            vec![true]
+        );
+    }
+
+    /// A republication that only adds a witness writes a delta naming no
+    /// object, so replay must find the object in an earlier delta or in the
+    /// checkpoint's shards.
+    #[tokio::test]
+    async fn witness_only_deltas_replay_against_earlier_deltas_and_checkpoints() {
+        for checkpointed in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let storage = Arc::new(chroma_storage::Storage::Local(
+                chroma_storage::local::LocalStorage::new(directory.path().to_str().unwrap()),
+            ));
+            let store = Wal3MetadataStore::open(storage.clone(), "casita/state", "first")
+                .await
+                .unwrap();
+            let object = verified_blob(b"witnessed by a later delta").await;
+            let key = object.record().key().clone();
+            let mut mutation = MetadataMutation::new();
+            mutation.add_object(object.clone());
+            let mut revision = store
+                .commit(&store.opened_snapshot().revision(), mutation)
+                .await
+                .unwrap()
+                .revision;
+            if checkpointed {
+                // The ninth commit after opening writes a checkpoint.
+                for _ in 0..MAX_TAIL_DELTAS {
+                    revision = store
+                        .commit(&revision, MetadataMutation::new())
+                        .await
+                        .unwrap()
+                        .revision;
+                }
+                let loaded = store.load_state_at_manifest().await.unwrap();
+                assert!(loaded.tail_deltas.is_empty());
+            }
+            let mut mutation = MetadataMutation::new();
+            mutation
+                .add_object(object)
+                .mark_validated_closures([key.clone()]);
+            revision = store.commit(&revision, mutation).await.unwrap().revision;
+            let loaded = store.load_state_at_manifest().await.unwrap();
+            let witnessed = loaded.tail_deltas.last().unwrap();
+            assert!(witnessed.objects.is_empty());
+            assert_eq!(witnessed.validated, vec![key.clone()]);
+            drop(store);
+
+            let reopened = Wal3MetadataStore::open(storage, "casita/state", "second")
+                .await
+                .unwrap();
+            let snapshot = reopened.opened_snapshot();
+            assert_eq!(snapshot.revision(), revision);
+            assert!(snapshot.object(&key).await.unwrap().is_some());
+            assert_eq!(
+                snapshot.validated_closures(&[key]).await.unwrap(),
+                vec![true],
+                "checkpointed: {checkpointed}"
+            );
+        }
     }
 
     #[tokio::test]

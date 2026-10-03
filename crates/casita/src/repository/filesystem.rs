@@ -400,10 +400,23 @@ where
             )
             .await?;
         let (snapshot, _snapshot_pin) = self.pinned_snapshot().await?;
-        for ((at, digest), payload) in candidates
-            .into_iter()
-            .zip(snapshot.validated_payload_batch(&keys).await?)
-        {
+        let formats = &self.repository.formats;
+        let payloads = if formats.is_builtin() {
+            // A present built-in raw blob proves its own closure.
+            snapshot
+                .object_batch(&keys)
+                .await?
+                .into_iter()
+                .map(|record| {
+                    record
+                        .filter(|record| formats.intrinsically_complete(record))
+                        .map(|record| (record.payload(), record.payload_size()))
+                })
+                .collect()
+        } else {
+            snapshot.validated_payload_batch(&keys).await?
+        };
+        for ((at, digest), payload) in candidates.into_iter().zip(payloads) {
             if let Some((payload, size)) = payload
                 && payload == digest
             {

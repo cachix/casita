@@ -390,6 +390,10 @@ pub trait ObjectFormat: Send + Sync {
 #[derive(Clone)]
 pub struct FormatRegistry {
     formats: Arc<BTreeMap<NamespaceId, Arc<dyn ObjectFormat>>>,
+    // A namespace spelling cannot identify its verifier's relational rules, so
+    // only the built-in factory may vouch for private construction proofs.
+    #[cfg(feature = "native")]
+    builtin: bool,
 }
 
 impl FormatRegistry {
@@ -406,6 +410,8 @@ impl FormatRegistry {
         }
         Ok(Self {
             formats: Arc::new(by_namespace),
+            #[cfg(feature = "native")]
+            builtin: false,
         })
     }
 
@@ -421,7 +427,37 @@ impl FormatRegistry {
         formats.extend(crate::ipld::formats());
         formats.extend(crate::git::formats());
         formats.push(Arc::new(crate::LinkedObjectFormat::default()));
-        Self::new(formats).expect("the built-in namespaces are distinct")
+        #[cfg_attr(not(feature = "native"), allow(unused_mut))]
+        let mut registry = Self::new(formats).expect("the built-in namespaces are distinct");
+        #[cfg(feature = "native")]
+        {
+            registry.builtin = true;
+        }
+        registry
+    }
+
+    /// Whether every verifier is the built-in one for its namespace.
+    ///
+    /// Importers prove the built-in rules while constructing a graph. A
+    /// registry assembled by [`Self::new`] may add relations under the same
+    /// namespace spellings, so its closures must be audited normally.
+    #[cfg(feature = "native")]
+    pub(crate) fn is_builtin(&self) -> bool {
+        self.builtin
+    }
+
+    /// Whether a present record alone proves its complete closure.
+    ///
+    /// A built-in raw blob has no links and its identity is the payload digest
+    /// the record binds, so its closure is the record and that payload. Both
+    /// outlive the record under the same rules as a stored witness, so the
+    /// repository derives this instead of storing one witness per blob.
+    #[cfg(feature = "native")]
+    pub(crate) fn intrinsically_complete(&self, record: &ObjectRecord) -> bool {
+        self.builtin
+            && record.links().is_empty()
+            && record.key().namespace().as_str() == crate::object::BLOB_NAMESPACE
+            && record.key().native_id() == record.payload().digest().as_bytes().as_slice()
     }
 
     /// Resolve the verifier for an exact namespace.

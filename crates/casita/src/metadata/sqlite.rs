@@ -1036,6 +1036,11 @@ impl TursoMetadataStore {
                                 .await
                                 .map_err(state_as_database)?;
                     } else {
+                        let newly_validated: BTreeSet<_> =
+                            mutation.validated_closures.iter().cloned().collect();
+                        // Witnesses on objects this commit inserts are written
+                        // with the row; only older rows need a second write.
+                        let mut pending_witnesses = newly_validated.clone();
                         for verified in mutation.objects {
                             let record = verified.into_record();
                             match read_record_tx(&transaction, record.key())
@@ -1049,7 +1054,8 @@ impl TursoMetadataStore {
                                     ));
                                 }
                                 None => {
-                                    insert_record_tx(&transaction, &record, generation)
+                                    let witnessed = pending_witnesses.remove(record.key());
+                                    insert_record_tx(&transaction, &record, generation, witnessed)
                                         .await
                                         .map_err(state_as_database)?;
                                     result.objects_inserted += 1;
@@ -1069,8 +1075,6 @@ impl TursoMetadataStore {
                             #[cfg(test)]
                             crate::blob::crash_tests::checkpoint("state-root-changed");
                         }
-                        let newly_validated: BTreeSet<_> =
-                            mutation.validated_closures.iter().cloned().collect();
                         if !mutation.require_validated_roots {
                             validate_root_closures_tx(
                                 &transaction,
@@ -1081,19 +1085,9 @@ impl TursoMetadataStore {
                             .await
                             .map_err(state_as_database)?;
                         }
-                        if !newly_validated.is_empty() {
-                            let mut remember = transaction
-                                .prepare_cached(
-                                    "UPDATE objects SET validated = 1 \
-                                     WHERE namespace = ?1 AND native_id = ?2",
-                                )
-                                .await?;
-                            for key in &newly_validated {
-                                remember
-                                    .execute(params![key.namespace().as_str(), key.native_id()])
-                                    .await?;
-                            }
-                        }
+                        witness_existing_tx(&transaction, &pending_witnesses)
+                            .await
+                            .map_err(state_as_database)?;
                     }
                     let state = collecting.then(|| CollectionPhase::new("prune_db_state"));
                     apply_metadata_tx(&transaction, mutation.records)
@@ -1247,16 +1241,42 @@ fn decode_payload_summary(
     Ok((payload, u64::from_le_bytes(size)))
 }
 
+/// Witness rows inserted by earlier commits and return how many changed.
+/// Rows already witnessed match nothing, so republishing them leaves their
+/// pages clean.
+async fn witness_existing_tx(
+    transaction: &Transaction<'_>,
+    keys: &BTreeSet<ObjectKey>,
+) -> Result<u64, MetadataError> {
+    if keys.is_empty() {
+        return Ok(0);
+    }
+    let mut remember = transaction
+        .prepare_cached(
+            "UPDATE objects SET validated = 1 \
+             WHERE namespace = ?1 AND native_id = ?2 AND validated = 0",
+        )
+        .await?;
+    let mut changed = 0;
+    for key in keys {
+        changed += remember
+            .execute(params![key.namespace().as_str(), key.native_id()])
+            .await?;
+    }
+    Ok(changed)
+}
+
 async fn insert_record_tx(
     transaction: &Transaction<'_>,
     record: &ObjectRecord,
     generation: i64,
+    validated: bool,
 ) -> Result<(), MetadataError> {
     let encoded = encode_stored_record(record)?;
     let mut insert_object = transaction
         .prepare_cached(
-            "INSERT INTO objects (namespace, native_id, payload, payload_size, record, created_generation) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO objects (namespace, native_id, payload, payload_size, record, created_generation, validated) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )
         .await?;
     insert_object
@@ -1267,6 +1287,7 @@ async fn insert_record_tx(
             record.payload_size().to_le_bytes().as_slice(),
             encoded,
             generation,
+            i64::from(validated),
         ])
         .await?;
     Ok(())
@@ -2062,7 +2083,7 @@ mod tests {
                 Box::pin(async move {
                     let transaction = connection.transaction().await?;
                     for record in seed.iter().rev() {
-                        insert_record_tx(&transaction, record, 0)
+                        insert_record_tx(&transaction, record, 0, false)
                             .await
                             .map_err(state_as_database)?;
                     }
@@ -2633,6 +2654,73 @@ mod tests {
         assert_eq!(store.validated.take(), 1);
     }
 
+    /// Witnesses arrive with a new row, or later on an existing one, and a
+    /// republication keeps both without rewriting them.
+    #[tokio::test]
+    async fn witnesses_are_written_with_new_rows_and_kept_on_republication() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = TursoMetadataStore::open(directory.path().join("casita.sqlite"))
+            .await
+            .unwrap();
+        let inserted = blob(b"witnessed on insertion").await;
+        let later = blob(b"witnessed later").await;
+        let keys = [
+            inserted.record().key().clone(),
+            later.record().key().clone(),
+        ];
+        let mut first = MetadataMutation::new();
+        first
+            .add_object(inserted.clone())
+            .add_object(later.clone())
+            .mark_validated_closures([keys[0].clone()]);
+        let revision = store.snapshot().await.unwrap().revision();
+        let revision = store.commit(&revision, first).await.unwrap().revision;
+        assert_eq!(
+            store
+                .snapshot()
+                .await
+                .unwrap()
+                .validated_closures(&keys)
+                .await
+                .unwrap(),
+            vec![true, false]
+        );
+
+        for _ in 0..2 {
+            let mut republish = MetadataMutation::new();
+            republish
+                .add_object(inserted.clone())
+                .add_object(later.clone())
+                .mark_validated_closures(keys.clone());
+            let revision = store.snapshot().await.unwrap().revision();
+            let result = store.commit(&revision, republish).await.unwrap();
+            assert_eq!(result.objects_inserted, 0);
+        }
+        let snapshot = store.snapshot().await.unwrap();
+        assert_ne!(snapshot.revision(), revision);
+        assert_eq!(
+            snapshot.validated_closures(&keys).await.unwrap(),
+            vec![true, true]
+        );
+        drop(snapshot);
+        let witnessed = BTreeSet::from(keys);
+        let rewritten = store
+            .db
+            .write(move |connection| {
+                Box::pin(async move {
+                    let transaction = connection.transaction().await?;
+                    let rewritten = witness_existing_tx(&transaction, &witnessed)
+                        .await
+                        .map_err(state_as_database)?;
+                    transaction.rollback().await?;
+                    Ok(rewritten)
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(rewritten, 0, "witnessed rows must not be rewritten");
+    }
+
     /// A repository validation witness replaces the state backend's duplicate
     /// graph walk, both in the mutation that records it and in later root
     /// changes. The target record itself is still read on every root change.
@@ -2835,7 +2923,7 @@ mod tests {
                 Box::pin(async move {
                     let transaction = connection.transaction().await?;
                     for record in seed.iter().rev() {
-                        insert_record_tx(&transaction, record, 0)
+                        insert_record_tx(&transaction, record, 0, false)
                             .await
                             .map_err(state_as_database)?;
                     }
@@ -3117,7 +3205,7 @@ mod tests {
                 Box::pin(async move {
                     let transaction = connection.transaction().await?;
                     for record in seed.iter().rev() {
-                        insert_record_tx(&transaction, record, 0)
+                        insert_record_tx(&transaction, record, 0, false)
                             .await
                             .map_err(state_as_database)?;
                     }
@@ -3279,7 +3367,7 @@ mod tests {
                     Box::pin(async move {
                         let transaction = connection.transaction().await?;
                         for record in seed {
-                            insert_record_tx(&transaction, &record, 0)
+                            insert_record_tx(&transaction, &record, 0, false)
                                 .await
                                 .map_err(state_as_database)?;
                         }
