@@ -753,16 +753,16 @@ pub(crate) async fn read_directory(
             "missing directory",
         ))
     })?;
-    let mut bytes = Vec::new();
-    payload.read_to_end(&mut bytes).await?;
-    let directory = Directory::decode(&bytes).map_err(NarError::storage)?;
-    if ObjectKey::directory(directory.digest()) != *key {
-        return Err(NarError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "directory identity mismatch",
-        )));
-    }
-    Ok(directory)
+    let limits = reader.hold.repository().limits();
+    let record = payload.record().clone();
+    crate::directory::read::read_directory_payload(
+        key,
+        &record,
+        &mut payload,
+        limits.max_metadata_bytes.min(limits.max_payload_bytes),
+    )
+    .await
+    .map_err(NarError::storage)
 }
 struct Encoder<'a> {
     reader: &'a RetainedReader,

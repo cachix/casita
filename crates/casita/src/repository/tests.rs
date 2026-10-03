@@ -4389,6 +4389,34 @@ async fn fsck_inventory_difference_preserves_garbage_findings_across_spill_limit
 }
 
 #[tokio::test]
+async fn checkout_enforces_current_directory_materialization_limit() {
+    let source = tempfile::tempdir().unwrap();
+    let mut repository = repository();
+    let root = repository
+        .import(crate::import::FilesystemImport::new(
+            source.path(),
+            RootName::try_from("empty").unwrap(),
+        ))
+        .await
+        .unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let target = output.path().join("tree");
+    // The graph was admitted under larger limits. A cached verification
+    // witness must not bypass the current directory materialization bound.
+    repository.limits.max_metadata_bytes = 7;
+    let error = repository.checkout(&root, &target).await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("directory payload exceeds 7 bytes")
+    );
+    assert!(!target.exists());
+    repository.limits.max_metadata_bytes = 8;
+    repository.checkout(&root, &target).await.unwrap();
+    assert!(target.is_dir());
+}
+
+#[tokio::test]
 async fn filesystem_import_checkout_and_reimport_preserve_identity() {
     let source = tempfile::tempdir().unwrap();
     std::fs::create_dir(source.path().join("sub")).unwrap();

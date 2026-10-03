@@ -266,6 +266,10 @@ where
         let directories = RepositoryDirectoryView {
             payloads: &self.payloads,
             snapshot: hold.snapshot(),
+            limit: self
+                .limits
+                .max_metadata_bytes
+                .min(self.limits.max_payload_bytes),
         };
         crate::filesystem::checkout::checkout(
             &self.payloads,
@@ -281,6 +285,7 @@ where
 pub(super) struct RepositoryDirectoryView<'a, PS> {
     pub(super) payloads: &'a PS,
     pub(super) snapshot: &'a dyn MetadataSnapshot,
+    pub(super) limit: u64,
 }
 
 #[async_trait]
@@ -305,17 +310,10 @@ impl<PS: BlobStore> DirectorySource for RepositoryDirectoryView<'_, PS> {
                     record.payload()
                 ))))
             })?;
-        let mut encoded = Vec::new();
-        tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut encoded).await?;
-        let directory = Directory::decode(&encoded)?;
-        if directory.digest() != *digest || record.payload() != BlobId::new(Digest::hash(&encoded))
-        {
-            return Err(crate::error::Error::Backend(Box::new(
-                MetadataError::Corruption(format!(
-                    "directory payload for {key} does not match its record"
-                )),
-            )));
-        }
+        let directory =
+            crate::directory::read::read_directory_payload(&key, &record, &mut *reader, self.limit)
+                .await
+                .map_err(|error| crate::error::Error::Backend(Box::new(error)))?;
         Ok(Some(directory))
     }
 }
