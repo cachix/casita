@@ -3658,3 +3658,74 @@ async fn a_parked_reader_does_not_starve_a_second_reader_of_buffers() {
     parked.read_to_end(&mut head).await.unwrap();
     assert_eq!(head.len(), first.len());
 }
+
+// Occupy the runtime's only blocking thread so a real upload owns a queued
+// hash/compression task. Occupying the worker makes cancellation deterministic
+// without timing the CPU work or relying on uploader instrumentation.
+fn check_cancelled_upload_budget(size: usize) {
+    struct Release(Option<std::sync::mpsc::Sender<()>>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let store = ChunkedBlobStore::new(
+            Arc::new(object_store::memory::InMemory::new()),
+            Path::default(),
+            512,
+        )
+        .with_chunk_memory_budget_bytes(64 * 1024);
+        let budget = store.chunk_memory_budget.clone();
+        let (entered, started) = tokio::sync::oneshot::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        // The guard also releases the worker if an assertion fails.
+        let release = Release(Some(release));
+        let blocker = tokio::task::spawn_blocking(move || {
+            entered.send(()).unwrap();
+            wait.recv().unwrap();
+        });
+        started.await.unwrap();
+        let data = vec![91; size];
+        let mut writing = Box::pin(store.put_slice(&data));
+        assert!(futures::poll!(writing.as_mut()).is_pending());
+        assert_eq!(
+            budget.free_bytes(),
+            0,
+            "the upload must have admitted its chunk before cancellation"
+        );
+        drop(writing);
+        assert_eq!(
+            budget.free_bytes(),
+            0,
+            "queued CPU work still owns the chunk after its writer is cancelled"
+        );
+        assert!(budget.try_reserve(1).is_none());
+        drop(release);
+        blocker.await.unwrap();
+        let permit = tokio::time::timeout(std::time::Duration::from_secs(5), budget.reserve(1))
+            .await
+            .unwrap();
+        drop(permit);
+        assert_eq!(budget.free_bytes(), 64 * 1024);
+    });
+}
+
+#[test]
+fn cancelled_small_upload_keeps_chunk_budget_until_cpu_completion() {
+    // This uses the single-chunk prehashed path and queues compression.
+    check_cancelled_upload_budget(1);
+}
+
+#[test]
+fn cancelled_chunk_hash_keeps_chunk_budget_until_cpu_completion() {
+    // This reaches normal chunking before EOF and queues chunk hashing.
+    check_cancelled_upload_budget(16 * 1024);
+}
