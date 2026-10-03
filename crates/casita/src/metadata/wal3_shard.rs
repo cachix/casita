@@ -1553,36 +1553,36 @@ fn put_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
 }
 
 struct Input<'a> {
-    bytes: &'a [u8],
-    offset: usize,
+    reader: crate::binary::Reader<'a, io::Error>,
 }
 
 impl<'a> Input<'a> {
     fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, offset: 0 }
+        Self {
+            reader: crate::binary::Reader::new(bytes, |error| {
+                io::Error::other(match error {
+                    crate::binary::ReadError::UnexpectedEof => "truncated logical state shard",
+                    crate::binary::ReadError::LengthOverflow => {
+                        "logical shard byte length overflow"
+                    }
+                    crate::binary::ReadError::TrailingBytes => {
+                        "trailing bytes in logical state shard"
+                    }
+                })
+            }),
+        }
     }
 
     fn take(&mut self, len: usize) -> io::Result<&'a [u8]> {
-        let end = self
-            .offset
-            .checked_add(len)
-            .filter(|end| *end <= self.bytes.len())
-            .ok_or_else(|| io::Error::other("truncated logical state shard"))?;
-        let result = &self.bytes[self.offset..end];
-        self.offset = end;
-        Ok(result)
+        self.reader.read(len)
     }
 
     fn u64(&mut self) -> io::Result<u64> {
-        Ok(u64::from_le_bytes(
-            self.take(8)?.try_into().expect("eight bytes"),
-        ))
+        self.reader.read_u64()
     }
 
     fn bytes(&mut self) -> io::Result<&'a [u8]> {
-        let len = usize::try_from(self.u64()?)
-            .map_err(|_| io::Error::other("logical shard byte length overflow"))?;
-        self.take(len)
+        self.reader.read_len_prefixed()
     }
 
     fn count(&mut self, limit: usize, minimum_entry_bytes: usize) -> io::Result<usize> {
@@ -1591,9 +1591,8 @@ impl<'a> Input<'a> {
         if count > limit
             || count
                 > self
-                    .bytes
-                    .len()
-                    .saturating_sub(self.offset)
+                    .reader
+                    .remaining()
                     .checked_div(minimum_entry_bytes)
                     .unwrap_or(0)
         {
@@ -1605,11 +1604,7 @@ impl<'a> Input<'a> {
     }
 
     fn finish(&self) -> io::Result<()> {
-        if self.offset == self.bytes.len() {
-            Ok(())
-        } else {
-            Err(io::Error::other("trailing bytes in logical state shard"))
-        }
+        self.reader.finish()
     }
 }
 
@@ -1809,6 +1804,30 @@ mod tests {
         assert_eq!(
             decode_object_shard(&encoded.bytes, &encoded.reference).unwrap(),
             entries
+        );
+    }
+
+    #[test]
+    fn object_blocks_reject_truncation_and_trailing_bytes() {
+        let bytes = encode_object_block(&[(record(1), true, 17)]);
+        for end in 0..bytes.len() {
+            assert!(
+                decode_object_block(&bytes[..end]).is_err(),
+                "truncated at {end}"
+            );
+        }
+        assert_eq!(
+            decode_object_block(&bytes[..bytes.len() - 1])
+                .unwrap_err()
+                .to_string(),
+            "truncated logical state shard"
+        );
+
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert_eq!(
+            decode_object_block(&trailing).unwrap_err().to_string(),
+            "trailing bytes in logical state shard"
         );
     }
 

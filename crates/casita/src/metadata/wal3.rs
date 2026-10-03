@@ -2902,47 +2902,46 @@ fn decode_state(bytes: &[u8]) -> Result<StateData, MetadataError> {
 }
 
 struct Input<'a> {
-    bytes: &'a [u8],
-    offset: usize,
+    reader: crate::binary::Reader<'a, MetadataError>,
 }
 
 impl<'a> Input<'a> {
     fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, offset: 0 }
+        Self {
+            reader: crate::binary::Reader::new(bytes, |error| {
+                let message = match error {
+                    crate::binary::ReadError::UnexpectedEof => "truncated wal3 state record",
+                    crate::binary::ReadError::LengthOverflow => "wal3 byte string is too large",
+                    crate::binary::ReadError::TrailingBytes => {
+                        "trailing bytes in wal3 state record"
+                    }
+                };
+                MetadataError::Corruption(message.to_owned())
+            }),
+        }
     }
 
     fn take(&mut self, len: usize) -> Result<&'a [u8], MetadataError> {
-        let end = self
-            .offset
-            .checked_add(len)
-            .filter(|end| *end <= self.bytes.len())
-            .ok_or_else(|| MetadataError::Corruption("truncated wal3 state record".to_owned()))?;
-        let result = &self.bytes[self.offset..end];
-        self.offset = end;
-        Ok(result)
+        self.reader.read(len)
     }
 
     fn u64(&mut self) -> Result<u64, MetadataError> {
-        Ok(u64::from_le_bytes(
-            self.take(8)?.try_into().expect("exact width"),
-        ))
+        self.reader.read_u64()
     }
 
     fn u8(&mut self) -> Result<u8, MetadataError> {
-        Ok(self.take(1)?[0])
+        self.reader.read_u8()
     }
 
     fn bytes(&mut self) -> Result<&'a [u8], MetadataError> {
-        let len = usize::try_from(self.u64()?)
-            .map_err(|_| MetadataError::Corruption("wal3 byte string is too large".to_owned()))?;
-        self.take(len)
+        self.reader.read_len_prefixed()
     }
 
     fn entries(&mut self) -> Result<Vec<&'a [u8]>, MetadataError> {
         let count = usize::try_from(self.u64()?).map_err(|_| {
             MetadataError::Corruption("wal3 state entry count overflows usize".to_owned())
         })?;
-        if count > self.bytes.len().saturating_sub(self.offset) / 8 {
+        if count > self.reader.remaining() / 8 {
             return Err(MetadataError::Corruption(
                 "wal3 state entry count exceeds remaining bytes".to_owned(),
             ));
@@ -2958,13 +2957,7 @@ impl<'a> Input<'a> {
     }
 
     fn finish(&self) -> Result<(), MetadataError> {
-        if self.offset == self.bytes.len() {
-            Ok(())
-        } else {
-            Err(MetadataError::Corruption(
-                "trailing bytes in wal3 state record".to_owned(),
-            ))
-        }
+        self.reader.finish()
     }
 }
 
@@ -3723,9 +3716,25 @@ mod tests {
     fn state_encoding_rejects_truncation() {
         let state = StateData::empty().unwrap();
         let bytes = encode_state(&state).unwrap();
+        for end in 0..bytes.len() {
+            assert!(
+                matches!(
+                    decode_state(&bytes[..end]),
+                    Err(MetadataError::Corruption(_))
+                ),
+                "truncated at {end}"
+            );
+        }
         assert!(matches!(
             decode_state(&bytes[..bytes.len() - 1]),
-            Err(MetadataError::Corruption(_))
+            Err(MetadataError::Corruption(message)) if message == "truncated wal3 state record"
+        ));
+
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert!(matches!(
+            decode_state(&trailing),
+            Err(MetadataError::Corruption(message)) if message == "trailing bytes in wal3 state record"
         ));
     }
 

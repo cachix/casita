@@ -74,7 +74,7 @@ pub fn encode_manifest(chunks: &[ChunkMeta]) -> Vec<u8> {
 
 /// Decode a bounded canonical chunk manifest.
 pub fn decode_manifest(bytes: &[u8]) -> io::Result<Vec<ChunkMeta>> {
-    let mut reader = crate::encode::Reader::new(bytes);
+    let mut reader = crate::encode::reader(bytes);
     take_chunk_metas(&mut reader, bytes.len().saturating_sub(8))
 }
 
