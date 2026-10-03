@@ -232,6 +232,9 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Fixed
 
+- A cancelled chunked write retains its chunk memory budget while queued
+  hashing or compression still holds the chunk bytes, preventing concurrent
+  writers from exceeding the budget.
 - Traversals that spill to temporary storage open their spill database on
   the blocking pool, like every later statement, instead of parsing its schema
   on the caller's stack. Deep publications with small spill limits could

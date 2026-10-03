@@ -144,9 +144,8 @@ async fn chunk_and_upload(
         resources.extend(uploader.protection_resources(single_chunk_id(blob_digest)));
         pins.protect(resources).await?;
         let meta = uploader
-            .upload_prehashed(head, single_chunk_id(blob_digest))
+            .upload_prehashed(head, single_chunk_id(blob_digest), permit)
             .await?;
-        drop(permit);
         // A lone chunk is stored under the blob digest already, so the manifest
         // it would carry is redundant, exactly as in the chunked path below.
         debug_assert_eq!(meta.digest, single_chunk_id(blob_digest));
@@ -203,16 +202,17 @@ async fn chunk_and_upload(
             let pins = &pins;
             let base_path = &base_path;
             uploads.push_back(async move {
-                let _permit = permit;
                 match completed {
                     Some((blob, outboard_len)) => {
                         let chunk_id = single_chunk_id(blob);
                         let mut resources = blob_resources(base_path, blob, outboard_len);
                         resources.insert(PinResource::Chunk(chunk_id));
                         pins.protect(resources).await?;
-                        uploader.upload_prehashed(chunk.data, chunk_id).await
+                        uploader
+                            .upload_prehashed(chunk.data, chunk_id, permit)
+                            .await
                     }
-                    None => uploader.upload(chunk.data).await,
+                    None => uploader.upload(chunk.data, permit).await,
                 }
             });
 

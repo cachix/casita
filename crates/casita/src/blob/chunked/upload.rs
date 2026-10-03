@@ -13,8 +13,9 @@ use crate::blob::pack::PackedChunks;
 use crate::digest::ChunkId;
 use crate::metadata::{PinResource, WritePins};
 
-/// All uploads in one writer borrow the same context. Only owned chunk bytes
-/// cross into the blocking pool; queued uploads need no per-chunk Arc clones.
+/// All uploads in one writer borrow the same context. Owned chunk bytes
+/// and their admission guards cross into the blocking pool; queued uploads
+/// need no per-chunk Arc clones.
 pub(super) struct ChunkUploader<'a> {
     pub object_store: &'a Arc<dyn ObjectStore>,
     pub base_path: &'a Path,
@@ -37,20 +38,29 @@ impl ChunkUploader<'_> {
         resources
     }
 
-    pub async fn upload(&self, data: Vec<u8>) -> io::Result<ChunkMeta> {
-        let (digest, data) = tokio::task::spawn_blocking(move || {
+    pub async fn upload(&self, data: Vec<u8>, guard: impl Send + 'static) -> io::Result<ChunkMeta> {
+        // A cancelled caller cannot stop a running blocking task. Its guard
+        // must follow the bytes, including while the task is still queued.
+        let (digest, data, guard) = tokio::task::spawn_blocking(move || {
             let digest = ChunkId::new(blake3::hash(&data).into());
-            (digest, data)
+            (digest, data, guard)
         })
         .await
         .map_err(io::Error::other)?;
-        self.upload_prehashed(data, digest).await
+        self.upload_prehashed(data, digest, guard).await
     }
 
     /// The digest must come from this writer's own hashing of these bytes.
     /// This is never a caller-supplied identity or a storage-backend assertion.
-    pub async fn upload_prehashed(&self, data: Vec<u8>, digest: ChunkId) -> io::Result<ChunkMeta> {
+    pub async fn upload_prehashed(
+        &self,
+        data: Vec<u8>,
+        digest: ChunkId,
+        mut guard: impl Send + 'static,
+    ) -> io::Result<ChunkMeta> {
         let size = data.len() as u64;
+        // Local ownership drops bytes before the guard on early returns too.
+        let mut data = Some(data);
         self.pins.protect(self.protection_resources(digest)).await?;
         let _claim = self.chunk_index.claim_upload(digest).await;
         let present = if let Some(packed) = self.packed_chunks {
@@ -79,12 +89,16 @@ impl ChunkUploader<'_> {
                 head_exists(self.object_store, &path).await?
             };
             if !remote_present {
-                let compressed = tokio::task::spawn_blocking(move || {
-                    crate::compression::compress(&data, zstd::DEFAULT_COMPRESSION_LEVEL)
+                let data = data.take().expect("chunk bytes are consumed once");
+                let (compressed, returned_guard) = tokio::task::spawn_blocking(move || {
+                    let compressed =
+                        crate::compression::compress(&data, zstd::DEFAULT_COMPRESSION_LEVEL);
+                    (compressed, guard)
                 })
                 .await
-                .map_err(io::Error::other)?
                 .map_err(io::Error::other)?;
+                guard = returned_guard;
+                let compressed = compressed.map_err(io::Error::other)?;
                 if let Some(packed) = self.packed_chunks {
                     packed
                         .put(ChunkMeta { digest, size }, compressed.into())
@@ -97,6 +111,8 @@ impl ChunkUploader<'_> {
             }
             self.chunk_index.insert(digest);
         }
+        drop(data);
+        drop(guard);
         Ok(ChunkMeta { digest, size })
     }
 }
