@@ -166,6 +166,10 @@ SUITE_BUILD_SPECS["chunk-manifest-stream"] = SuiteBuildSpec(
     ("test", "--release", "--no-default-features", "--features", "native,experimental", "--test", "chunk_manifest_stream", "--no-run", "--message-format=json"),
     "--probe-binary", "chunk_manifest_stream", cargo_json_test="chunk_manifest_stream", supports_report=False,
 )
+SUITE_BUILD_SPECS["chunk-hash-batch"] = SuiteBuildSpec(
+    ("test", "--release", "--no-default-features", "--features", "native,experimental", "--test", "chunk_hash_batch", "--no-run", "--message-format=json"),
+    "--probe-binary", "chunk_hash_batch", cargo_json_test="chunk_hash_batch", supports_report=False,
+)
 SUITE_BUILD_SPECS["git-ingest-scheduling"] = SuiteBuildSpec(
     ("test", "--release", "--features", "cli,git", "--lib", "--no-run", "--message-format=json"),
     "--probe-binary", "casita-lib-test", cargo_json_test="casita",

@@ -2901,3 +2901,11 @@ retain every observation and the paired ranges.
 ```sh
 benchmark run chunk-manifest-stream --file-bytes 268435456 --backend both --repetitions 5 --cpu-affinity 0,1,2,3 --baseline-binary /path/to/completion-order --probe-binary /path/to/streaming --no-build --output /tmp/manifest-parent.json
 ```
+
+### Chunk hash batching
+
+`chunk-hash-batch` measures cold and duplicate writes across chunk sizes,
+upload concurrency, memory admission, and the inline-hashing boundary. It runs
+in `benchmark all`. See the
+[cases, correctness gates, and measurement notes](chunk-hash-batch.md)
+for reproducible commands and retained paired reports.

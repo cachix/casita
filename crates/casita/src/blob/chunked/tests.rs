@@ -3767,7 +3767,7 @@ async fn a_parked_reader_does_not_starve_a_second_reader_of_buffers() {
 // Occupy the runtime's only blocking thread so a real upload owns a queued
 // hash/compression task. Occupying the worker makes cancellation deterministic
 // without timing the CPU work or relying on uploader instrumentation.
-fn check_cancelled_upload_budget(size: usize) {
+fn check_cancelled_upload_budget(size: usize, average: u32) {
     struct Release(Option<std::sync::mpsc::Sender<()>>);
     impl Drop for Release {
         fn drop(&mut self) {
@@ -3785,7 +3785,7 @@ fn check_cancelled_upload_budget(size: usize) {
         let store = ChunkedBlobStore::new(
             Arc::new(object_store::memory::InMemory::new()),
             Path::default(),
-            512,
+            average,
         )
         .with_chunk_memory_budget_bytes(64 * 1024);
         let budget = store.chunk_memory_budget.clone();
@@ -3826,11 +3826,13 @@ fn check_cancelled_upload_budget(size: usize) {
 #[test]
 fn cancelled_small_upload_keeps_chunk_budget_until_cpu_completion() {
     // This uses the single-chunk prehashed path and queues compression.
-    check_cancelled_upload_budget(1);
+    check_cancelled_upload_budget(1, 512);
 }
 
 #[test]
 fn cancelled_chunk_hash_keeps_chunk_budget_until_cpu_completion() {
-    // This reaches normal chunking before EOF and queues chunk hashing.
-    check_cancelled_upload_budget(16 * 1024);
+    // This reaches normal chunking before EOF and queues chunk hashing. The
+    // 32 KiB maximum-size chunk exceeds the bound for hashing a lone chunk
+    // inline, and the one-unit budget forces its group to flush alone.
+    check_cancelled_upload_budget(64 * 1024, 16 * 1024);
 }
