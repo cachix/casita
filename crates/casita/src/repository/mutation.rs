@@ -988,6 +988,12 @@ where
                 #[cfg(test)]
                 drop(phase);
 
+                // Closures are verified once, under the commit lock: walks
+                // that run alongside other publishers' commits contend for the
+                // same state backend and slow every writer. The pins above
+                // retain every closure a walk reaches, so a retry against a
+                // newer revision reuses the proofs instead of walking again.
+                let mut newly_verified = None;
                 let mut retry = publication::PublicationRetry::new();
                 loop {
                     #[cfg(test)]
@@ -997,94 +1003,34 @@ where
                     drop(phase);
                     #[cfg(test)]
                     let phase = self.repository.time_publication_phase(2);
-                    if let Some(expected) = exact_revision
-                        && snapshot.revision() != expected
+                    if let Some(mismatch) = publication_preconditions(
+                        snapshot.as_ref(),
+                        exact_revision,
+                        &expectations_by_name,
+                    )
+                    .await?
                     {
-                        return Err(MetadataError::StaleRevision {
-                            expected,
-                            actual: snapshot.revision(),
-                        }
-                        .into());
+                        return Ok(mismatch);
                     }
-                    for expectation in expectations_by_name.values() {
-                        let actual = snapshot.root(&expectation.name).await?;
-                        if actual != expectation.target {
-                            return Ok(ConditionalPublishResult::RootMismatch {
-                                name: expectation.name.clone(),
-                                expected: expectation.target.clone(),
-                                actual,
-                            });
-                        }
-                    }
-                    // Every walk of this attempt shares the objects earlier
-                    // walks proved, so each object is read at most once per
-                    // attempt. A retry starts empty against its new snapshot.
-                    let mut proven = SpillSet::new(self.repository.spill_area(), "publication");
-                    let trust_construction = self.repository.formats.is_builtin();
-                    let mut newly_verified = Vec::new();
-                    if trust_construction {
-                        // A raw blob's record already proves its closure, so a
-                        // witness per file would only add metadata writes.
-                        newly_verified.extend(
-                            constructed_closures
-                                .iter()
-                                .filter(|key| {
-                                    !overlay.get(*key).is_some_and(|record| {
-                                        self.repository.formats.intrinsically_complete(record)
-                                    })
-                                })
-                                .cloned(),
-                        );
-                    } else {
-                        // Construction proves the built-in rules, not those a
-                        // replacement verifier adds under the same namespace.
-                        // Staging order is bottom-up, so parents stop at their
-                        // already proven children.
-                        for target in staged
-                            .iter()
-                            .map(|object| object.record().key())
-                            .filter(|key| constructed_closures.contains(*key))
-                        {
-                            verify_publishable(
-                                self.repository.closure_verifier().with_proofs(&mut proven),
+                    let newly_verified = match &mut newly_verified {
+                        Some(proofs) => proofs,
+                        None => newly_verified.insert(
+                            self.verify_publication(
                                 snapshot.as_ref(),
                                 &overlay,
-                                target,
-                                &mut newly_verified,
+                                &staged,
+                                &root_changes,
+                                &constructed_closures,
                             )
-                            .await?;
-                        }
-                    }
-                    for change in &root_changes {
-                        if let RootChange::Set { target, .. } = change {
-                            // Named targets keep a stored witness even where
-                            // completeness is derived: fast application root
-                            // changes accept only a persisted one.
-                            newly_verified.push(target.clone());
-                            if trust_construction && constructed_closures.contains(target) {
-                                // The target record is part of this exact overlay, and
-                                // the private caller established its complete closure
-                                // while constructing the filesystem graph bottom-up.
-                                debug_assert!(overlay.contains_key(target));
-                                continue;
-                            }
-                            verify_publishable(
-                                self.repository.closure_verifier().with_proofs(&mut proven),
-                                snapshot.as_ref(),
-                                &overlay,
-                                target,
-                                &mut newly_verified,
-                            )
-                            .await?;
-                        }
-                    }
-                    drop(proven);
+                            .await?,
+                        ),
+                    };
 
                     let mut mutation = metadata.clone().unwrap_or_default();
                     mutation.add_objects(verified.iter().cloned());
                     // Recorded in the same transaction that publishes them, so a
                     // shortcut can never outlive the objects it vouches for.
-                    mutation.mark_validated_closures(newly_verified);
+                    mutation.mark_validated_closures(newly_verified.iter().cloned());
                     for change in &root_changes {
                         match change {
                             RootChange::Set { name, target } => {
@@ -1161,6 +1107,91 @@ where
             .await
     }
 
+    /// Prove every closure this publication records a witness for, and
+    /// every closure it names, against one snapshot.
+    async fn verify_publication(
+        &self,
+        snapshot: &dyn MetadataSnapshot,
+        overlay: &BTreeMap<ObjectKey, ObjectRecord>,
+        staged: &[StagedObject<'_>],
+        root_changes: &[RootChange],
+        constructed_closures: &BTreeSet<ObjectKey>,
+    ) -> Result<Vec<ObjectKey>, RepositoryError> {
+        let formats = &self.repository.formats;
+        let trust_construction = formats.is_builtin();
+        let mut newly_verified = Vec::new();
+        // Every walk is planned first and driven by one await: a debug build
+        // reserves frame space per await point, and publication already runs
+        // beneath deep import and command futures.
+        let mut walks = Vec::new();
+        if trust_construction {
+            // A raw blob's record already proves its closure, so a witness
+            // per file would only add metadata writes.
+            newly_verified.extend(
+                constructed_closures
+                    .iter()
+                    .filter(|key| {
+                        !overlay
+                            .get(*key)
+                            .is_some_and(|record| formats.intrinsically_complete(record))
+                    })
+                    .cloned(),
+            );
+        } else {
+            // Construction proves the built-in rules, not those a replacement
+            // verifier adds under the same namespace. Staging order is
+            // bottom-up, so parents stop at their already proven children.
+            walks.extend(
+                staged
+                    .iter()
+                    .map(|object| object.record().key())
+                    .filter(|key| constructed_closures.contains(*key))
+                    .cloned(),
+            );
+        }
+        for change in root_changes {
+            if let RootChange::Set { target, .. } = change {
+                // Named targets keep a stored witness even where completeness
+                // is derived: fast application root changes accept only a
+                // persisted one.
+                newly_verified.push(target.clone());
+                if trust_construction && constructed_closures.contains(target) {
+                    // The target record is part of this exact overlay, and the
+                    // private caller established its complete closure while
+                    // constructing the filesystem graph bottom-up.
+                    debug_assert!(overlay.contains_key(target));
+                    continue;
+                }
+                walks.push(target.clone());
+            }
+        }
+        // Every walk shares the objects earlier walks proved, so each object
+        // is read at most once per publication.
+        let mut proven = SpillSet::new(self.repository.spill_area(), "publication");
+        for target in walks {
+            match verify_closure_with(
+                self.repository.closure_verifier().with_proofs(&mut proven),
+                snapshot,
+                overlay,
+                &target,
+                None,
+                ClosureAudit::Incremental,
+                Some(&mut newly_verified),
+            )
+            .await?
+            {
+                ClosureStatus::Complete { .. } => {}
+                status => {
+                    return Err(RepositoryError::RootNotPublishable {
+                        root: target,
+                        status,
+                    });
+                }
+            }
+        }
+        Ok(newly_verified)
+    }
+
     /// Publish staged records without naming them. They remain collectible and
     /// can complete a graph published in later bounded batches.
     pub async fn publish_unrooted(
@@ -1212,29 +1243,31 @@ where
     }
 }
 
-/// Require one complete closure before any of its proofs can be recorded.
-async fn verify_publishable<PS: BlobStore>(
-    verifier: ClosureVerifier<'_, PS>,
+/// Refuse a publication whose exact revision or root expectations no longer
+/// hold. A stale exact revision is final; a root mismatch is a result.
+async fn publication_preconditions(
     snapshot: &dyn MetadataSnapshot,
-    overlay: &BTreeMap<ObjectKey, ObjectRecord>,
-    target: &ObjectKey,
-    newly_verified: &mut Vec<ObjectKey>,
-) -> Result<(), RepositoryError> {
-    match verify_closure_with(
-        verifier,
-        snapshot,
-        overlay,
-        target,
-        None,
-        ClosureAudit::Incremental,
-        Some(newly_verified),
-    )
-    .await?
+    exact_revision: Option<crate::RepositoryRevision>,
+    expectations: &BTreeMap<RootName, RootExpectation>,
+) -> Result<Option<ConditionalPublishResult>, RepositoryError> {
+    if let Some(expected) = exact_revision
+        && snapshot.revision() != expected
     {
-        ClosureStatus::Complete { .. } => Ok(()),
-        status => Err(RepositoryError::RootNotPublishable {
-            root: target.clone(),
-            status,
-        }),
+        return Err(MetadataError::StaleRevision {
+            expected,
+            actual: snapshot.revision(),
+        }
+        .into());
     }
+    for expectation in expectations.values() {
+        let actual = snapshot.root(&expectation.name).await?;
+        if actual != expectation.target {
+            return Ok(Some(ConditionalPublishResult::RootMismatch {
+                name: expectation.name.clone(),
+                expected: expectation.target.clone(),
+                actual,
+            }));
+        }
+    }
+    Ok(None)
 }

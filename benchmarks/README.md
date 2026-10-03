@@ -40,6 +40,24 @@ full; the smoke profile uses exactly that. The suite runs in
 supply an existing `casita-lib-test` executable, which must be built with the
 `s3` feature so the WAL3 cases run.
 
+## Concurrent publication
+
+`benchmark run concurrent-publication --depth 64 --files 16 --output /tmp/concurrent-publication.json`
+starts 1, 4 and 16 writers at once on memory and local repositories. Each
+publishes a rooted chain of `--depth` directories with `--files` files per
+level, so each publication's closure holds `depth × (files + 1)` new objects.
+Every root must audit complete afterwards. The probe reports the concurrent
+wall time and the summed publication phases, where `coordination_wait` is time
+queued for the commit lock. One writer is the uncontended baseline for the
+contended cases.
+
+The probe decided where closure walks run. Moving them before the commit
+lock let 16 local writers walk alongside each other's Turso commits: summed
+validation grew from 0.5 s to 10–30 s and wall time from 1.4 s to 2.4–6.7 s
+across runs, while memory showed no gain. Walks therefore stay under the lock
+and run once per publication; a retried commit reuses their proofs, which the
+publication's pins keep valid.
+
 ## Filesystem reuse
 
 `benchmark run filesystem-reuse` separates cached tree import from forced rereads

@@ -230,3 +230,137 @@ async fn benchmark_raw_blob_closures() {
     }
     crate::flush_repository_leases().await.unwrap();
 }
+
+/// Stage one writer's chain of `depth` directories, each holding `files`
+/// distinct files and the previous directory. Returns the staged objects in
+/// post-order and the chain's top directory.
+async fn stage_chain<'hold, PS: BlobStore, SS: MetadataStore>(
+    session: &'hold MutationSession<'_, PS, SS>,
+    writer: usize,
+    depth: usize,
+    files: usize,
+) -> (Vec<StagedObject<'hold>>, ObjectKey) {
+    let mut staged = Vec::new();
+    let mut child: Option<Directory> = None;
+    for level in 0..depth {
+        let mut entries = Vec::with_capacity(files + 1);
+        for index in 0..files {
+            let bytes = format!("writer {writer} level {level} file {index}");
+            let blob = session.stage_blob(bytes.as_bytes()).await.unwrap();
+            entries.push((
+                PathComponent::try_from(format!("f{index:04}").as_str()).unwrap(),
+                Node::File {
+                    digest: blob.record().payload(),
+                    size: blob.record().payload_size(),
+                    executable: false,
+                },
+            ));
+            staged.push(blob);
+        }
+        if let Some(child) = &child {
+            entries.push((
+                PathComponent::try_from("child").unwrap(),
+                Node::Directory {
+                    digest: child.digest(),
+                    size: child.size(),
+                },
+            ));
+        }
+        let directory = Directory::try_from_iter(entries).unwrap();
+        staged.push(session.stage_directory(&directory).await.unwrap());
+        child = Some(directory);
+    }
+    let top = staged.last().unwrap().record().key().clone();
+    (staged, top)
+}
+
+/// Publish one rooted chain per writer, all writers at once. Returns the wall
+/// time of the concurrent publications alone.
+async fn publish_concurrently<PS, SS>(
+    repository: &Repository<PS, SS>,
+    writers: usize,
+    depth: usize,
+    files: usize,
+) -> u128
+where
+    PS: BlobGc + 'static,
+    SS: MetadataStore + 'static,
+{
+    let start = Arc::new(tokio::sync::Barrier::new(writers + 1));
+    let mut tasks = Vec::with_capacity(writers);
+    for writer in 0..writers {
+        let repository = repository.clone();
+        let start = start.clone();
+        tasks.push(tokio::spawn(async move {
+            let session = repository.mutation_session().await.unwrap();
+            let (staged, top) = stage_chain(&session, writer, depth, files).await;
+            start.wait().await;
+            let name = RootName::try_from(format!("writer/{writer}").as_str()).unwrap();
+            session
+                .publish_rooted(staged, name, top.clone())
+                .await
+                .unwrap();
+            top
+        }));
+    }
+    start.wait().await;
+    let started = Instant::now();
+    let mut tops = Vec::with_capacity(writers);
+    for task in tasks {
+        tops.push(task.await.unwrap());
+    }
+    let wall = started.elapsed().as_nanos();
+    for top in tops {
+        assert_eq!(
+            repository.verify_closure(&top).await.unwrap(),
+            ClosureStatus::Complete {
+                objects: depth * (files + 1)
+            },
+            "every concurrent publication must be complete"
+        );
+    }
+    wall
+}
+
+/// Concurrent publishers verify their closures once, under the commit lock.
+/// A single writer is the uncontended baseline; with several, the phases
+/// show how long each writer queues for the lock and how long its walk holds
+/// it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "run through benchmark run concurrent-publication"]
+async fn benchmark_concurrent_publication() {
+    let depth = configured("CASITA_PUBLICATION_BENCH_DEPTH", 64);
+    let files = configured("CASITA_PUBLICATION_BENCH_FILES", 16);
+    println!("publication_depth {depth} publication_files {files}");
+    for writers in [1, 4, 16] {
+        for local in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let label = if local { "local" } else { "memory" };
+            let (wall, before, after) = if local {
+                let repository = Repository::local(directory.path()).await.unwrap();
+                let before = repository.publication_profile();
+                let wall = publish_concurrently(&repository, writers, depth, files).await;
+                let after = repository.publication_profile();
+                repository.flush().await.unwrap();
+                (wall, before, after)
+            } else {
+                let repository = Repository::new(
+                    crate::MemoryBlobStore::new(),
+                    crate::MemoryMetadataStore::new().unwrap(),
+                );
+                let before = repository.publication_profile();
+                let wall = publish_concurrently(&repository, writers, depth, files).await;
+                (wall, before, repository.publication_profile())
+            };
+            let mut line = format!("{label}_w{writers}_wall_nanos {wall}");
+            for (index, phase) in PUBLICATION_PHASES.iter().enumerate() {
+                line.push_str(&format!(
+                    " {label}_w{writers}_{phase}_nanos {}",
+                    after.nanos[index] - before.nanos[index]
+                ));
+            }
+            println!("{line}");
+        }
+    }
+    crate::flush_repository_leases().await.unwrap();
+}

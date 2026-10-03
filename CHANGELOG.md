@@ -111,6 +111,9 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
   rows still unwitnessed; WAL3 deltas carry only objects and witnesses the
   commit adds, so republished batches no longer re-encode into every later
   tail record.
+- A publication whose commit is refused by a concurrent change no longer
+  walks its closures again on retry. Its pins retain every closure it proved,
+  so the proofs hold at the newer revision.
 - On macOS, repositories whose state is a `TursoMetadataStore`, including
   `Repository::local` and custom compositions, flush the drive cache
   (`F_FULLFSYNC`) before each deletion batch. Commits sync only to the drive's

@@ -1686,6 +1686,20 @@
       ]
     },
     {
+      "id": "concurrent-publication",
+      "suite_id": "state-and-publication",
+      "title": "Concurrent rooted publications verifying closures under the commit lock",
+      "kind": "module",
+      "target": "benchmarks.suites.native_probes",
+      "default_arguments": [
+        "--probe",
+        "concurrent-publication"
+      ],
+      "profiles": [
+        "custom"
+      ]
+    },
+    {
       "id": "logical-state",
       "suite_id": "state-and-publication",
       "title": "Logical state shard scaling",
