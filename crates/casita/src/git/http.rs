@@ -1125,8 +1125,8 @@ mod tests {
         let server = tokio::spawn(serve_git_smart_http_with_shutdown(
             listener,
             "/origin.git".into(),
-            service,
-            options,
+            service.clone(),
+            options.clone(),
             async {
                 let _ = shutdown_receive.await;
             },
@@ -1158,6 +1158,27 @@ mod tests {
                 .unwrap(),
             0
         );
+        shutdown_send.send(()).unwrap();
+        server.await.unwrap().unwrap();
+
+        // Git reconnects as soon as it has read a response, which can be before
+        // the server releases that connection's slot, so a one-connection limit
+        // would refuse it. The clones get room for that overlap.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_send, shutdown_receive) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(serve_git_smart_http_with_shutdown(
+            listener,
+            "/origin.git".into(),
+            service,
+            GitHttpOptions {
+                max_connections: 4,
+                ..options
+            },
+            async {
+                let _ = shutdown_receive.await;
+            },
+        ));
 
         let checkout_parent = tempfile::tempdir().unwrap();
         let checkout = checkout_parent.path().join("clone");
