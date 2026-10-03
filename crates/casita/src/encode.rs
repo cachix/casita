@@ -116,7 +116,7 @@ pub(crate) use DirectoryDecodeError as DecodeError;
 // too once its transfer endpoints land.
 #[cfg_attr(not(feature = "native"), allow(dead_code))]
 pub(crate) fn decode_directory(bytes: &[u8]) -> Result<Directory, DecodeError> {
-    let mut r = Reader::new(bytes);
+    let mut r = reader(bytes);
     let count = r.read_u64()?;
 
     let mut dir = Directory::new();
@@ -160,56 +160,21 @@ pub(crate) fn decode_directory(bytes: &[u8]) -> Result<Directory, DecodeError> {
         dir.add(name, node)?;
     }
 
-    if r.remaining() != 0 {
-        return Err(DecodeError::TrailingBytes);
-    }
+    r.finish()?;
 
     Ok(dir)
 }
 
-/// A bounds-checked cursor over a binary encoding. Shared with the blob
-/// manifest decoder in [`crate::blob`].
-pub(crate) struct Reader<'a> {
-    bytes: &'a [u8],
-    pos: usize,
-}
+/// Directory and chunk-manifest cursors preserve the directory decoder's
+/// existing primitive errors, including its EOF diagnostic.
+pub(crate) type Reader<'a> = crate::binary::Reader<'a, DecodeError>;
 
-impl<'a> Reader<'a> {
-    pub(crate) fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, pos: 0 }
-    }
-
-    /// Bytes not yet consumed. Lets a decoder treat a trailing section as
-    /// optional (e.g. a field appended to a format).
-    #[cfg_attr(not(feature = "native"), allow(dead_code))]
-    pub(crate) fn remaining(&self) -> usize {
-        self.bytes.len() - self.pos
-    }
-
-    pub(crate) fn read(&mut self, n: usize) -> Result<&'a [u8], DecodeError> {
-        let end = self.pos.checked_add(n).ok_or(DecodeError::UnexpectedEof)?;
-        if end > self.bytes.len() {
-            return Err(DecodeError::UnexpectedEof);
-        }
-        let slice = &self.bytes[self.pos..end];
-        self.pos = end;
-        Ok(slice)
-    }
-
-    #[cfg_attr(not(feature = "native"), allow(dead_code))]
-    fn read_u8(&mut self) -> Result<u8, DecodeError> {
-        Ok(self.read(1)?[0])
-    }
-
-    pub(crate) fn read_u64(&mut self) -> Result<u64, DecodeError> {
-        Ok(u64::from_le_bytes(self.read(8)?.try_into().unwrap()))
-    }
-
-    #[cfg_attr(not(feature = "native"), allow(dead_code))]
-    fn read_len_prefixed(&mut self) -> Result<&'a [u8], DecodeError> {
-        let len = usize::try_from(self.read_u64()?).map_err(|_| DecodeError::LengthOverflow)?;
-        self.read(len)
-    }
+pub(crate) fn reader(bytes: &[u8]) -> Reader<'_> {
+    crate::binary::Reader::new(bytes, |error| match error {
+        crate::binary::ReadError::UnexpectedEof => DecodeError::UnexpectedEof,
+        crate::binary::ReadError::LengthOverflow => DecodeError::LengthOverflow,
+        crate::binary::ReadError::TrailingBytes => DecodeError::TrailingBytes,
+    })
 }
 
 #[cfg(test)]
@@ -292,10 +257,13 @@ mod tests {
         )])
         .unwrap();
         let encoded = encode_directory(&dir);
-        assert_eq!(
-            decode_directory(&encoded[..encoded.len() - 1]).unwrap_err(),
-            DecodeError::UnexpectedEof
-        );
+        for end in 0..encoded.len() {
+            assert_eq!(
+                decode_directory(&encoded[..end]).unwrap_err(),
+                DecodeError::UnexpectedEof,
+                "truncated at {end}"
+            );
+        }
     }
 
     #[test]
