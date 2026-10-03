@@ -1180,6 +1180,28 @@ mod tests {
             },
         ));
 
+        shutdown_send.send(()).unwrap();
+        server.await.unwrap().unwrap();
+
+        // Clone requests use ordinary connection and idle limits. The
+        // overload fixture's single permit can reject Git's next connection
+        // before the preceding connection task releases it, and its short
+        // idle deadline depends on how quickly the child process is scheduled.
+        options.max_connections = GitHttpOptions::default().max_connections;
+        options.idle_timeout = GitHttpOptions::default().idle_timeout;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_send, shutdown_receive) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(serve_git_smart_http_with_shutdown(
+            listener,
+            "/origin.git".into(),
+            service,
+            options,
+            async {
+                let _ = shutdown_receive.await;
+            },
+        ));
+
         let checkout_parent = tempfile::tempdir().unwrap();
         let checkout = checkout_parent.path().join("clone");
         let output = Command::new("git")
