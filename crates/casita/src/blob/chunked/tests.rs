@@ -446,6 +446,7 @@ struct ChaosObjectStore {
     metadata_read_bytes: AtomicUsize,
     metadata_write_bytes: AtomicUsize,
     bao_multipart_completed: Arc<AtomicUsize>,
+    chunk_heads: AtomicUsize,
 }
 
 #[derive(Debug)]
@@ -539,6 +540,7 @@ impl ChaosObjectStore {
             metadata_write_bytes: AtomicUsize::new(0),
             bao_multipart_completed: Arc::new(AtomicUsize::new(0)),
             paused_chunk_puts: AtomicUsize::new(0),
+            chunk_heads: AtomicUsize::new(0),
         }
     }
 
@@ -680,6 +682,9 @@ impl ObjectStore for ChaosObjectStore {
             return Err(self.injected_error("get"));
         }
         let head = options.head;
+        if head && location.as_ref().starts_with("chunks/") {
+            self.chunk_heads.fetch_add(1, Ordering::SeqCst);
+        }
         let result = self.inner.get_opts(location, options).await?;
         if !head {
             let counter = if location.as_ref().starts_with("chunks/") {
@@ -3241,6 +3246,50 @@ async fn blob_coadmits_known_identities_and_bao_path() {
         drop(batch);
         crate::flush_repository_leases().await.unwrap();
         assert!(ledger.inventory().await.unwrap().pins.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn loose_chunk_writes_probe_each_new_chunk_once() {
+    use crate::metadata::{DataPin, DataPinLease, MemoryPinStore, PinScope};
+    use std::collections::BTreeSet;
+    let data: Vec<u8> = (0..64 * 1024u32)
+        .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+        .collect();
+    for pinned in [false, true] {
+        let (store, objects) = chaos_chunked_store(ChaosFault::ReadChunk);
+        let batch = if pinned {
+            let pin = DataPinLease::acquire(
+                Arc::new(MemoryPinStore::default()),
+                DataPin {
+                    scope: PinScope::Staging,
+                    catalog: None,
+                    resources: BTreeSet::new(),
+                },
+            )
+            .await
+            .unwrap();
+            Some(store.begin_pinned_batch(pin).unwrap())
+        } else {
+            None
+        };
+        let requests = || {
+            (
+                objects.chunk_puts.load(Ordering::SeqCst),
+                objects.chunk_heads.load(Ordering::SeqCst),
+            )
+        };
+        let blob = write_blob(&store, &data).await;
+        let (puts, _) = requests();
+        assert!(puts > 1, "pinned={pinned} must store several chunks");
+        // A new loose chunk costs one existence probe, whether presence is
+        // remembered by the pin or by the chunk index. Rewrites probe nothing.
+        assert_eq!(requests(), (puts, puts), "pinned={pinned}");
+        assert_eq!(write_blob(&store, &data).await, blob);
+        assert_eq!(requests(), (puts, puts), "pinned={pinned}");
+        assert_eq!(read_blob(&store, &blob).await.unwrap(), data);
+        drop(batch);
+        crate::flush_repository_leases().await.unwrap();
     }
 }
 

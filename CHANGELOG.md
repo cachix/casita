@@ -232,6 +232,8 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Fixed
 
+- A new loose chunk uses one existence probe. Pinned writers remember
+  chunks they store so repeated chunks in the batch need no further probe.
 - A cancelled chunked write retains its chunk memory budget while queued
   hashing or compression still holds the chunk bytes, preventing concurrent
   writers from exceeding the budget.
