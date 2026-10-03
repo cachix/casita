@@ -17,6 +17,7 @@ CORE_BENCHES = ("write_path", "hash_inputs", "tar_import", "filesystem_import", 
 
 # Bounded defaults. Frontier sizes remain explicit opt-in suite arguments.
 SMOKE = {
+    "chunk-manifest-stream": ["--profile", "smoke"],
     "chunk-upload-completion": ["--profile", "smoke"],
     "filesystem-reuse": ["--profile", "standard"],
     "scoped-catalog": ["--profile", "smoke"],

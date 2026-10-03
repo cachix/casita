@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "result_schema": "casita.chunk-manifest-stream.v1",
+  "complete": true,
+  "configuration": {
+    "file_bytes": [
+      268435456
+    ],
+    "backends": [
+      "memory",
+      "local"
+    ],
+    "repetitions": 5,
+    "cpu_affinity": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "upload_concurrency": 4,
+    "average_chunk_bytes": 1024,
+    "fixture_buffer_bytes": 65536,
+    "timing": "payload stream write and close only; independent prehash and verified readback excluded",
+    "memory_measurement": "Linux process high-water RSS captured immediately after close, before bounded-buffer readback; includes runtime and backend"
+  },
+  "paired_summary": [
+    {
+      "file_bytes": 268435456,
+      "backend": "memory",
+      "pairs": 5,
+      "enough_samples": true,
+      "median_paired_reduction_percent": 4.93621604638359,
+      "minimum_paired_reduction_percent": 3.3483520130885625,
+      "maximum_paired_reduction_percent": 16.424524910508744,
+      "median_paired_write_peak_rss_reduction_bytes": 8687616,
+      "minimum_paired_write_peak_rss_reduction_bytes": 7938048,
+      "maximum_paired_write_peak_rss_reduction_bytes": 9388032
+    },
+    {
+      "file_bytes": 268435456,
+      "backend": "local",
+      "pairs": 5,
+      "enough_samples": true,
+      "median_paired_reduction_percent": 12.836300961015635,
+      "minimum_paired_reduction_percent": 2.861780290134186,
+      "maximum_paired_reduction_percent": 38.66504740363445,
+      "median_paired_write_peak_rss_reduction_bytes": 8581120,
+      "minimum_paired_write_peak_rss_reduction_bytes": 7659520,
+      "maximum_paired_write_peak_rss_reduction_bytes": 10596352
+    }
+  ],
+  "samples": [
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 0, "wall_seconds": 2.558640167, "file_bytes": 268435456, "backend": "memory", "wall_nanos": 2558640167, "root": "blake3-hDgz3rZ3YHoAqOSZCz20MzFrWjeAslkjFL2UpGyUymI", "manifest_hash": "blake3-XfN-4eFWQrhCMKmbMy6ZoiC9EB6kxR6CGVjDtP7agQ8", "before_rss_bytes": 2236416, "write_peak_rss_bytes": 13877248, "correctness": "independent streaming BLAKE3 and exhaustive verified readback"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 0, "wall_seconds": 2.472381248, "file_bytes": 268435456, "backend": "memory", "wall_nanos": 2472381248, "root": "blake3-hDgz3rZ3YHoAqOSZCz20MzFrWjeAslkjFL2UpGyUymI", "manifest_hash": "blake3-XfN-4eFWQrhCMKmbMy6ZoiC9EB6kxR6CGVjDtP7agQ8", "before_rss_bytes": 2224128, "write_peak_rss_bytes": 5353472, "correctness": "independent streaming BLAKE3 and exhaustive verified readback"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 1, "wall_seconds": 2.434807041, "file_bytes": 268435456, "backend": "memory", "wall_nanos": 2434807041, "root": "blake3-hDgz3rZ3YHoAqOSZCz20MzFrWjeAslkjFL2UpGyUymI", "manifest_hash": "blake3-XfN-4eFWQrhCMKmbMy6ZoiC9EB6kxR6CGVjDtP7agQ8", "before_rss_bytes": 2617344, "write_peak_rss_bytes": 6299648, "correctness": "independent streaming BLAKE3 and exhaustive verified readback"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 1, "wall_seconds": 2.519157295, "file_bytes": 268435456, "backend": "memory", "wall_nanos": 2519157295, "root": "blake3-hDgz3rZ3YHoAqOSZCz20MzFrWjeAslkjFL2UpGyUymI", "manifest_hash": "blake3-XfN-4eFWQrhCMKmbMy6ZoiC9EB6kxR6CGVjDtP7agQ8", "before_rss_bytes": 2564096, "write_peak_rss_bytes": 14237696, "correctness": "independent streaming BLAKE3 and exhaustive verified readback"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 2, "wall_seconds": 2.839072427, "file_bytes": 268435456, "backend": "memory", "wall_nanos": 2839072427, "root": "blake3-hDgz3rZ3YHoAqOSZCz20MzFrWjeAslkjFL2UpGyUymI", "manifest_hash": "blake3-XfN-4eFWQrhCMKmbMy6ZoiC9EB6kxR6CGVjDtP7agQ8", "before_rss_bytes": 2605056, "write_peak_rss_bytes": 14766080, "correctness": "independent streaming BLAKE3 and exhaustive verified readback"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 2, "wall_seconds": 2.372768269, "file_bytes": 268435456, "backend": "memory", "wall_nanos": 2372768269, "root": "blake3-hDgz3rZ3YHoAqOSZCz20MzFrWjeAslkjFL2UpGyUymI", "manifest_hash": "blake3-XfN-4eFWQrhCMKmbMy6ZoiC9EB6kxR6CGVjDtP7agQ8", "before_rss_bytes": 2621440, "write_peak_rss_bytes": 5378048, "correctness": "independent streaming BLAKE3 and exhaustive verified readback"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 3, "wall_seconds": 2.373374781, "file_bytes": 268435456, "backend": "memory", "wall_nanos": 2373374781, "root": "blake3-hDgz3rZ3YHoAqOSZCz20MzFrWjeAslkjFL2UpGyUymI", "manifest_hash": "blake3-XfN-4eFWQrhCMKmbMy6ZoiC9EB6kxR6CGVjDtP7agQ8", "before_rss_bytes": 2605056, "write_peak_rss_bytes": 5488640, "correctness": "independent streaming BLAKE3 and exhaustive verified readback"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 3, "wall_seconds": 2.507408909, "file_bytes": 268435456, "backend": "memory", "wall_nanos": 2507408909, "root": "blake3-hDgz3rZ3YHoAqOSZCz20MzFrWjeAslkjFL2UpGyUymI", "manifest_hash": "blake3-XfN-4eFWQrhCMKmbMy6ZoiC9EB6kxR6CGVjDtP7agQ8", "before_rss_bytes": 2629632, "write_peak_rss_bytes": 14176256, "correctness": "independent streaming BLAKE3 and exhaustive verified readback"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 4, "wall_seconds": 2.515303237, "file_bytes": 268435456, "backend": "memory", "wall_nanos": 2515303237, "root": "blake3-hDgz3rZ3YHoAqOSZCz20MzFrWjeAslkjFL2UpGyUymI", "manifest_hash": "blake3-XfN-4eFWQrhCMKmbMy6ZoiC9EB6kxR6CGVjDtP7agQ8", "before_rss_bytes": 2600960, "write_peak_rss_bytes": 14467072, "correctness": "independent streaming BLAKE3 and exhaustive verified readback"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 4, "wall_seconds": 2.391142435, "file_bytes": 268435456, "backend": "memory", "wall_nanos": 2391142435, "root": "blake3-hDgz3rZ3YHoAqOSZCz20MzFrWjeAslkjFL2UpGyUymI", "manifest_hash": "blake3-XfN-4eFWQrhCMKmbMy6ZoiC9EB6kxR6CGVjDtP7agQ8", "before_rss_bytes": 2592768, "write_peak_rss_bytes": 5365760, "correctness": "independent streaming BLAKE3 and exhaustive verified readback"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 0, "wall_seconds": 2.897323005, "file_bytes": 268435456, "backend": "local", "wall_nanos": 2897323005, "root": "blake3-hDgz3rZ3YHoAqOSZCz20MzFrWjeAslkjFL2UpGyUymI", "manifest_hash": "blake3-XfN-4eFWQrhCMKmbMy6ZoiC9EB6kxR6CGVjDtP7agQ8", "before_rss_bytes": 2564096, "write_peak_rss_bytes": 13660160, "correctness": "independent streaming BLAKE3 and exhaustive verified readback"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 0, "wall_seconds": 2.785997316, "file_bytes": 268435456, "backend": "local", "wall_nanos": 2785997316, "root": "blake3-hDgz3rZ3YHoAqOSZCz20MzFrWjeAslkjFL2UpGyUymI", "manifest_hash": "blake3-XfN-4eFWQrhCMKmbMy6ZoiC9EB6kxR6CGVjDtP7agQ8", "before_rss_bytes": 2600960, "write_peak_rss_bytes": 5550080, "correctness": "independent streaming BLAKE3 and exhaustive verified readback"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 1, "wall_seconds": 2.718977032, "file_bytes": 268435456, "backend": "local", "wall_nanos": 2718977032, "root": "blake3-hDgz3rZ3YHoAqOSZCz20MzFrWjeAslkjFL2UpGyUymI", "manifest_hash": "blake3-XfN-4eFWQrhCMKmbMy6ZoiC9EB6kxR6CGVjDtP7agQ8", "before_rss_bytes": 2621440, "write_peak_rss_bytes": 5120000, "correctness": "independent streaming BLAKE3 and exhaustive verified readback"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 1, "wall_seconds": 2.799080568, "file_bytes": 268435456, "backend": "local", "wall_nanos": 2799080568, "root": "blake3-hDgz3rZ3YHoAqOSZCz20MzFrWjeAslkjFL2UpGyUymI", "manifest_hash": "blake3-XfN-4eFWQrhCMKmbMy6ZoiC9EB6kxR6CGVjDtP7agQ8", "before_rss_bytes": 2633728, "write_peak_rss_bytes": 13828096, "correctness": "independent streaming BLAKE3 and exhaustive verified readback"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 2, "wall_seconds": 2.858766349, "file_bytes": 268435456, "backend": "local", "wall_nanos": 2858766349, "root": "blake3-hDgz3rZ3YHoAqOSZCz20MzFrWjeAslkjFL2UpGyUymI", "manifest_hash": "blake3-XfN-4eFWQrhCMKmbMy6ZoiC9EB6kxR6CGVjDtP7agQ8", "before_rss_bytes": 2609152, "write_peak_rss_bytes": 13365248, "correctness": "independent streaming BLAKE3 and exhaustive verified readback"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 2, "wall_seconds": 1.753422985, "file_bytes": 268435456, "backend": "local", "wall_nanos": 1753422985, "root": "blake3-hDgz3rZ3YHoAqOSZCz20MzFrWjeAslkjFL2UpGyUymI", "manifest_hash": "blake3-XfN-4eFWQrhCMKmbMy6ZoiC9EB6kxR6CGVjDtP7agQ8", "before_rss_bytes": 2662400, "write_peak_rss_bytes": 5705728, "correctness": "independent streaming BLAKE3 and exhaustive verified readback"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 3, "wall_seconds": 1.196272378, "file_bytes": 268435456, "backend": "local", "wall_nanos": 1196272378, "root": "blake3-hDgz3rZ3YHoAqOSZCz20MzFrWjeAslkjFL2UpGyUymI", "manifest_hash": "blake3-XfN-4eFWQrhCMKmbMy6ZoiC9EB6kxR6CGVjDtP7agQ8", "before_rss_bytes": 2629632, "write_peak_rss_bytes": 4800512, "correctness": "independent streaming BLAKE3 and exhaustive verified readback"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 3, "wall_seconds": 1.372443335, "file_bytes": 268435456, "backend": "local", "wall_nanos": 1372443335, "root": "blake3-hDgz3rZ3YHoAqOSZCz20MzFrWjeAslkjFL2UpGyUymI", "manifest_hash": "blake3-XfN-4eFWQrhCMKmbMy6ZoiC9EB6kxR6CGVjDtP7agQ8", "before_rss_bytes": 2609152, "write_peak_rss_bytes": 15396864, "correctness": "independent streaming BLAKE3 and exhaustive verified readback"},
+    {"status": "ok", "implementation": "casita", "variant": "baseline", "repetition": 4, "wall_seconds": 1.548387955, "file_bytes": 268435456, "backend": "local", "wall_nanos": 1548387955, "root": "blake3-hDgz3rZ3YHoAqOSZCz20MzFrWjeAslkjFL2UpGyUymI", "manifest_hash": "blake3-XfN-4eFWQrhCMKmbMy6ZoiC9EB6kxR6CGVjDtP7agQ8", "before_rss_bytes": 2625536, "write_peak_rss_bytes": 13594624, "correctness": "independent streaming BLAKE3 and exhaustive verified readback"},
+    {"status": "ok", "implementation": "casita", "variant": "candidate", "repetition": 4, "wall_seconds": 1.226851831, "file_bytes": 268435456, "backend": "local", "wall_nanos": 1226851831, "root": "blake3-hDgz3rZ3YHoAqOSZCz20MzFrWjeAslkjFL2UpGyUymI", "manifest_hash": "blake3-XfN-4eFWQrhCMKmbMy6ZoiC9EB6kxR6CGVjDtP7agQ8", "before_rss_bytes": 2650112, "write_peak_rss_bytes": 5013504, "correctness": "independent streaming BLAKE3 and exhaustive verified readback"}
+  ],
+  "comparison": {
+    "baseline": "perf: admit chunk uploads in completion order",
+    "candidate": "perf: build chunk manifests incrementally",
+    "note": "Built before review-only documentation, comment, and formatting cleanup. Commit 6 is not included."
+  },
+  "environment": {
+    "captured_at_utc": "2026-10-04T07:38:45.773757+00:00",
+    "platform": "Linux-7.2.6-x86_64-with-glibc2.42",
+    "kernel": "7.2.6",
+    "architecture": "x86_64",
+    "cpu": "AMD Ryzen AI 9 HX 370 w/ Radeon 890M",
+    "logical_cpus": 24,
+    "memory_bytes": 100488892416,
+    "cpu_governor": "performance",
+    "filesystem": "zfs zroot/root rw,noatime,xattr,posixacl,casesensitive",
+    "python": "3.13.14",
+    "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+    "cargo": "cargo 1.96.0 (30a34c682 2026-05-25)"
+  },
+  "artifacts": [
+    {
+      "variant": "baseline",
+      "sha256": "6797f2b90f80ecd73741fb54c4d819cca427038686421656635b34673e7d4f94",
+      "build": {
+        "source_revision": "e474d66d1264f40c34df6e9e4c746d5f5cdaea3c",
+        "executable_sha256": "6797f2b90f80ecd73741fb54c4d819cca427038686421656635b34673e7d4f94",
+        "lockfile_sha256": "c616e3ded6fd4749056e0788d6ec8c87d8e1494d549041960e9055c507f39585",
+        "fixture_sha256": "9498a7713096d7407dc1d565798b41d7ea698b55de286f07b8636aea667614e2",
+        "features": [
+          "native",
+          "experimental"
+        ],
+        "default_features": false,
+        "rustc_version": "rustc 1.96.0 (ac68faa20 2026-05-25)\nbinary: rustc\ncommit-hash: ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96\ncommit-date: 2026-05-25\nhost: x86_64-unknown-linux-gnu\nrelease: 1.96.0\nLLVM version: 22.1.2\n",
+        "rustflags": "",
+        "profile": "release",
+        "casita_package_cleaned_before_build": true
+      }
+    },
+    {
+      "variant": "candidate",
+      "sha256": "b18da6336c5306d14c7f1115ba528de901608850aa854e4ad1dcbb07f3474faa",
+      "build": {
+        "source_revision": "8ec9bb0d1edca7b522d4b731e1867c2e5491bf31",
+        "executable_sha256": "b18da6336c5306d14c7f1115ba528de901608850aa854e4ad1dcbb07f3474faa",
+        "lockfile_sha256": "c616e3ded6fd4749056e0788d6ec8c87d8e1494d549041960e9055c507f39585",
+        "fixture_sha256": "9498a7713096d7407dc1d565798b41d7ea698b55de286f07b8636aea667614e2",
+        "features": [
+          "native",
+          "experimental"
+        ],
+        "default_features": false,
+        "rustc_version": "rustc 1.96.0 (ac68faa20 2026-05-25)\nbinary: rustc\ncommit-hash: ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96\ncommit-date: 2026-05-25\nhost: x86_64-unknown-linux-gnu\nrelease: 1.96.0\nLLVM version: 22.1.2\n",
+        "rustflags": "",
+        "profile": "release",
+        "casita_package_cleaned_before_build": true
+      }
+    }
+  ],
+  "processes": [
+    {"wall_seconds": 4.894356743, "user_seconds": 5.1, "system_seconds": 1.84, "max_rss_bytes": 13877248, "exit_code": 0, "variant": "baseline", "repetition": 0, "file_bytes": 268435456, "backend": "memory"},
+    {"wall_seconds": 4.801138477, "user_seconds": 5.1, "system_seconds": 1.63, "max_rss_bytes": 5165056, "exit_code": 0, "variant": "candidate", "repetition": 0, "file_bytes": 268435456, "backend": "memory"},
+    {"wall_seconds": 4.788250935, "user_seconds": 5.1, "system_seconds": 1.6, "max_rss_bytes": 6041600, "exit_code": 0, "variant": "candidate", "repetition": 1, "file_bytes": 268435456, "backend": "memory"},
+    {"wall_seconds": 4.842136442, "user_seconds": 5.06, "system_seconds": 1.78, "max_rss_bytes": 14237696, "exit_code": 0, "variant": "baseline", "repetition": 1, "file_bytes": 268435456, "backend": "memory"},
+    {"wall_seconds": 5.155910308, "user_seconds": 5.42, "system_seconds": 1.93, "max_rss_bytes": 14766080, "exit_code": 0, "variant": "baseline", "repetition": 2, "file_bytes": 268435456, "backend": "memory"},
+    {"wall_seconds": 4.687295688, "user_seconds": 5.02, "system_seconds": 1.49, "max_rss_bytes": 4706304, "exit_code": 0, "variant": "candidate", "repetition": 2, "file_bytes": 268435456, "backend": "memory"},
+    {"wall_seconds": 4.683793842, "user_seconds": 4.99, "system_seconds": 1.5, "max_rss_bytes": 5230592, "exit_code": 0, "variant": "candidate", "repetition": 3, "file_bytes": 268435456, "backend": "memory"},
+    {"wall_seconds": 4.805259068, "user_seconds": 5.03, "system_seconds": 1.72, "max_rss_bytes": 14176256, "exit_code": 0, "variant": "baseline", "repetition": 3, "file_bytes": 268435456, "backend": "memory"},
+    {"wall_seconds": 4.834713392, "user_seconds": 5.03, "system_seconds": 1.77, "max_rss_bytes": 14467072, "exit_code": 0, "variant": "baseline", "repetition": 4, "file_bytes": 268435456, "backend": "memory"},
+    {"wall_seconds": 4.702723213, "user_seconds": 5.03, "system_seconds": 1.51, "max_rss_bytes": 5419008, "exit_code": 0, "variant": "candidate", "repetition": 4, "file_bytes": 268435456, "backend": "memory"},
+    {"wall_seconds": 10.865022817, "user_seconds": 7.14, "system_seconds": 7.23, "max_rss_bytes": 13660160, "exit_code": 0, "variant": "baseline", "repetition": 0, "file_bytes": 268435456, "backend": "local"},
+    {"wall_seconds": 10.492208725, "user_seconds": 6.97, "system_seconds": 6.91, "max_rss_bytes": 5603328, "exit_code": 0, "variant": "candidate", "repetition": 0, "file_bytes": 268435456, "backend": "local"},
+    {"wall_seconds": 10.568065663, "user_seconds": 6.92, "system_seconds": 6.97, "max_rss_bytes": 4812800, "exit_code": 0, "variant": "candidate", "repetition": 1, "file_bytes": 268435456, "backend": "local"},
+    {"wall_seconds": 10.588887309, "user_seconds": 6.84, "system_seconds": 7.1, "max_rss_bytes": 13828096, "exit_code": 0, "variant": "baseline", "repetition": 1, "file_bytes": 268435456, "backend": "local"},
+    {"wall_seconds": 8.901879409, "user_seconds": 5.87, "system_seconds": 6.18, "max_rss_bytes": 13365248, "exit_code": 0, "variant": "baseline", "repetition": 2, "file_bytes": 268435456, "backend": "local"},
+    {"wall_seconds": 5.904423585, "user_seconds": 3.83, "system_seconds": 4.06, "max_rss_bytes": 5713920, "exit_code": 0, "variant": "candidate", "repetition": 2, "file_bytes": 268435456, "backend": "local"},
+    {"wall_seconds": 4.350422808, "user_seconds": 2.71, "system_seconds": 3.06, "max_rss_bytes": 4505600, "exit_code": 0, "variant": "candidate", "repetition": 3, "file_bytes": 268435456, "backend": "local"},
+    {"wall_seconds": 4.653983909, "user_seconds": 2.75, "system_seconds": 3.45, "max_rss_bytes": 15396864, "exit_code": 0, "variant": "baseline", "repetition": 3, "file_bytes": 268435456, "backend": "local"},
+    {"wall_seconds": 5.045875801, "user_seconds": 3.14, "system_seconds": 3.55, "max_rss_bytes": 13594624, "exit_code": 0, "variant": "baseline", "repetition": 4, "file_bytes": 268435456, "backend": "local"},
+    {"wall_seconds": 4.500310063, "user_seconds": 2.72, "system_seconds": 3.17, "max_rss_bytes": 4653056, "exit_code": 0, "variant": "candidate", "repetition": 4, "file_bytes": 268435456, "backend": "local"}
+  ]
+}

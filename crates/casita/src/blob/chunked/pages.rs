@@ -287,6 +287,80 @@ impl Pages {
     }
 }
 
+/// Incremental canonical chunk manifest. Small manifests retain the flat wire
+/// format; larger ones use the same leaf groups and tree shape as build_chunks.
+/// Page writes are protected by the existing pinned object store. The caller
+/// publishes the blob's manifest only after every chunk and page has succeeded.
+pub(super) struct ChunkManifest {
+    pages: Pages,
+    buffer: Vec<ChunkMeta>,
+    builder: Option<Builder>,
+    count: usize,
+    size: u64,
+    first: Option<ChunkId>,
+}
+impl ChunkManifest {
+    pub(super) fn new(pages: Pages) -> Self {
+        Self {
+            pages,
+            buffer: Vec::new(),
+            builder: None,
+            count: 0,
+            size: 0,
+            first: None,
+        }
+    }
+    pub(super) fn size(&self) -> u64 {
+        self.size
+    }
+    pub(super) fn single_chunk(&self) -> Option<ChunkId> {
+        if self.count == 1 { self.first } else { None }
+    }
+    pub(super) async fn push(&mut self, chunk: ChunkMeta) -> io::Result<()> {
+        self.size = self.size.checked_add(chunk.size).ok_or_else(invalid)?;
+        if self.count == 0 {
+            self.first = Some(chunk.digest);
+        }
+        self.count += 1;
+        // Keep exactly FANOUT entries flat until a further entry proves that
+        // the paged representation is required.
+        if self.builder.is_none() && self.buffer.len() == FANOUT {
+            self.builder = Some(Builder::new(self.pages.clone()));
+            self.flush_leaf().await?;
+        }
+        self.buffer.push(chunk);
+        if self.builder.is_some() && self.buffer.len() == FANOUT {
+            self.flush_leaf().await?;
+        }
+        Ok(())
+    }
+    async fn flush_leaf(&mut self) -> io::Result<()> {
+        let leaf = self.pages.chunks_leaf(&self.buffer).await?;
+        self.builder
+            .as_mut()
+            .expect("paged manifest")
+            .push(leaf)
+            .await?;
+        self.buffer.clear();
+        Ok(())
+    }
+    pub(super) async fn finish(mut self) -> io::Result<Vec<u8>> {
+        if self.builder.is_none() {
+            return Ok(super::manifest::encode_manifest(&self.buffer));
+        }
+        if !self.buffer.is_empty() {
+            self.flush_leaf().await?;
+        }
+        Ok(self
+            .builder
+            .take()
+            .expect("paged manifest")
+            .finish()
+            .await?
+            .encode())
+    }
+}
+
 /// Carry completed groups upward; ingestion retains at most 64 references per level.
 struct Builder {
     pages: Pages,
@@ -699,3 +773,48 @@ mod tests {
 
 #[cfg(test)]
 mod parallel_tests;
+
+#[cfg(test)]
+mod streaming_manifest_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn streaming_chunk_manifests_preserve_flat_and_paged_bytes_with_bounded_buffers() {
+        let pages = Pages {
+            objects: Arc::new(object_store::memory::InMemory::new()),
+            base: Path::default(),
+            immutable: false,
+        };
+        for count in [0usize, 1, 63, 64, 65, 4095, 4096, 4097, 10000] {
+            let chunks: Vec<_> = (0..count)
+                .map(|i| ChunkMeta {
+                    digest: ChunkId::new(blake3::hash(&i.to_le_bytes()).into()),
+                    size: 1024 + i as u64,
+                })
+                .collect();
+            let expected = if count <= FANOUT {
+                super::super::manifest::encode_manifest(&chunks)
+            } else {
+                pages.build_chunks(&chunks).await.unwrap().encode()
+            };
+            let mut streamed = ChunkManifest::new(pages.clone());
+            for chunk in &chunks {
+                streamed.push(chunk.clone()).await.unwrap();
+                assert!(streamed.buffer.len() <= FANOUT);
+                if let Some(builder) = &streamed.builder {
+                    assert!(builder.levels.iter().all(|level| level.len() < FANOUT));
+                }
+            }
+            assert_eq!(streamed.size(), chunks.iter().map(|c| c.size).sum::<u64>());
+            assert_eq!(
+                streamed.single_chunk(),
+                if count == 1 {
+                    Some(chunks[0].digest)
+                } else {
+                    None
+                }
+            );
+            assert_eq!(streamed.finish().await.unwrap(), expected, "{count} chunks");
+        }
+    }
+}
