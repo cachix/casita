@@ -26,7 +26,7 @@ use timing::LedgerPhase;
 trait Backend: Send + Sync {
     type Version: Send;
     async fn edit(&self, operation: Operation) -> Result<Outcome, MetadataError> {
-        optimistic_edit(self, operation).await
+        optimistic_edit(self, None, operation).await
     }
     async fn admit_reader(&self, pin: DataPin) -> Result<Outcome, MetadataError> {
         self.edit(Operation::Register(pin)).await
@@ -544,38 +544,111 @@ fn edit_backoff(attempt: u32) -> std::time::Duration {
     std::time::Duration::from_millis(1 << attempt.min(6))
 }
 
-/// One load, apply and conditional store. `None` means another writer moved
-/// the ledger first and the operation must be re-applied to the new state.
+impl Outcome {
+    /// The token this outcome created, if it created one.
+    fn token(&self) -> Option<&PinToken> {
+        match self {
+            Self::Prune(prune) => prune.as_ref().as_ref().map(|(token, _)| token),
+            Self::Token(token) => token.as_ref(),
+            Self::Protected(_) | Self::Finished => None,
+        }
+    }
+}
+
+/// Whether `token` owns a pin, deletion claim, collection or logical prune.
+fn holds(state: &PinInventory, token: &PinToken) -> bool {
+    state.pins.contains_key(token)
+        || state.deletions.contains_key(token)
+        || state.collector.as_ref() == Some(token)
+        || state.logical_prune.as_ref() == Some(token)
+}
+
+enum Attempt {
+    Done(Outcome),
+    /// The store refused or failed a write, or failed the load after one, with
+    /// this error if any. A write may still land, so the edit must go on.
+    Retry(Option<MetadataError>),
+}
+
+/// One load, apply and conditional store.
+///
+/// A refused or failed write may still have landed: a client that retries an
+/// applied request sees its own precondition fail, and a connection can drop
+/// after the server applied it. `unconfirmed` collects the outcomes of such
+/// writes. If one of their tokens reached the ledger, the attempt returns that
+/// outcome instead of applying the operation again under a new token, which
+/// would leave the first token recorded with no owner. Each such write is
+/// conditional on the version its attempt loaded, and no version recurs
+/// because every write advances the revision. A write still in flight can
+/// therefore land only before the ledger next changes: its token is then
+/// visible to the next load, and a later attempt's write is refused. For the
+/// same reason, a store error from the write, or from a load after such a
+/// write, is retried rather than returned.
 async fn attempt_edit(
     store: &(impl Backend + ?Sized),
     operation: &Operation,
-) -> Result<Option<Outcome>, MetadataError> {
-    let (before, version) = store.load().await?;
+    unconfirmed: &mut Vec<Outcome>,
+) -> Result<Attempt, MetadataError> {
+    let (before, version) = match store.load().await {
+        Ok(loaded) => loaded,
+        Err(error @ (MetadataError::Backend(_) | MetadataError::Transient(_)))
+            if !unconfirmed.is_empty() =>
+        {
+            return Ok(Attempt::Retry(Some(error)));
+        }
+        Err(error) => return Err(error),
+    };
+    if let Some(landed) = unconfirmed
+        .iter()
+        .position(|outcome| outcome.token().is_some_and(|token| holds(&before, token)))
+    {
+        return Ok(Attempt::Done(unconfirmed.swap_remove(landed)));
+    }
     let revision = before.revision;
     let memory = MemoryPinStore {
         state: Arc::new(tokio::sync::Mutex::new(before)),
     };
     let result = operation.apply(&memory).await?;
     let after = memory.inventory().await?;
-    if after.revision == revision || store.compare_exchange(version, after).await? {
-        return Ok(Some(result));
+    if after.revision == revision {
+        return Ok(Attempt::Done(result));
     }
-    Ok(None)
+    let failure = match store.compare_exchange(version, after).await {
+        Ok(true) => return Ok(Attempt::Done(result)),
+        Ok(false) => None,
+        Err(error @ (MetadataError::Backend(_) | MetadataError::Transient(_))) => Some(error),
+        Err(error) => return Err(error),
+    };
+    unconfirmed.push(result);
+    Ok(Attempt::Retry(failure))
 }
 
+/// Repeats [`attempt_edit`] with backoff until one settles the edit.
+///
+/// A `queue` covers one load-apply-store round, never the backoff between
+/// rounds: an edit that keeps losing to another process must not stall every
+/// unrelated edit on this client behind its sleeps.
 async fn optimistic_edit(
     store: &(impl Backend + ?Sized),
+    queue: Option<&tokio::sync::Mutex<()>>,
     operation: Operation,
 ) -> Result<Outcome, MetadataError> {
+    let mut unconfirmed = Vec::new();
+    let mut failure = None;
     for attempt in 0..EDIT_ATTEMPTS {
-        if let Some(result) = attempt_edit(store, &operation).await? {
-            return Ok(result);
+        let guard = match queue {
+            Some(queue) => Some(queue.lock().await),
+            None => None,
+        };
+        let result = attempt_edit(store, &operation, &mut unconfirmed).await?;
+        drop(guard);
+        match result {
+            Attempt::Done(result) => return Ok(result),
+            Attempt::Retry(error) => failure = error,
         }
         tokio::time::sleep(edit_backoff(attempt)).await;
     }
-    Err(MetadataError::Transient(
-        "pin ledger remained contended".into(),
-    ))
+    Err(failure.unwrap_or_else(|| MetadataError::Transient("pin ledger remained contended".into())))
 }
 
 #[async_trait]
@@ -745,29 +818,6 @@ fn remote_edits(client: usize, path: &str) -> Arc<tokio::sync::Mutex<()>> {
     })
 }
 
-// The queue covers one load-apply-store round, never the backoff between
-// rounds: an edit that keeps losing to another process must not stall every
-// unrelated edit on this client behind its sleeps.
-#[cfg(any(feature = "s3", test))]
-async fn queued_remote_edit(
-    store: &impl Backend,
-    queue: &tokio::sync::Mutex<()>,
-    operation: Operation,
-) -> Result<Outcome, MetadataError> {
-    for attempt in 0..EDIT_ATTEMPTS {
-        let guard = queue.lock().await;
-        let result = attempt_edit(store, &operation).await?;
-        drop(guard);
-        if let Some(result) = result {
-            return Ok(result);
-        }
-        tokio::time::sleep(edit_backoff(attempt)).await;
-    }
-    Err(MetadataError::Transient(
-        "pin ledger remained contended".into(),
-    ))
-}
-
 /// Uses the same storage and prefix identity as the parent WAL3 metadata store,
 /// including custom Chroma storage configurations and credentials.
 #[cfg(feature = "s3")]
@@ -783,7 +833,7 @@ impl Backend for ChromaPinStore {
     type Version = Option<chroma_storage::ETag>;
 
     async fn edit(&self, operation: Operation) -> Result<Outcome, MetadataError> {
-        queued_remote_edit(self, &self.edits, operation).await
+        optimistic_edit(self, Some(&self.edits), operation).await
     }
 
     async fn load(&self) -> Result<(PinInventory, Self::Version), MetadataError> {
@@ -827,7 +877,7 @@ impl Backend for ChromaPinStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     fn staging(path: &str) -> DataPin {
         DataPin {
@@ -857,7 +907,7 @@ mod tests {
         type Version = Option<UpdateVersion>;
 
         async fn edit(&self, operation: Operation) -> Result<Outcome, MetadataError> {
-            queued_remote_edit(self, &self.queue, operation).await
+            optimistic_edit(self, Some(&self.queue), operation).await
         }
 
         async fn load(&self) -> Result<(PinInventory, Self::Version), MetadataError> {
@@ -891,7 +941,7 @@ mod tests {
         type Version = Option<UpdateVersion>;
 
         async fn edit(&self, operation: Operation) -> Result<Outcome, MetadataError> {
-            queued_remote_edit(self, &self.queue, operation).await
+            optimistic_edit(self, Some(&self.queue), operation).await
         }
 
         async fn load(&self) -> Result<(PinInventory, Self::Version), MetadataError> {
@@ -1268,5 +1318,104 @@ mod tests {
         backend.resume.notify_one();
         crate::metadata::flush_repository_leases().await.unwrap();
         assert!(remote.inventory().await.unwrap().pins.is_empty());
+    }
+
+    /// How [`LosingBackend`] hides a write it applied.
+    #[derive(Clone, Copy, Debug)]
+    enum Loss {
+        /// The connection drops after the store applied the write, and the
+        /// next load fails too.
+        Disconnect,
+        /// The client retries the applied write, and its own precondition
+        /// refuses the retry.
+        Precondition,
+    }
+
+    struct LosingBackend {
+        inner: ObjectPinStore,
+        loss: std::sync::Mutex<Option<Loss>>,
+        disconnected: AtomicBool,
+    }
+
+    impl LosingBackend {
+        /// Hide the next write that lands.
+        fn lose(&self, loss: Loss) {
+            *self.loss.lock().unwrap() = Some(loss);
+        }
+    }
+
+    #[async_trait]
+    impl Backend for LosingBackend {
+        type Version = Option<UpdateVersion>;
+
+        async fn load(&self) -> Result<(PinInventory, Self::Version), MetadataError> {
+            if self.disconnected.swap(false, Ordering::SeqCst) {
+                return Err(backend("connection lost"));
+            }
+            self.inner.load().await
+        }
+
+        async fn compare_exchange(
+            &self,
+            expected: Self::Version,
+            state: PinInventory,
+        ) -> Result<bool, MetadataError> {
+            if !self.inner.compare_exchange(expected, state).await? {
+                return Ok(false);
+            }
+            match self.loss.lock().unwrap().take() {
+                None => Ok(true),
+                Some(Loss::Precondition) => Ok(false),
+                Some(Loss::Disconnect) => {
+                    self.disconnected.store(true, Ordering::SeqCst);
+                    Err(backend("connection lost"))
+                }
+            }
+        }
+    }
+
+    /// Every edit that creates a token loses its response once. The ledger
+    /// must hold exactly the tokens the caller received.
+    #[tokio::test]
+    async fn a_write_whose_response_is_lost_is_recognized_by_its_token() {
+        for loss in [Loss::Disconnect, Loss::Precondition] {
+            let ledger = LosingBackend {
+                inner: object_store(),
+                loss: Default::default(),
+                disconnected: Default::default(),
+            };
+            ledger.lose(loss);
+            let pin = ledger.register(staging("pinned")).await.unwrap().unwrap();
+            let revision = ledger.inventory().await.unwrap().revision;
+            ledger.lose(loss);
+            let claim = ledger
+                .claim_deletions(revision, resources("claimed"))
+                .await
+                .unwrap()
+                .unwrap();
+            let revision = ledger.inventory().await.unwrap().revision;
+            ledger.lose(loss);
+            let collector = ledger
+                .begin_collection(revision, None)
+                .await
+                .unwrap()
+                .unwrap();
+            ledger.lose(loss);
+            let (prune, _) = ledger
+                .begin_prune_validating(&collector, BTreeSet::from([claim.clone()]))
+                .await
+                .unwrap()
+                .unwrap();
+
+            let inventory = ledger.inventory().await.unwrap();
+            assert_eq!(Vec::from_iter(inventory.pins.keys()), [&pin], "{loss:?}");
+            assert_eq!(
+                Vec::from_iter(inventory.deletions.keys()),
+                [&claim],
+                "{loss:?}"
+            );
+            assert_eq!(inventory.collector, Some(collector), "{loss:?}");
+            assert_eq!(inventory.logical_prune, Some(prune), "{loss:?}");
+        }
     }
 }

@@ -140,6 +140,16 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 - SSH transfers pass `ConnectTimeout=30`, `ServerAliveInterval=15`, and
   `ServerAliveCountMax=3` to OpenSSH, so an unreachable or silent host fails
   the sync instead of blocking it indefinitely.
+- Object-store pin ledgers recognize their own write when its response is
+  lost, such as when the connection drops after the store applied it or a
+  client retry is refused by its own precondition. A retry previously applied
+  the edit again under a new token, leaving the first pin, deletion claim,
+  collector or logical prune recorded with no owner, and reported
+  revision-conditional edits as conflicts although they had landed. An
+  ownerless pin kept its payloads from ever being collected, an ownerless
+  claim blocked writers of its resources, and an ownerless collector blocked
+  collection. A store error on a ledger write is now retried within the
+  edit's attempt budget instead of returned at once.
 - Transfer has two entry points, `transfer` and `transfer_path`, each taking
   `TransferOptions`. `transfer_session`, `transfer_session_with_discovery`,
   `transfer_path_session` and `transfer_path_session_with_discovery` were
