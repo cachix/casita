@@ -513,7 +513,11 @@ fn signals_sent_to_casita_reach_the_child_and_cleanup_finishes() {
     let (mut running, mut stdout) = Running::spawn(&fixture);
     wait_until_ready(&mut stdout);
     kill_process(Pid::from_raw(running.0.id() as i32).unwrap(), Signal::TERM).unwrap();
+    // `Child::wait` closes stdin before waiting, which lets `cat` exit 0 on
+    // EOF before casita forwards the TERM. Keep stdin open until casita exits.
+    let stdin = running.0.stdin.take();
     assert_eq!(running.0.wait().unwrap().code(), Some(143));
+    drop(stdin);
     fixture.no_checkouts();
 }
 
