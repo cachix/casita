@@ -90,6 +90,13 @@ async fn retained_readers_share_one_process_pin_through_concurrent_gc() {
         assert!(pins.inventory().await.unwrap().pins.is_empty());
         assert_eq!(writer.collect().await.unwrap().logical_objects, 1);
         assert!(writer.open(&key).await.unwrap().is_none());
+        // Dropping the writer releases its hold in a background task. Finish
+        // that release before the temporary directory is removed, or it fails
+        // on a missing pin ledger and the next pass's flush reports the error.
+        drop(writer);
+        casita::experimental::flush_repository_leases()
+            .await
+            .unwrap();
     }
 }
 
