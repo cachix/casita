@@ -3101,25 +3101,31 @@ mod tests {
             }
         }
 
+        /// The health endpoint reports ready while S3 requests still get 503
+        /// (`x-rustfs-readiness-pending: startup_finalization`), so also
+        /// require an S3 request to be served. Unauthenticated, that is 403.
         fn ready(address: SocketAddr) -> bool {
-            let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(100))
-            else {
-                return false;
-            };
+            Self::status(address, "/minio/health/ready").is_some_and(|status| status == 200)
+                && Self::status(address, "/").is_some_and(|status| status != 503)
+        }
+
+        fn status(address: SocketAddr, path: &str) -> Option<u16> {
+            let mut stream =
+                TcpStream::connect_timeout(&address, Duration::from_millis(100)).ok()?;
             let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
             let _ = stream.set_write_timeout(Some(Duration::from_millis(100)));
-            if stream
-                .write_all(
-                    b"GET /minio/health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-                )
-                .is_err()
-            {
-                return false;
-            }
-            let mut response = [0_u8; 32];
             stream
-                .read(&mut response)
-                .is_ok_and(|read| response[..read].starts_with(b"HTTP/1.1 200"))
+                .write_all(
+                    format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                        .as_bytes(),
+                )
+                .ok()?;
+            let mut response = [0_u8; 32];
+            let read = stream.read(&mut response).ok()?;
+            std::str::from_utf8(response[..read].strip_prefix(b"HTTP/1.1 ")?.get(..3)?)
+                .ok()?
+                .parse()
+                .ok()
         }
 
         fn start() -> Self {
