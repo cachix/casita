@@ -90,6 +90,64 @@ claim of zero scheduling overhead follows from these three-run medians. Builds
 were running on this host during the comparison. Warm fitting-cache reads all
 issued zero pack GETs. Use `--variant-binary LABEL=PATH` for named controls.
 
+## WAL3 commit preparation
+
+`benchmark run wal3-commit-preparation --iterations 100 --output /tmp/wal3-commit-preparation.json`
+compares the previous tail cloning and serializer with the current production
+preparation helpers in the same executable, alternating their order. Cases cover
+collection, 8 versus 9 deltas, and encoded records one byte below, exactly at,
+and one byte above the 1 MiB limit. Every iteration checks identical checkpoint
+selection and record bytes, and accepted tails must decode to the exact input.
+The prior tail contains object records, root changes, validation keys, and a
+payload catalog byte field. These are codec fixtures, not repository imports.
+
+Input construction and correctness checks are outside timing. The reported
+nanoseconds are totals across `iterations`, covering tail preparation, copies,
+and encoding, without WAL append, shard compaction, retry admission, or S3 I/O.
+Use an optimized test executable for performance comparisons. The suite runs in
+`benchmark all --suites wal3-commit-preparation --output /tmp/wal3-preparation-all`;
+`--bin-dir` may supply an existing `casita-lib-test` executable. Standalone runs
+accept `--probe-binary`. Both runners retain raw timings and correctness gates.
+
+## Raw blob closures
+
+`benchmark run raw-blob-closures --blobs 8192 --output /tmp/raw-blob-closures.json`
+publishes raw blobs in batches of 512, 1024 and 4096 to memory, local Turso and
+local-storage WAL3 repositories. Each batch is published as an import's
+filesystem-constructed closure, the path that formerly stored a 70-byte witness
+per blob; the batch sizes straddle the roughly 700- and 1,100-blob points where
+those witnesses would cross WAL3 tail limits. The same batches are then
+republished unchanged, which must insert no objects, so WAL3 deltas carry none,
+and a disjoint range is published unrooted as a control that never stored blob
+witnesses. Every case gates the inserted counts, that no blob in either range
+gained a closure witness, that an incremental check of a directory rooted over
+the first 1024 blobs settles at the root's witness, and that an audit of it
+still reaches every blob. WAL3 cases report fragment and shard writes and
+stored bytes for the constructed, republished and unrooted phases. Nanoseconds
+are totals across `--blobs`, which must be at least 4096 so every batch is
+full; the smoke profile uses exactly that. The suite runs in
+`benchmark all --suites raw-blob-closures`; `--bin-dir` or `--probe-binary` may
+supply an existing `casita-lib-test` executable, which must be built with the
+`s3` feature so the WAL3 cases run.
+
+## Concurrent publication
+
+`benchmark run concurrent-publication --depth 64 --files 16 --output /tmp/concurrent-publication.json`
+starts 1, 4 and 16 writers at once on memory and local repositories. Each
+publishes a rooted chain of `--depth` directories with `--files` files per
+level, so each publication's closure holds `depth × (files + 1)` new objects.
+Every root must audit complete afterwards. The probe reports the concurrent
+wall time and the summed publication phases, where `coordination_wait` is time
+queued for the commit lock. One writer is the uncontended baseline for the
+contended cases.
+
+The probe decided where closure walks run. Moving them before the commit
+lock let 16 local writers walk alongside each other's Turso commits: summed
+validation grew from 0.5 s to 10–30 s and wall time from 1.4 s to 2.4–6.7 s
+across runs, while memory showed no gain. Walks therefore stay under the lock
+and run once per publication; a retried commit reuses their proofs, which the
+publication's pins keep valid.
+
 ## Filesystem reuse
 
 `benchmark run filesystem-reuse` separates cached tree import from forced rereads
@@ -2788,3 +2846,47 @@ for exact source, binary, dependency, and result provenance.
 The [root-prefix](root-prefix.md) suite checks indexed named-root ranges at
 255 and 257 matches, plus sparse and dense prefixes in a 4,096-root store.
 It is registered in `manifest.json` and included in `benchmark all`.
+
+## Verified Git blob files
+
+`benchmark run git-blob-file` compares metadata-only registration of stored Git
+blobs with rereading the stored payload in the same binary. It is included in
+`benchmark all`; every sample checks identity, length, complete closure and exact
+readback. Single files cover empty and one-byte files and both sides of 64 KiB
+on memory and local storage; the standard profile adds both sides of 4 MiB.
+Batches register 64 (smoke) or 1024 (standard) distinct files around 64 KiB in
+one `stage_git_blob_files` call against one reread per file. Timing covers each
+strategy's metadata reads and staging and publishing the files with
+`publish_closures`; fixture creation, session setup and audits are excluded.
+Selections with no supported case, such as batches of 4 MiB files, are rejected
+before anything is built.
+
+```sh
+benchmark run git-blob-file --profile smoke --output /tmp/git-blob-file.json
+```
+
+Use `--repetitions 7 --cpu-affinity 0,1,2,3` for paired investigation runs, choosing
+CPUs allowed on the host. Frozen integration executables can be supplied through
+`--probe-binary` with `--no-build`. `--file-bytes` and `--files` override the
+profile's cases.
+
+## One-pass verified Git ingestion
+
+`git-verified-stream` compares the existing `stage_object_reader` write-then-read
+path with `stage_object_reader_with_size`, which verifies the native identity
+while writing the same source bytes. Both strategies run in the same executable
+in alternating order, with fresh repositories and deterministic random input.
+Timing covers staging; fixture creation, mutation setup, publication, exhaustive
+closure verification and byte-for-byte readback are excluded. The writer's digest
+and length remain independently checked.
+
+Both profiles cover empty, one-byte and 65535/65536/65537-byte payloads on
+memory and local backends; the standard profile adds both sides of 4 MiB, and
+`--file-bytes` overrides either. The suite is included in `benchmark all`.
+Process RSS includes the fixture and audits, so it cannot establish the importer's
+streaming memory footprint. Source decoding is outside this measurement.
+
+```sh
+benchmark run git-verified-stream --profile smoke --output /tmp/git-verified-stream-smoke.json
+benchmark run git-verified-stream --backend both --repetitions 7 --cpu-affinity 0,1,2,3 --output /tmp/git-verified-stream-paired.json
+```

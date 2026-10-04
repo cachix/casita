@@ -139,6 +139,7 @@ struct SharedPayloadServicesDoctests;
 #[doc = include_str!("../../../docs/src/content/docs/guides/s3-multi-owner.md")]
 struct S3MultiOwnerGuideDoctests;
 
+mod binary;
 #[cfg(feature = "native")]
 mod blob;
 #[cfg(feature = "native")]
@@ -154,6 +155,8 @@ mod conformance;
 mod coordination;
 mod digest;
 mod directory;
+#[cfg(feature = "native")]
+mod durable_rename;
 mod encode;
 mod error;
 #[cfg(feature = "native")]

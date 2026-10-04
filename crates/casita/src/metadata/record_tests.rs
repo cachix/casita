@@ -337,6 +337,10 @@ async fn metadata_records_and_roots_are_atomic_but_gc_is_distinct() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[cfg_attr(
+    windows,
+    ignore = "concurrent handles deadlock on the Turso write lock: https://github.com/cachix/casita/issues/33"
+)]
 async fn metadata_records_concurrent_handles_conflict_only_on_checked_values() {
     use std::sync::Arc;
     let directory = tempfile::tempdir().unwrap();

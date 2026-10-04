@@ -32,7 +32,7 @@ use crate::path::{PathComponent, SymlinkTarget};
 use crate::spill::{
     FrozenSpillSet, SpillArea, SpillLimits, SpillMetrics, SpillSet, TraversalQueue,
 };
-use crate::{BlobGc, BlobId, ChunkId, Digest, DirectoryId, Node};
+use crate::{BlobGc, BlobId, ChunkId, DirectoryId, Node};
 
 // Implementation modules share only repository-scoped state. Public names
 // remain re-exported here for the application and experimental facades.
@@ -52,7 +52,7 @@ pub(crate) use closure::ClosureAudit;
 pub use closure::ClosureStatus;
 use closure::{
     BlobPayloadReader, CLOSURE_FRONTIER, ClosureVerifier, RepositoryDirectLinkView,
-    verify_closure_against, verify_closure_with,
+    overlay_records, verify_closure_against, verify_closure_with,
 };
 use collection::METADATA_RECLAIM_INTERVAL;
 pub use collection::{
@@ -330,6 +330,8 @@ where
 }
 
 #[cfg(test)]
+mod closure_benchmarks;
+#[cfg(all(test, unix))]
 mod collection_benchmark;
 #[cfg(test)]
 mod fsck_benchmark;

@@ -214,33 +214,57 @@ impl TursoDb {
     /// - **cancellation-safe**: a `spawn_blocking` task runs to completion even
     ///   if the caller drops the returned future, so a cancelled write cannot
     ///   abandon a half-applied transaction on the shared writer connection and
-    ///   strand it (Turso only rolls a dropped transaction back lazily, on the
-    ///   connection's next use).
+    ///   strand it.
+    ///
+    /// The operation's transaction always ends with it. Turso rolls a dropped
+    /// transaction back only lazily, on the connection's next use, and until
+    /// then its `BEGIN IMMEDIATE` holds the WAL write lock: every writer in
+    /// another process would wait out the busy timeout and fail. So an
+    /// operation that returns with its transaction still open (typically one
+    /// that failed, e.g. on a metadata check) is rolled back here, and a
+    /// writer that cannot be rolled back is replaced.
     pub(crate) async fn write<T, F>(self: &Arc<Self>, f: F) -> Result<T, Error>
     where
         F: for<'a> FnOnce(&'a mut Connection) -> BoxFuture<'a, Result<T, Error>> + Send + 'static,
         T: Send + 'static,
     {
-        // The owned guard keeps the one writer connection (and its lazy
-        // dangling-transaction state) across calls; the blocking task holds it
-        // until the write finishes, so the next write waits rather than racing.
+        // The owned guard keeps the one writer connection across calls; the
+        // blocking task holds it until the write finishes, so the next write
+        // waits rather than racing.
         let mut guard = self.writer.clone().lock_owned().await;
-        tokio::task::spawn_blocking(move || futures::executor::block_on(f(&mut guard))).await?
+        let this = self.clone();
+        tokio::task::spawn_blocking(move || {
+            futures::executor::block_on(async move {
+                let result = f(&mut guard).await;
+                let ended = end_transaction(&guard).await;
+                if ended.is_err() {
+                    // Dropping the old connection releases its locks.
+                    *guard = this.connect_writer().await?;
+                }
+                result
+            })
+        })
+        .await?
     }
 
     /// Replace the serialized writer after a failed transaction.
     ///
-    /// Turso rolls abandoned transactions back lazily when their connection is
-    /// reused. An ENOSPC during commit can leave that cleanup path unable to
+    /// An ENOSPC during commit can leave the rollback path unable to
     /// distinguish an already-aborted transaction, so emergency collection
     /// retries on a fresh connection instead.
     pub(crate) async fn reset_writer(&self) -> Result<(), Error> {
+        let writer = self.connect_writer().await?;
+        *self.writer.lock().await = writer;
+        Ok(())
+    }
+
+    /// A new serialized write connection.
+    async fn connect_writer(&self) -> Result<Connection, Error> {
         let mut writer = self.database.connect()?;
         writer.set_transaction_behavior(turso::transaction::TransactionBehavior::Immediate);
         configure_connection(&writer)?;
         writer.execute_batch("PRAGMA synchronous = FULL;").await?;
-        *self.writer.lock().await = writer;
-        Ok(())
+        Ok(writer)
     }
 
     /// Read on one query-only transaction without loading a metadata snapshot.
@@ -387,6 +411,21 @@ async fn initialize_schema(writer: &Connection, found: i64, path: &Path) -> Resu
     }
 }
 
+/// End any transaction an operation left open on `connection`.
+///
+/// Errors when the connection cannot be returned to autocommit; its owner
+/// must then discard it.
+async fn end_transaction(connection: &Connection) -> Result<(), Error> {
+    if connection.is_autocommit()? {
+        return Ok(());
+    }
+    connection.execute_batch("ROLLBACK;").await?;
+    match connection.is_autocommit()? {
+        true => Ok(()),
+        false => Err(Error::from("writer transaction survived its rollback")),
+    }
+}
+
 fn configure_connection(conn: &Connection) -> Result<(), Error> {
     conn.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS))?;
     Ok(())
@@ -504,6 +543,62 @@ mod tests {
             pool.iter()
                 .all(|connection| connection.is_autocommit().unwrap())
         );
+    }
+
+    /// A failed write must end its transaction before releasing the writer:
+    /// an abandoned `BEGIN IMMEDIATE` holds the WAL write lock, so writers in
+    /// other processes (simulated by a second handle on the same file) would
+    /// wait out the whole busy timeout and fail.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_failed_write_releases_the_write_lock_for_other_processes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("abandoned.sqlite");
+        let db = TursoDb::open(&path).unwrap();
+        db.write(|connection| {
+            Box::pin(async move {
+                connection
+                    .execute_batch(
+                        "CREATE TABLE read_pool_test(value INTEGER);
+                         INSERT INTO read_pool_test VALUES(1);",
+                    )
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+        let other = TursoDb::open(&path).unwrap();
+
+        let failed = db
+            .write(|connection| {
+                Box::pin(async move {
+                    let transaction = connection.transaction().await?;
+                    transaction
+                        .execute("UPDATE read_pool_test SET value = 2", ())
+                        .await?;
+                    // A failed check: the transaction is dropped uncommitted.
+                    Err::<(), Error>(Error::from("check failed"))
+                })
+            })
+            .await;
+        assert!(failed.is_err());
+        assert!(db.writer.lock().await.is_autocommit().unwrap());
+
+        let foreign = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            other.write(|connection| {
+                Box::pin(async move {
+                    connection
+                        .execute_batch("UPDATE read_pool_test SET value = 3")
+                        .await?;
+                    Ok(())
+                })
+            }),
+        )
+        .await
+        .expect("the other process's write must not wait for the abandoned transaction");
+        foreign.unwrap();
+        assert_eq!(read_number(&db).await, 3);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -118,8 +118,10 @@ The main staging methods are:
 
 - `stage_blob` and `stage_blob_reader` for raw payloads;
 - `stage_object` for a caller-selected generic key and payload;
-- `stage_directory` for canonical directory data; and
-- `stage_existing` when the payload already exists in the same store.
+- `stage_directory` for canonical directory data;
+- `stage_existing` when the payload already exists in the same store; and
+- `stage_git_blob_file` and `stage_git_blob_files` to reuse stored native Git
+  blobs as ordinary files without rereading their bytes (built-in formats only).
 
 Staging returns `StagedObject`, a sealed value tied to that exact repository
 instance. Namespace verification has already reproduced its identity and
@@ -128,6 +130,7 @@ links. An arbitrary `ObjectRecord` is not accepted as a publication substitute.
 Publication choices include:
 
 - `publish_unrooted` for verified records only;
+- `publish_closures` for records plus bounded, checked closure targets without named roots;
 - `publish_rooted` for records plus one root;
 - `publish` for records plus a batch of `RootChange` values;
 - `publish_at_revision` for an exact compare-and-swap; and
@@ -138,6 +141,15 @@ Records and root changes commit atomically. A root is published only after its
 resulting closure is complete and valid. Unrelated revision races can be
 retried; an observed root mismatch is returned as
 `ConditionalPublishResult::RootMismatch` without overwriting the changed name.
+
+`publish_closures` verifies staged or existing targets with normal format and
+link checks before atomically publishing records and requested witnesses.
+Staged-object and target counts are each limited by `max_batch_objects`.
+Existing witnesses may be reused; this is a completeness check, not a fresh
+corruption audit. Only the targets gain witnesses, and a built-in raw blob
+needs none because its record proves its own closure. The mutation retains
+the checked graphs for its lifetime, but their witnesses do not become
+permanent roots.
 
 ## Stable reads and retention
 
@@ -157,6 +169,7 @@ take the required hold internally.
 
 | Workflow | Primary API | Extra capability |
 |---|---|---|
+| Exact-length object ingestion | `MutationSession::stage_object_reader_with_size` | `native`; verifies while writing, with no stored-payload reread |
 | Raw blob import | `Repository::import(BlobImport::new(reader, root))` or `MutationSession::import(BlobImport::new(reader, root))` | `PS: BlobStore`, `SS: MetadataStore`, `native` |
 | Filesystem import and checkout | `Repository::import(FilesystemImport::new(...))`, `FilesystemImport::new(...).reread(true)`, `Repository::checkout` | `PS: BlobStore`, `SS: MetadataStore`, `native` |
 | Tar stream import | `Repository::import(TarImport::new(...))` | `PS: BlobStore`, `SS: MetadataStore`, `native` |

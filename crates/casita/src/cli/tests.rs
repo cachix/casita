@@ -509,9 +509,25 @@ fn parses_archive_workflows_and_requires_explicit_selectors_and_names() {
     );
 }
 
-#[tokio::test]
-async fn archive_cli_create_inspect_verify_and_import_round_trip() {
-    archive_cli_create_inspect_verify_and_import_round_trip_case().await;
+/// Runs on a deliberately small stack: unoptimized builds once needed about
+/// 2 MiB here, because the dispatcher awaited every command future inline,
+/// which overflowed Windows. A command awaited without `on_heap` regresses this
+/// on every platform. MSVC frames are larger, so Windows keeps libtest's 2 MiB.
+#[test]
+fn archive_cli_create_inspect_verify_and_import_round_trip() {
+    const STACK_BYTES: usize = if cfg!(windows) { 2 << 20 } else { 3 << 19 };
+    std::thread::Builder::new()
+        .stack_size(STACK_BYTES)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(archive_cli_create_inspect_verify_and_import_round_trip_case())
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 async fn archive_cli_create_inspect_verify_and_import_round_trip_case() {

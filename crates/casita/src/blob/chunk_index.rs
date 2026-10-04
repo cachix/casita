@@ -10,8 +10,8 @@
 //! therefore evict it (see [`ChunkIndex::remove`]). A persistent (e.g.
 //! SQLite-backed) index can replace this later without touching callers.
 
-use std::collections::HashSet;
-use std::sync::{Arc, RwLock};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, RwLock};
 
 use crate::digest::ChunkId;
 
@@ -19,6 +19,29 @@ use crate::digest::ChunkId;
 #[derive(Clone, Default)]
 pub struct ChunkIndex {
     known: Arc<RwLock<HashSet<ChunkId>>>,
+    uploading: Arc<Mutex<HashMap<ChunkId, Arc<tokio::sync::Mutex<()>>>>>,
+}
+
+/// Exclusive right to check and upload one chunk; see [`ChunkIndex::claim_upload`].
+pub(crate) struct UploadClaim {
+    index: ChunkIndex,
+    digest: ChunkId,
+    guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+}
+
+impl Drop for UploadClaim {
+    fn drop(&mut self) {
+        drop(self.guard.take());
+        let mut uploading = self.index.uploading.lock().unwrap();
+        // Waiters clone the lock under this map lock, so a count of one means
+        // nobody else wants it.
+        if uploading
+            .get(&self.digest)
+            .is_some_and(|lock| Arc::strong_count(lock) == 1)
+        {
+            uploading.remove(&self.digest);
+        }
+    }
 }
 
 impl ChunkIndex {
@@ -30,6 +53,27 @@ impl ChunkIndex {
     /// Record that this chunk is present.
     pub(crate) fn insert(&self, digest: ChunkId) {
         self.known.write().unwrap().insert(digest);
+    }
+
+    /// Wait for exclusive use of `digest`, then check and upload it.
+    ///
+    /// Concurrent writers of one chunk within the process take turns, so the
+    /// later ones find it present instead of writing it again. Besides saving
+    /// the duplicate write, this avoids two staged uploads of one path, which
+    /// Windows can fail with access denied (apache/arrow-rs-object-store#714).
+    pub(crate) async fn claim_upload(&self, digest: ChunkId) -> UploadClaim {
+        let lock = self
+            .uploading
+            .lock()
+            .unwrap()
+            .entry(digest)
+            .or_default()
+            .clone();
+        UploadClaim {
+            index: self.clone(),
+            digest,
+            guard: Some(lock.lock_owned().await),
+        }
     }
 
     /// Forget this chunk (e.g. after it is deleted from the store), so a later

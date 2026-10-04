@@ -79,9 +79,9 @@ dependencies = [
 
 [[package]]
 name = "antithesis_sdk"
-version = "0.2.9"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08410fcac93669a476c006cd6c4512ac1e2b30fd117231a5d55d8a2c76599b82"
+checksum = "a8ed6751597568a284314fd9e2db420665898600109dedc7d8d9b588f00ae9c4"
 dependencies = [
  "libc",
  "libloading",
@@ -405,7 +405,7 @@ dependencies = [
  "cap-primitives",
  "cap-std",
  "io-lifetimes 3.0.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -422,7 +422,7 @@ dependencies = [
  "maybe-owned",
  "rustix 1.1.4",
  "rustix-linux-procfs",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
  "winx",
 ]
 
@@ -802,7 +802,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -877,7 +877,7 @@ dependencies = [
 
 [[package]]
 name = "fskit-native"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "block2",
  "libc",
@@ -1747,7 +1747,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2357,7 +2357,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2706,7 +2706,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2906,8 +2906,8 @@ dependencies = [
 
 [[package]]
 name = "turso"
-version = "0.8.0-pre.7"
-source = "git+https://github.com/cachix/turso.git?rev=dca55133caa690f90dcdd58d3c4329fb0703659c#dca55133caa690f90dcdd58d3c4329fb0703659c"
+version = "0.8.0"
+source = "git+https://github.com/cachix/turso.git?rev=9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549#9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549"
 dependencies = [
  "thiserror",
  "tracing",
@@ -2919,8 +2919,8 @@ dependencies = [
 
 [[package]]
 name = "turso_core"
-version = "0.8.0-pre.7"
-source = "git+https://github.com/cachix/turso.git?rev=dca55133caa690f90dcdd58d3c4329fb0703659c#dca55133caa690f90dcdd58d3c4329fb0703659c"
+version = "0.8.0"
+source = "git+https://github.com/cachix/turso.git?rev=9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549#9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549"
 dependencies = [
  "aegis",
  "aes",
@@ -2991,8 +2991,8 @@ dependencies = [
 
 [[package]]
 name = "turso_ext"
-version = "0.8.0-pre.7"
-source = "git+https://github.com/cachix/turso.git?rev=dca55133caa690f90dcdd58d3c4329fb0703659c#dca55133caa690f90dcdd58d3c4329fb0703659c"
+version = "0.8.0"
+source = "git+https://github.com/cachix/turso.git?rev=9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549#9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549"
 dependencies = [
  "chrono",
  "getrandom 0.4.3",
@@ -3001,8 +3001,8 @@ dependencies = [
 
 [[package]]
 name = "turso_macros"
-version = "0.8.0-pre.7"
-source = "git+https://github.com/cachix/turso.git?rev=dca55133caa690f90dcdd58d3c4329fb0703659c#dca55133caa690f90dcdd58d3c4329fb0703659c"
+version = "0.8.0"
+source = "git+https://github.com/cachix/turso.git?rev=9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549#9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3011,8 +3011,8 @@ dependencies = [
 
 [[package]]
 name = "turso_parser"
-version = "0.8.0-pre.7"
-source = "git+https://github.com/cachix/turso.git?rev=dca55133caa690f90dcdd58d3c4329fb0703659c#dca55133caa690f90dcdd58d3c4329fb0703659c"
+version = "0.8.0"
+source = "git+https://github.com/cachix/turso.git?rev=9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549#9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549"
 dependencies = [
  "bitflags",
  "memchr",
@@ -3025,8 +3025,8 @@ dependencies = [
 
 [[package]]
 name = "turso_sdk_kit"
-version = "0.8.0-pre.7"
-source = "git+https://github.com/cachix/turso.git?rev=dca55133caa690f90dcdd58d3c4329fb0703659c#dca55133caa690f90dcdd58d3c4329fb0703659c"
+version = "0.8.0"
+source = "git+https://github.com/cachix/turso.git?rev=9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549#9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549"
 dependencies = [
  "bindgen",
  "env_logger",
@@ -3041,8 +3041,8 @@ dependencies = [
 
 [[package]]
 name = "turso_sdk_kit_macros"
-version = "0.8.0-pre.7"
-source = "git+https://github.com/cachix/turso.git?rev=dca55133caa690f90dcdd58d3c4329fb0703659c#dca55133caa690f90dcdd58d3c4329fb0703659c"
+version = "0.8.0"
+source = "git+https://github.com/cachix/turso.git?rev=9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549#9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3051,8 +3051,8 @@ dependencies = [
 
 [[package]]
 name = "turso_sync_engine"
-version = "0.8.0-pre.7"
-source = "git+https://github.com/cachix/turso.git?rev=dca55133caa690f90dcdd58d3c4329fb0703659c#dca55133caa690f90dcdd58d3c4329fb0703659c"
+version = "0.8.0"
+source = "git+https://github.com/cachix/turso.git?rev=9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549#9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549"
 dependencies = [
  "base64",
  "bytes",
@@ -3073,8 +3073,8 @@ dependencies = [
 
 [[package]]
 name = "turso_sync_sdk_kit"
-version = "0.8.0-pre.7"
-source = "git+https://github.com/cachix/turso.git?rev=dca55133caa690f90dcdd58d3c4329fb0703659c#dca55133caa690f90dcdd58d3c4329fb0703659c"
+version = "0.8.0"
+source = "git+https://github.com/cachix/turso.git?rev=9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549#9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549"
 dependencies = [
  "bindgen",
  "env_logger",
@@ -3317,7 +3317,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

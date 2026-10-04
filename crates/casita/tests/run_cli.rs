@@ -1,10 +1,10 @@
 #![cfg(all(feature = "cli", unix))]
 
 use std::fs;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{PermissionsExt, symlink};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::path::PathBuf;
+use std::process::{Child, ChildStdout, Command, Output, Stdio};
 
 const BIN: &str = env!("CARGO_BIN_EXE_casita");
 
@@ -442,61 +442,49 @@ impl Drop for Running {
         if self.0.try_wait().ok().flatten().is_some() {
             return;
         }
+        // Only reached when a test failed while casita was still running.
+        // Closing stdin releases a child blocked on it, and casita forwards
+        // TERM to its child; waiting lets the run remove its temporary
+        // checkout before the fixture directory goes.
+        drop(self.0.stdin.take());
         if let Some(pid) = rustix::process::Pid::from_raw(self.0.id() as i32) {
             let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
-            let deadline = Instant::now() + Duration::from_secs(2);
-            while Instant::now() < deadline {
-                if self.0.try_wait().ok().flatten().is_some() {
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
         }
-        let _ = self.0.kill();
         let _ = self.0.wait();
     }
 }
 
-fn wait_for_file(path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while !path.exists() {
-        assert!(
-            Instant::now() < deadline,
-            "child did not create {}",
-            path.display()
-        );
-        std::thread::sleep(Duration::from_millis(20));
+impl Running {
+    /// Start `casita run uv` with piped stdio. The child script rendezvouses
+    /// with the test through them: it prints `ready` once it is running and
+    /// blocks reading stdin until the test lets it continue. A child that dies
+    /// early closes stdout, so the test fails on EOF instead of hanging.
+    fn spawn(fixture: &Fixture) -> (Self, BufReader<ChildStdout>) {
+        let mut child = fixture
+            .command()
+            .args(["run", "uv"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = BufReader::new(child.stdout.take().unwrap());
+        (Self(child), stdout)
     }
 }
 
-fn wait_for_exit(child: &mut Child) -> std::process::ExitStatus {
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            return status;
-        }
-        assert!(Instant::now() < deadline, "child did not exit");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+fn wait_until_ready(stdout: &mut BufReader<ChildStdout>) {
+    let mut line = String::new();
+    stdout.read_line(&mut line).unwrap();
+    assert_eq!(line, "ready\n");
 }
 
 #[test]
 fn root_replacement_and_collection_do_not_change_a_running_output() {
-    let fixture = Fixture::new(
-        "touch ready\nwhile [ ! -f continue ]; do sleep 0.02; done\ncat \"$(dirname \"$0\")/../data\" > observed",
-    );
+    let fixture = Fixture::new("echo ready\nread _\ncat \"$(dirname \"$0\")/../data\"");
     fs::write(fixture.source.join("data"), "original").unwrap();
     fixture.import("cargo/builds/uv");
-    let mut running = Running(
-        fixture
-            .command()
-            .args(["run", "uv"])
-            .stdout(Stdio::null())
-            .spawn()
-            .unwrap(),
-    );
-    let cwd = fixture.project.join("nested");
-    wait_for_file(&cwd.join("ready"));
+    let (mut running, mut stdout) = Running::spawn(&fixture);
+    wait_until_ready(&mut stdout);
     fs::write(fixture.source.join("data"), "replacement").unwrap();
     fixture.import("cargo/builds/uv");
     success(
@@ -507,37 +495,30 @@ fn root_replacement_and_collection_do_not_change_a_running_output() {
             .unwrap(),
     );
     success(fixture.command().arg("gc").output().unwrap());
-    fs::write(cwd.join("continue"), "").unwrap();
-    assert!(wait_for_exit(&mut running.0).success());
-    assert_eq!(
-        fs::read_to_string(cwd.join("observed")).unwrap(),
-        "original"
-    );
+    running.0.stdin.take().unwrap().write_all(b"\n").unwrap();
+    let mut observed = String::new();
+    stdout.read_to_string(&mut observed).unwrap();
+    assert_eq!(observed, "original");
+    assert!(running.0.wait().unwrap().success());
     fixture.no_checkouts();
 }
 
 #[test]
 fn signals_sent_to_casita_reach_the_child_and_cleanup_finishes() {
     use rustix::process::{Pid, Signal, kill_process};
-    let fixture = Fixture::new("trap 'exit 23' TERM\ntouch ready\nwhile :; do sleep 0.02; done");
+    // `cat` blocks on the stdin the test holds open, so only the forwarded
+    // TERM can end it.
+    let fixture = Fixture::new("echo ready\nexec cat");
     fixture.import("cargo/builds/uv");
-    let mut running = Running(
-        fixture
-            .command()
-            .args(["run", "uv"])
-            .stdout(Stdio::null())
-            .spawn()
-            .unwrap(),
-    );
-    wait_for_file(&fixture.project.join("nested/ready"));
+    let (mut running, mut stdout) = Running::spawn(&fixture);
+    wait_until_ready(&mut stdout);
     kill_process(Pid::from_raw(running.0.id() as i32).unwrap(), Signal::TERM).unwrap();
-    assert_eq!(wait_for_exit(&mut running.0).code(), Some(23));
+    assert_eq!(running.0.wait().unwrap().code(), Some(143));
     fixture.no_checkouts();
 }
 
 #[test]
 fn standard_input_and_signal_exit_status_are_preserved() {
-    use std::io::Write;
     let fixture = Fixture::new("cat\nkill -TERM $$");
     fixture.import("cargo/builds/uv");
     let mut child = fixture

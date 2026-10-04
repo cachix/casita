@@ -34,6 +34,8 @@ pub use crate::collection::{
 };
 pub use crate::digest::{BlobId, ChunkId, Digest, DigestError, DirectoryId, ObjectId};
 pub use crate::directory::Directory;
+#[cfg(feature = "native")]
+pub use crate::directory::read::read_directory_payload;
 pub use crate::encode::DirectoryDecodeError;
 pub use crate::error::{DirectoryError, Error, RetryDisposition};
 pub use crate::format::{

@@ -1,0 +1,13 @@
+{
+  "command": "cargo test --offline --config 'profile.dev.package.casita.opt-level=3' --config 'profile.dev.package.casita.debug=0' -p casita --features s3 --lib --no-run --message-format=json",
+  "casita_profile": {
+    "opt_level": "3",
+    "debuginfo": 0,
+    "debug_assertions": true,
+    "overflow_checks": true,
+    "test": true
+  },
+  "dependencies": "cached development profile",
+  "binary": "/home/domen/dev/casita11/target/debug/deps/casita-6b7b5d350f0ec6d2",
+  "source_revision": "5cfb313de3a5c412b9a1af85e54ee5afadaa4fed"
+}

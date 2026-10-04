@@ -22,7 +22,9 @@ class CasitarScalingTests(unittest.TestCase):
             self.assertEqual(command[command.index("--bin") + 1], "casita")
 
     def test_cpu_policy_accepts_compilers_below_ceiling(self):
-        monitor = suite.QuietHost(max_cpu_fraction=0.40, allow_competing_builds=True)
+        # Policy checks use synthetic samples and never read host activity.
+        with mock.patch.object(pathlib.Path, "exists", return_value=True):
+            monitor = suite.QuietHost(max_cpu_fraction=0.40, allow_competing_builds=True)
         for fraction, expected in [(0.0545, True), (0.10, True), (0.40, True), (0.4001, False)]:
             self.assertEqual(monitor.quiet({"external_cpu_fraction": fraction,
                                           "competing_processes": []}), expected)

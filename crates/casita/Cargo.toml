@@ -60,10 +60,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 # Turso is the native state engine. Its experimental multi-process WAL keeps
 # separate casita processes on one SQLite-format database coordinated without
 # enabling MVCC (casita deliberately serializes writes). Keep the exact
-# integration revision containing tursodatabase/turso#8476 and #8851 until
-# those WAL fixes are available upstream. Downstream consumers inherit this
-# engine directly without needing a Cargo patch or a version wrapper.
-turso = { version = "=0.8.0-pre.7", git = "https://github.com/cachix/turso.git", rev = "dca55133caa690f90dcdd58d3c4329fb0703659c", default-features = false, optional = true }
+# integration revision based on 0.8.0 containing the WAL fixes from
+# tursodatabase/turso#8476 and #8851 until those fixes are available upstream.
+# Downstream consumers inherit this engine directly without needing a Cargo
+# patch or a version wrapper.
+turso = { version = "=0.8.0", git = "https://github.com/cachix/turso.git", rev = "9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549", default-features = false, optional = true }
 # Handle-rooted filesystem access for import and materialization. Every
 # descendant is resolved relative to an already open directory handle
 # (`openat`/`openat2` on Unix, handle-relative reparse-aware opens on Windows),

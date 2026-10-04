@@ -10,6 +10,9 @@ use crate::error::DirectoryError;
 use crate::node::Node;
 use crate::path::PathComponent;
 
+#[cfg(feature = "native")]
+pub(crate) mod read;
+
 /// A directory: a name-sorted, unique-name map of child [`Node`]s.
 ///
 /// Addressed by the BLAKE3 digest of its canonical encoding (see

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "profile": "standard",
+  "complete": true,
+  "work_directory": "/home/domen/dev/casita11/benchmarks/work/c82ce1abea2e441695056412d4446927",
+  "finished": true,
+  "revision": "5cfb313de3a5c412b9a1af85e54ee5afadaa4fed",
+  "diff": "",
+  "entries": [
+    {
+      "suite": "wal3-commit-preparation",
+      "status": "passed",
+      "command": [
+        "/nix/store/bszqvgwpxb1gq1xpx8s6qv92wgb9dqli-python3-3.12.14/bin/python",
+        "-m",
+        "benchmarks.cli",
+        "run",
+        "wal3-commit-preparation",
+        "--probe-binary",
+        "/tmp/casita-wal3-optimized-z90cc95p/results/bin/casita-lib-test",
+        "--repetitions",
+        "10",
+        "--output",
+        "/tmp/casita-wal3-optimized-z90cc95p/results/wal3-commit-preparation.json"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 13.093116709000242,
+      "log": "/tmp/casita-wal3-optimized-z90cc95p/results/wal3-commit-preparation.log"
+    }
+  ],
+  "artifacts_unchanged": true
+}

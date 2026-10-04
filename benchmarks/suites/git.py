@@ -222,6 +222,7 @@ def append_history(
             previous_commit_mark = commit_mark
         stream.write(b"done\n")
         stream.close()
+        process.stdin = None
         stdout, stderr = process.communicate()
     except BaseException:
         process.kill()

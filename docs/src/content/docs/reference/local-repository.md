@@ -95,8 +95,9 @@ either may be discarded: losing one costs work, never correctness.
   whole. Records are immutable and only collection removes them, so a closure
   that verified once stays verified; publication, checkout, and synchronization
   stop their walk at a remembered one instead of re-reading everything beneath
-  it. `fsck` ignores the table, because reading the bytes back is exactly what
-  an audit is for.
+  it. File contents need no entry: a raw blob's record has no links and names
+  its own payload, so its presence is the proof. `fsck` ignores the table,
+  because reading the bytes back is exactly what an audit is for.
 - **The ingest cache** records which content each imported file held, keyed by
   the device, inode, size, and both timestamps the walk observed. See
   [Imports](../../concepts/imports/).
