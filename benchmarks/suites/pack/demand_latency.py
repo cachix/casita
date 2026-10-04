@@ -56,6 +56,7 @@ def main(argv=None):
     parser.add_argument("--probe-binary", type=pathlib.Path)
     parser.add_argument("--baseline-probe-binary", type=pathlib.Path)
     parser.add_argument("--original-probe-binary", type=pathlib.Path)
+    parser.add_argument("--variant-binary", action="append", default=[], metavar="LABEL=PATH")
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--sizes-mib", type=integers)
     parser.add_argument("--delay-ms", type=integers, default=[0, 20, 80])
@@ -86,6 +87,16 @@ def main(argv=None):
         binaries["serial"] = args.baseline_probe_binary.resolve()
     if args.original_probe_binary:
         binaries["original"] = args.original_probe_binary.resolve()
+    for value in args.variant_binary:
+        try:
+            label, path = value.split("=", 1)
+        except ValueError:
+            parser.error("variant binary must be LABEL=PATH")
+        if not label or label in binaries:
+            parser.error("variant labels must be unique and nonempty")
+        binaries[label] = pathlib.Path(path).resolve()
+    if len(binaries) > 3:
+        parser.error("at most three binaries are supported for balanced process order")
     artifacts = []
     for label, path in binaries.items():
         with path.open("rb") as source:

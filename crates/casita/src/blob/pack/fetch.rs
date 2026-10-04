@@ -70,9 +70,6 @@ pub(super) struct State {
     pub(super) cache: StdMutex<Cache>,
     buffers: ByteBudget,
     requests: Arc<tokio::sync::Semaphore>,
-    // Backpressured read-ahead can stop polling in-flight requests. Keep one
-    // global request slot available for demand so it can drain that queue.
-    speculative_requests: Arc<tokio::sync::Semaphore>,
 }
 impl State {
     pub(super) fn new(capacity: u64) -> Self {
@@ -80,7 +77,6 @@ impl State {
             cache: StdMutex::new(Cache::new(capacity)),
             buffers: ByteBudget::new(BUFFER_BYTES),
             requests: Arc::new(tokio::sync::Semaphore::new(4)),
-            speculative_requests: Arc::new(tokio::sync::Semaphore::new(3)),
         }
     }
 }
@@ -421,22 +417,6 @@ impl Context {
             .map(|request| {
                 let context = self.clone();
                 async move {
-                    // Acquire speculative admission first. Reversing these
-                    // acquisitions could consume the slot reserved for demand.
-                    let _speculative = if admission == Admission::WhenFree {
-                        Some(
-                            context
-                                .packed
-                                .fetch
-                                .speculative_requests
-                                .clone()
-                                .acquire_owned()
-                                .await
-                                .map_err(io::Error::other)?,
-                        )
-                    } else {
-                        None
-                    };
                     let _request = context
                         .packed
                         .fetch
@@ -546,11 +526,18 @@ impl Context {
                     let work = futures::stream::iter(windows).map(move |range| {
                         let context = ahead.clone();
                         async move {
-                            match context.window(range.clone(), Admission::WhenFree).await {
-                                Ok(Some(frames)) => Ok(Prefetch::Ready(frames)),
-                                Ok(None) => Ok(Prefetch::Deferred(range)),
-                                Err(error) => Err(error),
-                            }
+                            // Window I/O must keep running even while the pump
+                            // is blocked delivering an earlier result. Otherwise
+                            // unpolled ranges can retain every request permit
+                            // needed by a consumer fetching a deferred window.
+                            let mut task = WindowTask::spawn(async move {
+                                match context.window(range.clone(), Admission::WhenFree).await {
+                                    Ok(Some(frames)) => Ok(Prefetch::Ready(frames)),
+                                    Ok(None) => Ok(Prefetch::Deferred(range)),
+                                    Err(error) => Err(error),
+                                }
+                            });
+                            task.join().await
                         }
                         .boxed()
                     });
@@ -683,23 +670,50 @@ struct Pump {
     receive: tokio::sync::mpsc::Receiver<io::Result<Prefetch>>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
+// Each buffered window owns one independently polled task. The two-window
+// limit and shared byte budget still bound queued and active compressed data.
+struct WindowTask {
+    task: Option<tokio::task::JoinHandle<io::Result<Prefetch>>>,
+}
+impl WindowTask {
+    fn spawn(
+        work: impl std::future::Future<Output = io::Result<Prefetch>> + Send + 'static,
+    ) -> Self {
+        Self {
+            task: Some(tokio::spawn(work)),
+        }
+    }
+    async fn join(&mut self) -> io::Result<Prefetch> {
+        let result = self.task.as_mut().unwrap().await;
+        self.task.take();
+        result.map_err(io::Error::other)?
+    }
+}
+fn abort_and_track<T: Send + 'static>(task: tokio::task::JoinHandle<T>) {
+    task.abort();
+    // Aborting schedules cancellation. Track the join so shutdown waits for
+    // both pump and window tasks to release their plans, buffers, and pins.
+    if tokio::runtime::Handle::try_current().is_ok() {
+        crate::metadata::spawn_lease_task(async move {
+            match task.await {
+                Ok(_) => Ok(()),
+                Err(error) if error.is_cancelled() => Ok(()),
+                Err(error) => Err(crate::metadata::MetadataError::Backend(error.to_string())),
+            }
+        });
+    }
+}
+impl Drop for WindowTask {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            abort_and_track(task);
+        }
+    }
+}
 impl Drop for Pump {
     fn drop(&mut self) {
         if let Some(task) = self.task.take() {
-            task.abort();
-            // Aborting only schedules cancellation. Track the join so shutdown
-            // waits for the task's plan and durable pin to actually be dropped.
-            if tokio::runtime::Handle::try_current().is_ok() {
-                crate::metadata::spawn_lease_task(async move {
-                    match task.await {
-                        Ok(()) => Ok(()),
-                        Err(error) if error.is_cancelled() => Ok(()),
-                        Err(error) => {
-                            Err(crate::metadata::MetadataError::Backend(error.to_string()))
-                        }
-                    }
-                });
-            }
+            abort_and_track(task);
         }
     }
 }
@@ -710,12 +724,12 @@ mod tests {
     use crate::blob::BlobReader;
 
     #[tokio::test]
-    async fn speculative_requests_leave_room_for_demand() {
+    async fn backpressured_pump_releases_requests_for_demand() {
         use object_store::memory::InMemory;
         use object_store::throttle::{ThrottleConfig, ThrottledStore};
         use std::time::{Duration, Instant};
 
-        // Cover both sides of the three-request speculative admission limit.
+        // Cover both sides of the four-request I/O concurrency limit.
         for count in [2, 3, 4, 8] {
             let objects = Arc::new(ThrottledStore::new(
                 InMemory::new(),
@@ -755,11 +769,22 @@ mod tests {
                 },
                 decode: ByteBudget::new(BUFFER_BYTES),
             });
-            objects.config_mut(|c| c.wait_get_per_call = Duration::from_secs(60));
+            objects.config_mut(|c| c.wait_get_per_call = Duration::from_millis(100));
+            let (send, receive) = tokio::sync::mpsc::channel(1);
+            send.send(()).await.unwrap();
             let ahead = context.clone();
-            let pending =
-                tokio::spawn(async move { ahead.window(0..count, Admission::WhenFree).await });
-            let expected_free = 4 - count.min(3);
+            let pending = tokio::spawn(async move {
+                let mut task = WindowTask::spawn(async move {
+                    Ok(Prefetch::Ready(
+                        ahead.window(0..count, Admission::WhenFree).await?.unwrap(),
+                    ))
+                });
+                // The pump cannot poll its window handle until this full
+                // channel is released, but the range futures must keep running.
+                let _ = send.send(()).await;
+                task.join().await
+            });
+            let expected_free = 4 - count.min(4);
             tokio::time::timeout(Duration::from_secs(2), async {
                 while packed.fetch.requests.available_permits() > expected_free {
                     tokio::task::yield_now().await;
@@ -777,7 +802,7 @@ mod tests {
             let frames =
                 tokio::time::timeout(Duration::from_secs(2), context.demand(count..count + 1))
                     .await
-                    .expect("demand must progress while speculative I/O is blocked")
+                    .expect("demand must progress while the pump delivery is blocked")
                     .unwrap();
             let elapsed = started.elapsed();
             assert_eq!(frames.len(), 1);
@@ -787,10 +812,14 @@ mod tests {
             assert_eq!(ChunkId::new(blake3::hash(&decoded).into()), chunk.digest);
             assert_eq!(decoded, data[count * 64 * 1024..]);
             drop(frames);
-            pending.abort();
-            match pending.await {
-                Err(error) => assert!(error.is_cancelled()),
-                Ok(_) => panic!("speculative I/O unexpectedly completed"),
+            assert!(
+                !pending.is_finished(),
+                "the delivery channel must remain blocked"
+            );
+            drop(receive);
+            match pending.await.unwrap().unwrap() {
+                Prefetch::Ready(frames) => assert_eq!(frames.len(), count),
+                Prefetch::Deferred(_) => panic!("small speculative window was deferred"),
             }
             let all = packed
                 .fetch
@@ -1041,11 +1070,17 @@ mod tests {
         let owner = Arc::new(());
         let task_owner = owner.clone();
         let (send, receive) = tokio::sync::mpsc::channel(1);
+        let (started, running) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
-            let _owner = task_owner;
             let _send = send;
-            futures::future::pending::<()>().await;
+            let mut window = WindowTask::spawn(async move {
+                let _owner = task_owner;
+                started.send(()).unwrap();
+                futures::future::pending::<io::Result<Prefetch>>().await
+            });
+            let _ = window.join().await;
         });
+        running.await.unwrap();
         let pump = Pump {
             receive,
             task: Some(task),

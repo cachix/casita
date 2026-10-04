@@ -14,7 +14,7 @@ from benchmarks.suites import repository as common
 from benchmarks.suites.metadata_collection import CARGO_ARGUMENTS
 from benchmarks.suites.pack.catalog import parse_probe_binary
 
-PROBE = "blob::pack::fetch::tests::speculative_requests_leave_room_for_demand"
+PROBE = "blob::pack::fetch::tests::backpressured_pump_releases_requests_for_demand"
 CORRECTNESS = "exact bytes, verified digest, demand progress, permits released"
 
 

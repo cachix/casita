@@ -2,13 +2,15 @@
 
 ## Packed reader demand progress
 
-`benchmark run pack-demand-progress` holds speculative range I/O pending and
-checks that a demand fetch can still complete. Cases with 2, 3, 4, and 8
-speculative requests cover both sides of the three-request admission limit.
-Every case verifies the demanded chunk's bytes and digest, cancels the blocked
-work, and checks that all request and compressed-buffer permits are released.
-The suite is included in `benchmark all`. Its timings measure demand progress
-on a throttled in-memory backend, not filesystem or network throughput.
+`benchmark run pack-demand-progress` fills a delivery channel while its
+prefetched window handle is left unpolled. Independently running windows must
+release their I/O slots so a demanded chunk can complete. Cases with 2, 3, 4,
+and 8 speculative requests cover both sides of the four-request limit; range
+GETs are delayed by 100 ms. Every case verifies the demanded bytes and digest,
+releases the blocked channel, joins the window, and checks that every request
+and compressed-buffer permit is returned. Cancellation is also covered by the
+packed-fetch seek and park tests. The suite is included in `benchmark all`.
+Its timings measure demand progress, not storage throughput.
 
 ```sh
 benchmark run pack-demand-progress --repetitions 3 --output /tmp/demand-progress.json
@@ -78,6 +80,15 @@ at 80 ms, by 16–26%. Zero-delay cases showed no slowdown, and every fitting
 warm cache issued zero pack GETs. This small deterministic fixture did not
 reproduce the real repository's deadlock. These numbers describe this request
 latency model and do not predict shared-bandwidth or real-S3 throughput.
+
+The [2026-10-04 refactor report](reports/2026-10-04-prefetch-progress/get-delay.json)
+compares independently running prefetch windows with the reserved-slot fix and
+the original four-slot reader. All 432 reads passed verification. At 80 ms per
+GET, cold read times were 13–22% lower than the reserved-slot fix and within
+about 6% of the original. Zero-delay and 20 ms cases varied between cells; no
+claim of zero scheduling overhead follows from these three-run medians. Builds
+were running on this host during the comparison. Warm fitting-cache reads all
+issued zero pack GETs. Use `--variant-binary LABEL=PATH` for named controls.
 
 ## Filesystem reuse
 
