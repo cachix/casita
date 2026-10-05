@@ -479,6 +479,14 @@ Additional coverage is available through:
   unspecified; this does not claim deterministic coverage of every crash point.
 - `generations --generations N`: tiny updates and unchanged imports against
   retained histories, with root, fsck and restore gates for every generation.
+- `catalog-synchronization`: changing and unchanged state-catalog selection for
+  materialized and sharded bases, at 16 and `--entries` base manifests, with
+  0/1/64 pending changes. Legacy and queryable deferred runs add one manifest
+  and report listing/materialization time after each changed-root selection.
+  Exact membership and publication/reopen checks gate each case. The in-memory
+  component probe reports latency and catalog requests/bytes;
+  see [the synchronization invariants and regression coverage](catalog-state-synchronization.md)
+  and [before/after measurements](reports/2026-10-05-catalog-synchronization/README.md).
 - `catalog-maintenance`, `catalog-durability`, `logical-state`: the previously
   unregistered native maintenance and logical-state probes.
 
