@@ -120,7 +120,9 @@ async fn benchmark_catalog_wal() {
             packed.register_manifest(BlobId::new(benchmark_ordinal_digest(1, ordinal as u64)));
         }
         let catalog = packed.prepare_state_catalog().await.unwrap().unwrap();
-        packed.finish_state_catalog(true).unwrap();
+        packed
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         let root = decode_delta_catalog(&catalog).unwrap();
         assert_eq!(root.deltas.is_empty(), case == "delta-above");
         let reopened = PackedChunks::open_with_state_catalog(
@@ -1911,7 +1913,9 @@ async fn benchmark_scoped_catalog() {
         before_previous = previous;
         previous = catalog;
         catalog = writer.prepare_state_catalog().await.unwrap().unwrap();
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         actual_publications = ordinal + 1;
         if growing_packs && !decode_delta_catalog(&catalog).unwrap().runs.is_empty() {
             carry_at = Some(actual_publications);
