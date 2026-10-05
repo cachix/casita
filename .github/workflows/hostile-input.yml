@@ -13,6 +13,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_FUZZ_VERSION: 0.13.2
+  # Pinned so nightly churn cannot break every pull request. Turso depends on
+  # `branches` 0.4, which calls `core::intrinsics::abort`; nightly-2026-10-04
+  # removed that intrinsic. Advance once Turso uses `branches` 0.5.1 or later.
+  RUST_NIGHTLY: nightly-2026-10-03
 
 permissions:
   contents: read
@@ -25,7 +29,9 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_NIGHTLY }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: fuzz -> target
@@ -79,8 +85,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_NIGHTLY }}
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
         with:
@@ -119,8 +126,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_NIGHTLY }}
           components: miri
       - uses: Swatinem/rust-cache@v2
       # The suite is gated on `experimental`; without it the file compiles to
