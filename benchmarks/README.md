@@ -2938,3 +2938,112 @@ against its declaration, and the harness holds every artifact exactly to it,
 rejects an unknown or changing one, and records it with the artifact.
 `benchmark revisions` therefore checks every revision strictly, including
 revisions on either side of a deliberate witness change.
+
+### Chunk upload completion
+
+`chunk-upload-completion` compares production writers using separate immutable
+executables. Controlled stragglers delay one in eight chunk puts; `--delays-ms 0`
+provides the zero-delay control. The timer covers the payload write only. Every
+sample verifies independent FastCDC boundaries and hashes, exact blob identity,
+full Bao-verified readback, and that all started uploads finished. Standard cases
+cover the 512-byte chunker minimum, 2048-byte maximum, and byte-budget admission
+on both sides of one-upload and four-upload windows. Reservations round up in
+64 KiB units even for small chunks; 64 KiB therefore permits only one upload.
+`--concurrency` sets the per-writer upload window: 4 by default, with standard
+runs adding 2 and 32, the production default, which a 4 MiB budget fully
+admits. A writer buffers 16 upload windows of completed metadata behind its
+earliest pending chunk, never fewer than 64 entries, so 2 and 4 uploads share
+that floor while 32 buffer 512 entries. Standard runs include 8 ms and 50 ms
+stragglers to exercise different amounts of reordering. The scaled bound avoids
+retaining every completed chunk behind a stalled upload. This suite is included
+in `benchmark all`.
+
+```sh
+cargo test --release -p casita --no-default-features --features native,experimental --test chunk_upload_completion --no-run
+benchmark run chunk-upload-completion --profile smoke --probe-binary /path/to/probe --no-build --output /tmp/chunk-completion-smoke.json
+benchmark run chunk-upload-completion --file-bytes 65536,1048576 --budgets 196607,196608,196609,1048576,4194304 --delays-ms 0,8,50 --concurrency 2,4,32 --repetitions 5 --cpu-affinity 0,1,2,3 --baseline-binary /path/to/before --probe-binary /path/to/after --no-build --output /tmp/chunk-completion-paired.json
+benchmark run chunk-upload-completion --file-bytes 4194304 --budgets 4194304 --delays-ms 50 --concurrency 4,32 --repetitions 5 --cpu-affinity 0,1,2,3 --baseline-binary /path/to/before --probe-binary /path/to/after --no-build --output /tmp/chunk-completion-window.json
+```
+
+Build each source checkout in its own Cargo target directory, freeze both
+executables before subsequent builds, and preserve the same Cargo.lock and
+settings. Optional `.build.json` fingerprints are checked before comparing.
+Reports retain failed gates, every sample, and paired ranges;
+synthetic storage-delay results are not end-to-end Git import speedups.
+
+Measured against the parent of `perf: admit chunk uploads in completion order`
+(source-order completion), with 1 MiB writes, a 4 MiB budget, and five alternating
+pairs on four pinned physical cores. Builds used Rust 1.96.0, release mode, and
+identical fixtures and lockfiles. Times below are medians; the percentage is the
+median paired time reduction, so negative values mean slower writes.
+
+| Uploads | Straggler delay (ms) | Parent | Completion order | Time reduction |
+| --- | --- | --- | --- | --- |
+| 4 | 0 | 0.0194 s | 0.0200 s | -9.5% |
+| 32 | 0 | 0.0183 s | 0.0197 s | -9.2% |
+| 4 | 50 | 5.3137 s | 1.6786 s | +68.4% |
+| 32 | 50 | 1.1908 s | 0.2431 s | +79.6% |
+
+These measurements isolate completion scheduling before hash batching. The
+zero-delay pairs spanned both gains and regressions; five pairs do not establish
+a stable difference without storage delays. Synthetic delayed storage does not
+predict end-to-end Git import speedups.
+[Samples and build fingerprints](reports/2026-10-04-chunk-writer/completion.json)
+retain all five pairs for each configuration.
+
+```sh
+benchmark run chunk-upload-completion --file-bytes 1048576 --budgets 4194304 --delays-ms 0,50 --concurrency 4,32 --repetitions 5 --cpu-affinity 0,1,2,3 --baseline-binary /path/to/parent --probe-binary /path/to/completion-order --no-build --output /tmp/chunk-completion-parent.json
+```
+
+### Streaming chunk manifests
+
+`chunk-manifest-stream` measures writing and closing a payload generated from a
+repeated deterministic 64 KiB block. Both the fixture and verified readback use
+fixed-size buffers. Every sample checks an independently streamed BLAKE3 digest,
+all returned bytes, and the stored manifest identity. Paired runs reject differing
+blob or manifest hashes. The periodic source limits unique payload data in the
+memory backend while retaining one manifest entry per source chunk.
+
+The probe captures Linux process high-water RSS immediately after close, before
+readback; it includes the runtime and backend, not just manifest allocations.
+The runner also preserves whole-process RSS separately. Standard sizes range
+from 64 KiB to 256 MiB, with memory and local backends. Exact flat/page and
+page-tree fanout boundaries (63/64/65 and 4095/4096/4097 entries) are covered by
+the `streaming_chunk_manifests_preserve_flat_and_paged_bytes_with_bounded_buffers`
+unit test. The stalled-first-upload test covers the reorder bound.
+
+```sh
+benchmark run chunk-manifest-stream --profile smoke --probe-binary /path/to/probe --no-build --output /tmp/manifest-smoke.json
+benchmark run chunk-manifest-stream --file-bytes 65536,16777216,67108864 --backend both --repetitions 5 --cpu-affinity 0,1,2,3 --baseline-binary /path/to/before --probe-binary /path/to/after --no-build --output /tmp/manifest-paired.json
+```
+
+Measured against `perf: admit chunk uploads in completion order`, the actual
+parent, which retains all completed chunk metadata and sorts it after EOF.
+The candidate is `perf: build chunk manifests incrementally`; neither includes
+hash batching. Five alternating pairs wrote 256 MiB using four uploads and a
+1 MiB budget on the same four pinned physical cores, compiler, and release
+settings as the completion comparison above.
+
+| Backend | Parent time | Streaming time | Parent peak RSS | Streaming peak RSS | Time reduction |
+| --- | --- | --- | --- | --- | --- |
+| memory | 2.519 s | 2.391 s | 13.58 MiB | 5.13 MiB | +4.9% |
+| local | 2.799 s | 1.753 s | 13.03 MiB | 4.88 MiB | +12.8% |
+
+Times and RSS are medians; time reductions are medians of paired reductions.
+The goal is bounded manifest metadata, not a guaranteed speedup. RSS includes
+the runtime and backend, and these periodic-input measurements do not establish
+a bound on the entire writer's memory.
+[Samples and build fingerprints](reports/2026-10-04-chunk-writer/manifest.json)
+retain every observation and the paired ranges.
+
+```sh
+benchmark run chunk-manifest-stream --file-bytes 268435456 --backend both --repetitions 5 --cpu-affinity 0,1,2,3 --baseline-binary /path/to/completion-order --probe-binary /path/to/streaming --no-build --output /tmp/manifest-parent.json
+```
+
+### Chunk hash batching
+
+`chunk-hash-batch` measures cold and duplicate writes across chunk sizes,
+upload concurrency, memory admission, and the inline-hashing boundary. It runs
+in `benchmark all`. See the
+[cases, correctness gates, and measurement notes](chunk-hash-batch.md)
+for reproducible commands and retained paired reports.

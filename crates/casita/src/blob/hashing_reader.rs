@@ -43,6 +43,11 @@ impl<'a, R> HashingReader<'a, R> {
         }
     }
 
+    /// Bytes read from the source so far.
+    pub(crate) fn size(&self) -> u64 {
+        self.size
+    }
+
     /// Consume the accumulated hash and metadata, reusing EOF finalization.
     pub(crate) fn finish(self) -> io::Result<(BlobId, OutboardData)> {
         if let Some(finished) = self.finished {

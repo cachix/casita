@@ -480,6 +480,57 @@
   ],
   "entrypoints": [
     {
+      "id": "chunk-hash-batch",
+      "suite_id": "native-git",
+      "title": "Bounded chunk hash jobs across count, byte and admission boundaries",
+      "kind": "module",
+      "target": "benchmarks.suites.chunk_hash_batch",
+      "profiles": [
+        "smoke",
+        "standard"
+      ],
+      "correctness": [
+        "independent BLAKE3 and FastCDC",
+        "exhaustive verified readback",
+        "identical paired chunk metadata",
+        "zero duplicate chunk writes"
+      ]
+    },
+    {
+      "id": "chunk-manifest-stream",
+      "suite_id": "native-git",
+      "title": "Streaming manifest construction with bounded fixtures and exact manifest identities",
+      "kind": "module",
+      "target": "benchmarks.suites.chunk_manifest_stream",
+      "profiles": [
+        "smoke",
+        "standard"
+      ],
+      "correctness": [
+        "independent streaming BLAKE3",
+        "exhaustive verified streaming readback",
+        "identical paired manifest bytes",
+        "fixed-size fixture buffers"
+      ]
+    },
+    {
+      "id": "chunk-upload-completion",
+      "suite_id": "native-git",
+      "title": "Chunk upload stragglers with canonical manifest and verified readback gates",
+      "kind": "module",
+      "target": "benchmarks.suites.chunk_upload_completion",
+      "profiles": [
+        "smoke",
+        "standard"
+      ],
+      "correctness": [
+        "independent FastCDC boundaries and chunk hashes",
+        "verified full readback",
+        "all started uploads completed",
+        "identical paired blob identity"
+      ]
+    },
+    {
       "id": "pin-protocol-s3",
       "suite_id": "state-and-publication",
       "title": "Pin protocol prototypes on RustFS with independent writers, GC and fault readback gates",

@@ -121,6 +121,16 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Changed
 
+- Chunk hashing batches up to four chunks and 1 MiB per blocking job;
+  larger individual chunks run alone. A lone chunk of at most 4 KiB
+  is hashed inline.
+- Chunked blob writes store manifest pages as their source-ordered prefix
+  completes. Completed metadata behind a straggler is bounded to 16 upload
+  windows, with a minimum of 64 entries, plus in-flight uploads. A stalled
+  writer releases queued memory admission, and publication checks that the
+  manifest covers every hashed byte. Encodings and blob identities are unchanged.
+- Chunked blob writes refill their upload window whenever any upload
+  completes and keep driving uploads while source reads are pending.
 - Publishing a built-in raw blob no longer stores a closure witness for it,
   and incremental closure checks no longer open its payload. A blob record has
   no links and names its own payload, so its presence already proves a
@@ -244,6 +254,15 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Fixed
 
+- A chunked writer waiting on the shared chunk memory budget keeps its
+  place in the queue while its own uploads complete.
+- A lone loose chunk whose blob identity is known at EOF is protected
+  together with its blob and Bao path, avoiding a second ledger edit.
+- A new loose chunk uses one existence probe. Pinned writers remember
+  chunks they store so repeated chunks in the batch need no further probe.
+- A cancelled chunked write retains its chunk memory budget while queued
+  hashing or compression still holds the chunk bytes, preventing concurrent
+  writers from exceeding the budget.
 - Traversals that spill to temporary storage open their spill database on
   the blocking pool, like every later statement, instead of parsing its schema
   on the caller's stack. Deep publications with small spill limits could

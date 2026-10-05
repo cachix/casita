@@ -134,6 +134,7 @@ pub(crate) async fn put_object(
     Ok(())
 }
 
+mod hash_batch;
 mod manifest;
 mod overwrite;
 mod page_gc;
@@ -2069,3 +2070,6 @@ pub(crate) fn digest_from_location(location: &Path) -> io::Result<Digest> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod hash_batch_tests;

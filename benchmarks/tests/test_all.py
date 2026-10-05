@@ -93,6 +93,43 @@ class AllSuiteTests(unittest.TestCase):
         self.assertIn("/binaries/git_blob_file", args)
         self.assertIn("--no-build", args)
 
+    def test_build_retains_chunk_upload_completion_probe(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            probe = root / "chunk_upload_completion"
+            probe.write_bytes(b"integration probe")
+
+            def build(command, **kwargs):
+                self.assertIn("test", command)
+                self.assertEqual(command[command.index("--test") + 1], "chunk_upload_completion")
+                kwargs["stdout"].write(json.dumps({
+                    "reason": "compiler-artifact",
+                    "target": {"kind": ["test"], "name": "chunk_upload_completion"},
+                    "executable": str(probe),
+                }) + "\n")
+
+            with mock.patch.object(runner.subprocess, "run", side_effect=build):
+                binaries = runner.build_binaries(root, root / "build", ["chunk-upload-completion"])
+            self.assertEqual((binaries / "chunk_upload_completion").read_bytes(), b"integration probe")
+            artifacts = json.loads((root / "artifacts.json").read_text())
+            self.assertEqual(artifacts["chunk_upload_completion"]["sha256"], runner.fingerprint(probe))
+
+    def test_chunk_upload_completion_builds_and_receives_its_integration_probe(self):
+        commands = runner.build_commands(["chunk-upload-completion"], pathlib.Path("/build"))
+        self.assertEqual(len(commands), 1)
+        command = commands[0]
+        self.assertIn("test", command)
+        self.assertEqual(command[command.index("--test") + 1], "chunk_upload_completion")
+        self.assertIn("--no-default-features", command)
+        self.assertEqual(command[command.index("--features") + 1], "native,experimental")
+        self.assertNotIn("--all-features", command)
+        from benchmarks.revisions import SUITE_BUILD_SPECS
+        with mock.patch.dict(SUITE_BUILD_SPECS, {"alias-probe": SUITE_BUILD_SPECS["chunk-upload-completion"]}):
+            self.assertEqual(runner.build_commands(["chunk-upload-completion", "alias-probe"], pathlib.Path("/build")), commands)
+        args = runner.suite_arguments("chunk-upload-completion", pathlib.Path("/binaries"), "smoke", 1)
+        self.assertIn("/binaries/chunk_upload_completion", args)
+        self.assertIn("--no-build", args)
+
     def test_rustfs_protocol_matrix_retains_failed_cases_in_all_ledger(self):
         with tempfile.TemporaryDirectory() as directory:
             output = pathlib.Path(directory) / "results"

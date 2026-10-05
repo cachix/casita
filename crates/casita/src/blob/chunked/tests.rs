@@ -446,6 +446,7 @@ struct ChaosObjectStore {
     metadata_read_bytes: AtomicUsize,
     metadata_write_bytes: AtomicUsize,
     bao_multipart_completed: Arc<AtomicUsize>,
+    chunk_heads: AtomicUsize,
 }
 
 #[derive(Debug)]
@@ -539,6 +540,7 @@ impl ChaosObjectStore {
             metadata_write_bytes: AtomicUsize::new(0),
             bao_multipart_completed: Arc::new(AtomicUsize::new(0)),
             paused_chunk_puts: AtomicUsize::new(0),
+            chunk_heads: AtomicUsize::new(0),
         }
     }
 
@@ -680,6 +682,9 @@ impl ObjectStore for ChaosObjectStore {
             return Err(self.injected_error("get"));
         }
         let head = options.head;
+        if head && location.as_ref().starts_with("chunks/") {
+            self.chunk_heads.fetch_add(1, Ordering::SeqCst);
+        }
         let result = self.inner.get_opts(location, options).await?;
         if !head {
             let counter = if location.as_ref().starts_with("chunks/") {
@@ -1284,6 +1289,66 @@ async fn identical_chunks_uploaded_together_are_written_once() {
     );
     assert_eq!(backend.chunk_puts.load(Ordering::SeqCst), distinct.len());
     assert_eq!(read_blob(&store, &digest).await, Some(data));
+}
+
+#[tokio::test]
+async fn waiting_chunk_admission_keeps_its_budget_queue_position() {
+    use std::future::Future;
+    use std::task::Poll;
+    // A writer that requeued its reservation whenever one of its own uploads
+    // finished would lose the race against a later waiter in about half of
+    // these rounds. Keeping the queued reservation wins every round.
+    for round in 0..16 {
+        let backend = Arc::new(ChaosObjectStore::new(ChaosFault::PauseChunkUploads));
+        backend.arm();
+        // Two 64 KiB admission units hold two maximum-sized 2 KiB chunks.
+        let store = ChunkedBlobStore::new(backend.clone(), Path::default(), 1024)
+            .with_chunk_memory_budget_bytes(2 * 64 * 1024);
+        let budget = store.chunk_memory_budget.clone();
+        let mut data = vec![0; 100_000];
+        blake3::Hasher::new().finalize_xof().fill(&mut data);
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let writer = write_blob(&store, &data);
+            tokio::pin!(writer);
+            // Both admitted uploads wait in storage, so the writer has queued
+            // its next reservation before either of them was first polled.
+            while backend.paused_chunk_puts.load(Ordering::SeqCst) < 2 {
+                tokio::select! {
+                    _ = &mut writer => panic!("writer completed while uploads were paused"),
+                    _ = backend.reached.notified() => {},
+                }
+            }
+            // Boxed so dropping it below also leaves the budget's queue.
+            let mut competitor = Box::pin(budget.reserve(1));
+            assert!(futures::poll!(competitor.as_mut()).is_pending());
+            // The unit released by one finished upload belongs to the writer.
+            backend.resume.notify_one();
+            while backend.paused_chunk_puts.load(Ordering::SeqCst) < 3 {
+                tokio::select! {
+                    _ = &mut writer => panic!("writer completed while uploads were paused"),
+                    _ = backend.reached.notified() => {},
+                    _ = &mut competitor => panic!("a later waiter overtook the writer in round {round}"),
+                }
+            }
+            futures::future::poll_fn(|cx| {
+                assert!(writer.as_mut().poll(cx).is_pending());
+                assert!(competitor.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            drop(competitor);
+            backend.disarm();
+            backend.resume.notify_waiters();
+            let digest = writer.await;
+            assert_eq!(digest, BlobId::new(blake3::hash(&data).into()));
+            assert_eq!(
+                read_blob(&store, &digest).await.as_deref(),
+                Some(data.as_slice())
+            );
+        })
+        .await
+        .unwrap();
+    }
 }
 
 #[tokio::test]
@@ -3204,16 +3269,12 @@ async fn blob_coadmits_known_identities_and_bao_path() {
         let bytes = vec![size as u8; size];
         let blob = write_blob(&store, &bytes).await;
         let inventory = ledger.inventory().await.unwrap();
-        // Packed storage can coadmit a sole chunk after EOF, except at the
-        // maximum. Loose storage emits at the minimum before the blob identity
-        // is known, so it needs one later protection edit for that identity.
+        // Both layouts coadmit a sole chunk, including its loose path, with
+        // the blob after EOF. Only a chunk cut at the maximum is emitted before
+        // the blob identity is known, so it needs one later protection edit.
         assert_eq!(
             inventory.revision - before,
-            if size == average as usize * 2 || (layout == "loose" && size >= average as usize / 2) {
-                2
-            } else {
-                1
-            },
+            if size == average as usize * 2 { 2 } else { 1 },
             "layout={layout} average={average} size={size}"
         );
         let resources = &inventory.pins[&token].resources;
@@ -3241,6 +3302,50 @@ async fn blob_coadmits_known_identities_and_bao_path() {
         drop(batch);
         crate::flush_repository_leases().await.unwrap();
         assert!(ledger.inventory().await.unwrap().pins.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn loose_chunk_writes_probe_each_new_chunk_once() {
+    use crate::metadata::{DataPin, DataPinLease, MemoryPinStore, PinScope};
+    use std::collections::BTreeSet;
+    let data: Vec<u8> = (0..64 * 1024u32)
+        .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+        .collect();
+    for pinned in [false, true] {
+        let (store, objects) = chaos_chunked_store(ChaosFault::ReadChunk);
+        let batch = if pinned {
+            let pin = DataPinLease::acquire(
+                Arc::new(MemoryPinStore::default()),
+                DataPin {
+                    scope: PinScope::Staging,
+                    catalog: None,
+                    resources: BTreeSet::new(),
+                },
+            )
+            .await
+            .unwrap();
+            Some(store.begin_pinned_batch(pin).unwrap())
+        } else {
+            None
+        };
+        let requests = || {
+            (
+                objects.chunk_puts.load(Ordering::SeqCst),
+                objects.chunk_heads.load(Ordering::SeqCst),
+            )
+        };
+        let blob = write_blob(&store, &data).await;
+        let (puts, _) = requests();
+        assert!(puts > 1, "pinned={pinned} must store several chunks");
+        // A new loose chunk costs one existence probe, whether presence is
+        // remembered by the pin or by the chunk index. Rewrites probe nothing.
+        assert_eq!(requests(), (puts, puts), "pinned={pinned}");
+        assert_eq!(write_blob(&store, &data).await, blob);
+        assert_eq!(requests(), (puts, puts), "pinned={pinned}");
+        assert_eq!(read_blob(&store, &blob).await.unwrap(), data);
+        drop(batch);
+        crate::flush_repository_leases().await.unwrap();
     }
 }
 
@@ -3657,4 +3762,77 @@ async fn a_parked_reader_does_not_starve_a_second_reader_of_buffers() {
     // The parked reader still finishes its own stream afterwards.
     parked.read_to_end(&mut head).await.unwrap();
     assert_eq!(head.len(), first.len());
+}
+
+// Occupy the runtime's only blocking thread so a real upload owns a queued
+// hash/compression task. Occupying the worker makes cancellation deterministic
+// without timing the CPU work or relying on uploader instrumentation.
+fn check_cancelled_upload_budget(size: usize, average: u32) {
+    struct Release(Option<std::sync::mpsc::Sender<()>>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let store = ChunkedBlobStore::new(
+            Arc::new(object_store::memory::InMemory::new()),
+            Path::default(),
+            average,
+        )
+        .with_chunk_memory_budget_bytes(64 * 1024);
+        let budget = store.chunk_memory_budget.clone();
+        let (entered, started) = tokio::sync::oneshot::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        // The guard also releases the worker if an assertion fails.
+        let release = Release(Some(release));
+        let blocker = tokio::task::spawn_blocking(move || {
+            entered.send(()).unwrap();
+            wait.recv().unwrap();
+        });
+        started.await.unwrap();
+        let data = vec![91; size];
+        let mut writing = Box::pin(store.put_slice(&data));
+        assert!(futures::poll!(writing.as_mut()).is_pending());
+        assert_eq!(
+            budget.free_bytes(),
+            0,
+            "the upload must have admitted its chunk before cancellation"
+        );
+        drop(writing);
+        assert_eq!(
+            budget.free_bytes(),
+            0,
+            "queued CPU work still owns the chunk after its writer is cancelled"
+        );
+        assert!(budget.try_reserve(1).is_none());
+        drop(release);
+        blocker.await.unwrap();
+        let permit = tokio::time::timeout(std::time::Duration::from_secs(5), budget.reserve(1))
+            .await
+            .unwrap();
+        drop(permit);
+        assert_eq!(budget.free_bytes(), 64 * 1024);
+    });
+}
+
+#[test]
+fn cancelled_small_upload_keeps_chunk_budget_until_cpu_completion() {
+    // This uses the single-chunk prehashed path and queues compression.
+    check_cancelled_upload_budget(1, 512);
+}
+
+#[test]
+fn cancelled_chunk_hash_keeps_chunk_budget_until_cpu_completion() {
+    // This reaches normal chunking before EOF and queues chunk hashing. The
+    // 32 KiB maximum-size chunk exceeds the bound for hashing a lone chunk
+    // inline, and the one-unit budget forces its group to flush alone.
+    check_cancelled_upload_budget(64 * 1024, 16 * 1024);
 }
