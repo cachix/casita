@@ -254,6 +254,9 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Fixed
 
+- Catalog synchronization preserves flushed and prepared payload changes across
+  concurrent publication, retries, and cancellation. Readers capture a coherent
+  catalog view and retry deferred-run loading when synchronization replaces it.
 - A chunked writer waiting on the shared chunk memory budget keeps its
   place in the queue while its own uploads complete.
 - A lone loose chunk whose blob identity is known at EOF is protected

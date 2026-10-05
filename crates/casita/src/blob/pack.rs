@@ -1482,7 +1482,7 @@ impl CatalogObjectPublication<'_> {
 }
 
 #[cfg(test)]
-type SyncInstallHook = Box<dyn FnOnce(&PackedChunks) + Send>;
+type CatalogStateHook = Box<dyn FnOnce(&PackedChunks) + Send>;
 
 #[cfg(test)]
 mod catalog_sync_tests;
@@ -1522,7 +1522,13 @@ pub(crate) struct PackedChunks {
     #[cfg(test)]
     catalog_prepare_hook: StdMutex<Option<FlushHandoffHook>>,
     #[cfg(test)]
-    sync_install_hook: StdMutex<Option<SyncInstallHook>>,
+    catalog_read_hook: StdMutex<Option<FlushHandoffHook>>,
+    #[cfg(test)]
+    catalog_capture_hook: StdMutex<Option<CatalogStateHook>>,
+    #[cfg(test)]
+    catalog_materialize_hook: StdMutex<Option<FlushHandoffHook>>,
+    #[cfg(test)]
+    sync_install_hook: StdMutex<Option<CatalogStateHook>>,
     index_dirty: AtomicBool,
     state_catalog_mode: AtomicBool,
     dirty_packs: Mutex<HashSet<PackId>>,
@@ -1693,6 +1699,12 @@ impl PackedChunks {
             sync_dirty_hook: StdMutex::new(None),
             #[cfg(test)]
             catalog_prepare_hook: StdMutex::new(None),
+            #[cfg(test)]
+            catalog_read_hook: StdMutex::new(None),
+            #[cfg(test)]
+            catalog_capture_hook: StdMutex::new(None),
+            #[cfg(test)]
+            catalog_materialize_hook: StdMutex::new(None),
             #[cfg(test)]
             sync_install_hook: StdMutex::new(None),
             index_dirty: AtomicBool::new(false),
@@ -2414,16 +2426,19 @@ impl PackedChunks {
                 || self.location(&ChunkId::new(digest)).await?.is_some()),
             TOMBSTONES_KIND => {
                 if tombstones.is_none() {
-                    let mut records: HashSet<_> = self
-                        .index
-                        .read()
-                        .unwrap()
-                        .tombstone_records
-                        .values()
-                        .flatten()
-                        .copied()
-                        .collect();
-                    let lazy = self.lazy_catalog.read().unwrap().clone();
+                    let (mut records, lazy) = self
+                        .materialized_catalog(|index, lazy| {
+                            let records: HashSet<_> = index
+                                .tombstone_records
+                                .values()
+                                .flatten()
+                                .copied()
+                                .collect();
+                            (records, lazy.clone())
+                        })
+                        .await?;
+                    #[cfg(test)]
+                    self.pause_catalog_read().await;
                     if let Some(base) = lazy.base {
                         for reference in &base.map.packs {
                             let bytes = self.load_catalog_shard(*reference).await?;
@@ -2485,10 +2500,16 @@ impl PackedChunks {
     }
 
     async fn catalog_contains_manifest(&self, digest: BlobId) -> io::Result<bool> {
-        if self.index.read().unwrap().manifests.contains(&digest) {
+        let lazy = self
+            .materialized_catalog(|index, lazy| {
+                (!index.manifests.contains(&digest)).then(|| lazy.clone())
+            })
+            .await?;
+        let Some(lazy) = lazy else {
             return Ok(true);
-        }
-        let lazy = self.lazy_catalog.read().unwrap().clone();
+        };
+        #[cfg(test)]
+        self.pause_catalog_read().await;
         if lazy.removed_manifests.contains(&digest) {
             return Ok(false);
         }
@@ -2558,10 +2579,16 @@ impl PackedChunks {
     }
 
     async fn catalog_contains_pack(&self, pack: PackId) -> io::Result<bool> {
-        if self.index.read().unwrap().packs.contains_key(&pack) {
+        let lazy = self
+            .materialized_catalog(|index, lazy| {
+                (!index.packs.contains_key(&pack)).then(|| lazy.clone())
+            })
+            .await?;
+        let Some(lazy) = lazy else {
             return Ok(true);
-        }
-        let lazy = self.lazy_catalog.read().unwrap().clone();
+        };
+        #[cfg(test)]
+        self.pause_catalog_read().await;
         if lazy.changed_packs.contains(&pack) {
             return Ok(false);
         }
@@ -3310,12 +3337,9 @@ impl PackedChunks {
 
     pub(crate) fn list(&self) -> BoxStream<'_, io::Result<ChunkId>> {
         Box::pin(async_stream::try_stream! {
-            self.ensure_catalog_runs_loaded().await?;
-            let lazy = self.lazy_catalog.read().unwrap().clone();
             let deleted = self.deleted.lock().await.clone();
-            let local = {
-                let index = self.index.read().unwrap();
-                if lazy.base.is_none() {
+            let (local, lazy) = self.materialized_catalog(|index, lazy| {
+                let local = if lazy.base.is_none() {
                     index.chunks.ids()
                 } else {
                     let mut ids = HashSet::new();
@@ -3331,8 +3355,11 @@ impl PackedChunks {
                     let mut ids = ids.into_iter().collect::<Vec<_>>();
                     ids.sort_unstable();
                     ids
-                }
-            };
+                };
+                (local, lazy.clone())
+            }).await?;
+            #[cfg(test)]
+            self.pause_catalog_read().await;
             let local_set = local.iter().copied().collect::<HashSet<_>>();
             if let Some(base) = lazy.base {
                 for reference in base.map.chunks.iter().copied() {
@@ -3354,16 +3381,15 @@ impl PackedChunks {
 
     pub(crate) fn list_manifests(&self) -> BoxStream<'_, io::Result<BlobId>> {
         Box::pin(async_stream::try_stream! {
-            self.ensure_catalog_runs_loaded().await?;
-            let local = {
-                let index = self.index.read().unwrap();
-                index
-                    .manifests_complete
-                    .then(|| index.manifests.sorted_ids())
-            }.ok_or_else(|| io::Error::other(
+            let (local, lazy) = self.materialized_catalog(|index, lazy| {
+                let local = index.manifests_complete.then(|| index.manifests.sorted_ids());
+                (local, lazy.clone())
+            }).await?;
+            let local = local.ok_or_else(|| io::Error::other(
                 "packed manifest catalog is not authoritative",
             ))?;
-            let lazy = self.lazy_catalog.read().unwrap().clone();
+            #[cfg(test)]
+            self.pause_catalog_read().await;
             let local_set = local.iter().copied().collect::<HashSet<_>>();
             if let Some(base) = lazy.base {
                 for reference in base.map.manifests.iter().copied() {
@@ -3658,10 +3684,37 @@ impl PackedChunks {
         if self.deleted.lock().await.contains(digest) {
             return Ok(None);
         }
-        if let Some(location) = self.index.read().unwrap().chunks.get(digest) {
-            return Ok(Some(location));
+        loop {
+            // The index guard pairs the local lookup with its immutable base.
+            // No synchronous guard is held during catalog I/O.
+            let lazy = {
+                let index = self.index.read().unwrap();
+                if let Some(location) = index.chunks.get(digest) {
+                    return Ok(Some(location));
+                }
+                #[cfg(test)]
+                if let Some(hook) = self.catalog_capture_hook.lock().unwrap().take() {
+                    hook(self);
+                }
+                self.lazy_catalog.read().unwrap().clone()
+            };
+            #[cfg(test)]
+            self.pause_catalog_read().await;
+            if lazy
+                .run_refs
+                .values()
+                .any(|reference| reference.query.is_none())
+            {
+                self.ensure_catalog_runs_loaded().await?;
+                continue;
+            }
+            return Ok(self
+                .reader()
+                .base_locations(&lazy, digest)
+                .await?
+                .into_iter()
+                .next());
         }
-        Ok(self.base_locations(digest).await?.into_iter().next())
     }
 
     /// Return the immutable pack that would serve one chunk without reading
@@ -3673,19 +3726,33 @@ impl PackedChunks {
     }
 
     async fn base_locations(&self, digest: &ChunkId) -> io::Result<Vec<Location>> {
-        let mut lazy = self.lazy_catalog.read().unwrap().clone();
-        if lazy
-            .run_refs
-            .values()
-            .any(|reference| reference.query.is_none())
-        {
-            self.ensure_catalog_runs_loaded().await?;
-            if let Some(location) = self.index.read().unwrap().chunks.get(digest) {
-                return Ok(vec![location]);
+        loop {
+            let lazy = self.lazy_catalog.read().unwrap().clone();
+            if lazy
+                .run_refs
+                .values()
+                .any(|reference| reference.query.is_none())
+            {
+                self.ensure_catalog_runs_loaded().await?;
+                let lazy = {
+                    let index = self.index.read().unwrap();
+                    if let Some(location) = index.chunks.get(digest) {
+                        return Ok(vec![location]);
+                    }
+                    // Reselect under the index guard after materialization.
+                    self.lazy_catalog.read().unwrap().clone()
+                };
+                if lazy
+                    .run_refs
+                    .values()
+                    .any(|reference| reference.query.is_none())
+                {
+                    continue;
+                }
+                return self.reader().base_locations(&lazy, digest).await;
             }
-            lazy = self.lazy_catalog.read().unwrap().clone();
+            return self.reader().base_locations(&lazy, digest).await;
         }
-        self.reader().base_locations(&lazy, digest).await
     }
 
     #[cfg(test)]
@@ -3874,90 +3941,159 @@ impl PackedChunks {
             return Ok(());
         }
         let _load = self.catalog_run_load.lock().await;
-        let snapshot = self.lazy_catalog.read().unwrap().clone();
-        if snapshot.run_refs.is_empty() {
-            return Ok(());
-        }
+        loop {
+            let snapshot = self.lazy_catalog.read().unwrap().clone();
+            if snapshot.run_refs.is_empty() {
+                return Ok(());
+            }
 
-        let (overlay, materialized, loaded) = self.reader().materialize_runs(&snapshot).await?;
-        let mut overlay = overlay;
-        let mut materialized = materialized;
+            let result = self.reader().materialize_runs(&snapshot).await;
+            #[cfg(test)]
+            self.pause_catalog_read().await;
 
-        // Mutations may have landed while remote runs were loading. Capture
-        // and replay their latest exact state while holding the normal index
-        // then mutation lock order.
-        let transition = self.catalog_transition.lock().unwrap();
-        let mut current = self.index.write().unwrap();
-        let pending = self.pending_catalog.lock().unwrap();
-        let mut lazy = self.lazy_catalog.write().unwrap();
-        if lazy.run_refs != snapshot.run_refs || lazy.root_deltas != snapshot.root_deltas {
-            return Err(io::Error::other(
-                "pack catalog changed while immutable runs were loading",
-            ));
+            {
+                // Recheck the selected catalog before using either loaded bytes
+                // or an error: a superseded run need no longer be readable.
+                // Replay prepared state before newer pending mutations while
+                // holding transition -> index -> pending -> lazy.
+                let transition = self.catalog_transition.lock().unwrap();
+                let mut current = self.index.write().unwrap();
+                let pending = self.pending_catalog.lock().unwrap();
+                let mut lazy = self.lazy_catalog.write().unwrap();
+                let same_base = match (&lazy.base, &snapshot.base) {
+                    (Some(current), Some(selected)) => Arc::ptr_eq(&current.map, &selected.map),
+                    (None, None) => true,
+                    _ => false,
+                };
+                if same_base
+                    && lazy.run_refs == snapshot.run_refs
+                    && lazy.root_deltas == snapshot.root_deltas
+                {
+                    let (mut overlay, mut materialized, loaded) = result?;
+                    if let Some(delta) = transition
+                        .as_ref()
+                        .and_then(|prepared| prepared.delta.as_ref())
+                    {
+                        let decoded = decode_index_delta(delta)?;
+                        materialized.apply(&decoded);
+                        apply_decoded_index_delta(&mut overlay, decoded);
+                    }
+                    if !pending.is_empty() {
+                        let delta = encode_index_mutations(&current, &pending)?;
+                        let decoded = decode_index_delta(&delta)?;
+                        materialized.apply(&decoded);
+                        apply_decoded_index_delta(&mut overlay, decoded);
+                    }
+                    *current = overlay;
+                    *lazy = materialized;
+                    self.index_catalog.lock().unwrap().runs.extend(loaded);
+                    return Ok(());
+                }
+            }
+            // Synchronization superseded this load. Drop all synchronous guards
+            // before retrying, and remain cancellable even when reads hit caches.
+            tokio::task::yield_now().await;
         }
-        if let Some(delta) = transition
-            .as_ref()
-            .and_then(|prepared| prepared.delta.as_ref())
-        {
-            let decoded = decode_index_delta(delta)?;
-            materialized.apply(&decoded);
-            apply_decoded_index_delta(&mut overlay, decoded);
+    }
+
+    /// Capture a reader result only when the paired index contains all run
+    /// overlays. Synchronization can select a new deferred run after loading,
+    /// so the check and capture must share the index guard.
+    async fn materialized_catalog<T>(
+        &self,
+        capture: impl Fn(&Index, &LazyCatalogOverlay) -> T,
+    ) -> io::Result<T> {
+        loop {
+            #[cfg(test)]
+            {
+                let hook = self.catalog_materialize_hook.lock().unwrap().take();
+                if let Some(hook) = hook {
+                    let _ = hook.reached.send(());
+                    let _ = hook.resume.await;
+                }
+            }
+            {
+                let index = self.index.read().unwrap();
+                #[cfg(test)]
+                if let Some(hook) = self.catalog_capture_hook.lock().unwrap().take() {
+                    hook(self);
+                }
+                let lazy = self.lazy_catalog.read().unwrap();
+                if lazy.run_refs.is_empty() {
+                    return Ok(capture(&index, &lazy));
+                }
+            }
+            self.ensure_catalog_runs_loaded().await?;
         }
-        if !pending.is_empty() {
-            let delta = encode_index_mutations(&current, &pending)?;
-            let decoded = decode_index_delta(&delta)?;
-            materialized.apply(&decoded);
-            apply_decoded_index_delta(&mut overlay, decoded);
-        }
-        *current = overlay;
-        *lazy = materialized;
-        self.index_catalog.lock().unwrap().runs.extend(loaded);
-        Ok(())
     }
 
     async fn ensure_pack_loaded(&self, pack: PackId) -> io::Result<()> {
-        if self.index.read().unwrap().packs.contains_key(&pack) {
+        loop {
+            let base = self
+                .materialized_catalog(|index, lazy| {
+                    if index.packs.contains_key(&pack) || lazy.changed_packs.contains(&pack) {
+                        None
+                    } else {
+                        lazy.base.clone()
+                    }
+                })
+                .await?;
+            let Some(base) = base else {
+                return Ok(());
+            };
+            let prefix = digest_prefix(pack.as_digest(), base.map.shard_bits)?;
+            let Ok(at) = base
+                .map
+                .packs
+                .binary_search_by_key(&prefix, |shard| shard.prefix)
+            else {
+                return Ok(());
+            };
+            let reference = base.map.packs[at];
+            #[cfg(test)]
+            self.pause_catalog_read().await;
+            let bytes = self.load_catalog_shard(reference).await?;
+            let mut shard = decode_pack_shard(&bytes, prefix, reference.entries)?;
+            let Some(entries) = shard.packs.remove(&pack) else {
+                return Ok(());
+            };
+            let pack_len = shard
+                .pack_lengths
+                .remove(&pack)
+                .ok_or_else(|| io::Error::other("catalog pack shard has no pack length"))?;
+            let dead = shard.tombstoned.remove(&pack);
+            let records = shard.tombstone_records.remove(&pack);
+            let mut index = self.index.write().unwrap();
+            let lazy = self.lazy_catalog.read().unwrap();
+            if index.packs.contains_key(&pack) || lazy.changed_packs.contains(&pack) {
+                return Ok(());
+            }
+            if !lazy.run_refs.is_empty()
+                || !lazy
+                    .base
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(&current.map, &base.map))
+            {
+                continue;
+            }
+            if let Some(dead) = dead {
+                index.tombstoned.insert(pack, dead);
+            }
+            if let Some(records) = records {
+                index.tombstone_records.insert(pack, records);
+            }
+            index.add_pack(pack, pack_len, entries);
             return Ok(());
         }
-        let lazy = self.lazy_catalog.read().unwrap().clone();
-        if lazy.changed_packs.contains(&pack) {
-            return Ok(());
+    }
+
+    #[cfg(test)]
+    async fn pause_catalog_read(&self) {
+        let hook = self.catalog_read_hook.lock().unwrap().take();
+        if let Some(hook) = hook {
+            let _ = hook.reached.send(());
+            let _ = hook.resume.await;
         }
-        let Some(base) = lazy.base else {
-            return Ok(());
-        };
-        let prefix = digest_prefix(pack.as_digest(), base.map.shard_bits)?;
-        let Ok(at) = base
-            .map
-            .packs
-            .binary_search_by_key(&prefix, |shard| shard.prefix)
-        else {
-            return Ok(());
-        };
-        let reference = base.map.packs[at];
-        let bytes = self.load_catalog_shard(reference).await?;
-        let mut shard = decode_pack_shard(&bytes, prefix, reference.entries)?;
-        let Some(entries) = shard.packs.remove(&pack) else {
-            return Ok(());
-        };
-        let pack_len = shard
-            .pack_lengths
-            .remove(&pack)
-            .ok_or_else(|| io::Error::other("catalog pack shard has no pack length"))?;
-        let dead = shard.tombstoned.remove(&pack);
-        let records = shard.tombstone_records.remove(&pack);
-        let mut index = self.index.write().unwrap();
-        if index.packs.contains_key(&pack) {
-            return Ok(());
-        }
-        if let Some(dead) = dead {
-            index.tombstoned.insert(pack, dead);
-        }
-        if let Some(records) = records {
-            index.tombstone_records.insert(pack, records);
-        }
-        index.add_pack(pack, pack_len, entries);
-        Ok(())
     }
 
     #[cfg(test)]

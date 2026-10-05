@@ -386,6 +386,205 @@ async fn catalog_sync_invalidates_a_prepared_background_rebase() {
     assert_eq!(reader.get(&other.digest).await.unwrap(), Some(other_bytes));
 }
 
+async fn assert_read_uses_one_catalog(operation: &'static str) {
+    let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let base = Path::from("catalog-sync-read-view");
+    let manifest = BlobId::new(Digest::hash(b"manifest"));
+    let tombstone = Digest::hash(b"retained tombstone record");
+    let (lazy, eager) = if operation == "tombstone" {
+        let seed = seed_catalog(&objects, &base, false, manifest).await;
+        let store = PackedChunks::open_with_state_catalog(
+            objects.clone(),
+            base.clone(),
+            u64::MAX,
+            0,
+            &seed,
+        )
+        .await
+        .unwrap();
+        let mut index = store.index.read().unwrap().clone();
+        let pack = *index.packs.keys().next().unwrap();
+        let (meta, _) = chunk(b"seed payload");
+        index.tombstoned.insert(pack, HashSet::from([meta.digest]));
+        index
+            .tombstone_records
+            .insert(pack, HashSet::from([tombstone]));
+        index.rebuild_chunks();
+        let eager = encode_delta_catalog(&DeltaCatalog {
+            sidecars: None,
+            generation: 1,
+            base: CatalogBase::Inline(
+                encode_index_checkpoint(&index, Digest::hash(b"tombstone fixture")).unwrap(),
+            ),
+            runs: BTreeMap::new(),
+            deltas: Vec::new(),
+        })
+        .unwrap()
+        .to_vec();
+        (sharded_fixture(&objects, &base, &index).await, eager)
+    } else {
+        (
+            seed_catalog(&objects, &base, true, manifest).await,
+            seed_catalog(&objects, &base, false, manifest).await,
+        )
+    };
+    let (before, after) = if operation == "chunks" {
+        (&eager, &lazy)
+    } else {
+        (&lazy, &eager)
+    };
+    let eager_reader =
+        PackedChunks::open_with_state_catalog(objects.clone(), base.clone(), u64::MAX, 0, &eager)
+            .await
+            .unwrap();
+    let (meta, bytes) = chunk(b"seed payload");
+    let pack = *eager_reader
+        .index
+        .read()
+        .unwrap()
+        .packs
+        .keys()
+        .next()
+        .unwrap();
+    let writer = PackedChunks::open_with_state_catalog(objects, base, u64::MAX, 0, before)
+        .await
+        .unwrap();
+    if operation != "tombstone" {
+        assert_eq!(writer.get(&meta.digest).await.unwrap(), Some(bytes.clone()));
+    }
+    // This single-threaded test has no competing index owner: the capture
+    // itself must keep the writer excluded until lazy state is selected.
+    let capture_checked = Arc::new(AtomicBool::new(false));
+    *writer.catalog_capture_hook.lock().unwrap() = Some(Box::new({
+        let capture_checked = capture_checked.clone();
+        move |packed| {
+            assert!(
+                packed.index.try_write().is_err(),
+                "index guard was released before selecting lazy catalog state"
+            );
+            capture_checked.store(true, Ordering::SeqCst);
+        }
+    }));
+    let (reached_tx, reached) = tokio::sync::oneshot::channel();
+    let (resume, resume_rx) = tokio::sync::oneshot::channel();
+    *writer.catalog_read_hook.lock().unwrap() = Some(FlushHandoffHook {
+        reached: reached_tx,
+        resume: resume_rx,
+    });
+    let read = tokio::spawn({
+        let writer = writer.clone();
+        async move {
+            match operation {
+                "chunk" => writer.get(&meta.digest).await.unwrap() == Some(bytes),
+                "chunks" => {
+                    writer.list().try_collect::<Vec<_>>().await.unwrap() == vec![meta.digest]
+                }
+                "manifests" => {
+                    writer
+                        .list_manifests()
+                        .try_collect::<Vec<_>>()
+                        .await
+                        .unwrap()
+                        == vec![manifest]
+                }
+                "pack_member" => writer.catalog_contains_pack(pack).await.unwrap(),
+                "manifest_member" => writer.catalog_contains_manifest(manifest).await.unwrap(),
+                "tombstone" => writer
+                    .catalog_references_retirement(
+                        &sharded_path(&writer.base, TOMBSTONES_KIND, &tombstone),
+                        &mut None,
+                    )
+                    .await
+                    .unwrap(),
+                _ => unreachable!(),
+            }
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(10), reached)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(capture_checked.load(Ordering::SeqCst));
+    writer.synchronize_state_catalog(Some(after)).await.unwrap();
+    resume.send(()).unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(10), read)
+            .await
+            .unwrap()
+            .unwrap(),
+        "{operation} mixed two catalog views"
+    );
+}
+
+#[tokio::test]
+async fn catalog_sync_read_uses_one_catalog_view() {
+    assert_read_uses_one_catalog("chunk").await;
+}
+#[tokio::test]
+async fn catalog_sync_chunk_listing_uses_one_catalog_view() {
+    assert_read_uses_one_catalog("chunks").await;
+}
+#[tokio::test]
+async fn catalog_sync_manifest_listing_uses_one_catalog_view() {
+    assert_read_uses_one_catalog("manifests").await;
+}
+#[tokio::test]
+async fn catalog_sync_pack_membership_uses_one_catalog_view() {
+    assert_read_uses_one_catalog("pack_member").await;
+}
+#[tokio::test]
+async fn catalog_sync_manifest_membership_uses_one_catalog_view() {
+    assert_read_uses_one_catalog("manifest_member").await;
+}
+
+#[tokio::test]
+async fn catalog_sync_does_not_install_stale_pack_hydration() {
+    let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let base = Path::from("catalog-sync-hydration");
+    let manifest = BlobId::new(Digest::hash(b"manifest"));
+    let lazy = seed_catalog(&objects, &base, true, manifest).await;
+    let writer = PackedChunks::open_with_state_catalog(objects, base, u64::MAX, 0, &lazy)
+        .await
+        .unwrap();
+    let (meta, _) = chunk(b"seed payload");
+    let pack = writer.location(&meta.digest).await.unwrap().unwrap().pack;
+    let (reached_tx, reached) = tokio::sync::oneshot::channel();
+    let (resume, resume_rx) = tokio::sync::oneshot::channel();
+    *writer.catalog_read_hook.lock().unwrap() = Some(FlushHandoffHook {
+        reached: reached_tx,
+        resume: resume_rx,
+    });
+    let hydrate = tokio::spawn({
+        let writer = writer.clone();
+        async move {
+            writer.ensure_pack_loaded(pack).await.unwrap();
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(10), reached)
+        .await
+        .unwrap()
+        .unwrap();
+    writer
+        .synchronize_state_catalog(Some(&PackedChunks::empty_state_catalog().unwrap()))
+        .await
+        .unwrap();
+    resume.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), hydrate)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        writer.get(&meta.digest).await.unwrap(),
+        None,
+        "hydration reintroduced a pack from the previous catalog"
+    );
+}
+
+#[tokio::test]
+async fn catalog_sync_tombstone_membership_uses_one_catalog_view() {
+    assert_read_uses_one_catalog("tombstone").await;
+}
+
 #[tokio::test]
 async fn catalog_sync_preserves_concurrent_flush_into_sharded_catalog() {
     let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
@@ -547,6 +746,203 @@ async fn catalog_sync_preserves_resolution_during_decode() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn catalog_sync_readers_materialize_newly_selected_runs() {
+    let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let base = Path::from("catalog-sync-deferred-runs");
+    let manifest = BlobId::new(Digest::hash(b"run-only manifest"));
+    let eager = seed_catalog(&objects, &base, false, manifest).await;
+    let fixture =
+        PackedChunks::open_with_state_catalog(objects.clone(), base.clone(), u64::MAX, 0, &eager)
+            .await
+            .unwrap();
+    let (meta, bytes) = chunk(b"seed payload");
+    let index = fixture.index.read().unwrap().clone();
+    let pack = *index.packs.keys().next().unwrap();
+    let empty = Index {
+        manifests_complete: true,
+        ..Index::default()
+    };
+    let sharded = sharded_fixture(&objects, &base, &empty).await;
+    let mut root = decode_delta_catalog(&sharded).unwrap();
+    let mut changes = IndexMutations::default();
+    changes.record_pack(pack);
+    changes.record_manifest_add(manifest);
+    let run = CatalogRun {
+        first_generation: 2,
+        last_generation: 2,
+        delta: encode_index_mutations(&index, &changes).unwrap(),
+    };
+    let encoded = encode_catalog_run(&run).unwrap();
+    let digest = Digest::from(blake3::hash(&encoded));
+    put_object(
+        &objects,
+        &sharded_path(&base, INDEXES_KIND, &digest),
+        encoded.clone(),
+        true,
+    )
+    .await
+    .unwrap();
+    root.generation = 2;
+    root.runs.insert(
+        0,
+        CatalogRunRef {
+            digest,
+            first_generation: 2,
+            last_generation: 2,
+            encoded_bytes: encoded.len() as u64,
+            query: None,
+        },
+    );
+    let deferred = encode_delta_catalog(&root).unwrap();
+    for operation in ["chunks", "manifests", "pack", "manifest", "hydrate"] {
+        let writer = PackedChunks::open_with_state_catalog(
+            objects.clone(),
+            base.clone(),
+            u64::MAX,
+            0,
+            &eager,
+        )
+        .await
+        .unwrap();
+        let (reached_tx, reached) = tokio::sync::oneshot::channel();
+        let (resume, resume_rx) = tokio::sync::oneshot::channel();
+        *writer.catalog_materialize_hook.lock().unwrap() = Some(FlushHandoffHook {
+            reached: reached_tx,
+            resume: resume_rx,
+        });
+        let read = tokio::spawn({
+            let writer = writer.clone();
+            let meta = meta.clone();
+            async move {
+                match operation {
+                    "chunks" => assert_eq!(
+                        writer.list().try_collect::<Vec<_>>().await.unwrap(),
+                        vec![meta.digest]
+                    ),
+                    "manifests" => assert_eq!(
+                        writer
+                            .list_manifests()
+                            .try_collect::<Vec<_>>()
+                            .await
+                            .unwrap(),
+                        vec![manifest]
+                    ),
+                    "pack" => assert!(writer.catalog_contains_pack(pack).await.unwrap()),
+                    "manifest" => {
+                        assert!(writer.catalog_contains_manifest(manifest).await.unwrap())
+                    }
+                    "hydrate" => {
+                        writer.ensure_pack_loaded(pack).await.unwrap();
+                        assert!(writer.index.read().unwrap().packs.contains_key(&pack));
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(10), reached)
+            .await
+            .unwrap()
+            .unwrap();
+        writer
+            .synchronize_state_catalog(Some(&deferred))
+            .await
+            .unwrap();
+        resume.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), read)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(writer.get(&meta.digest).await.unwrap(), Some(bytes.clone()));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn catalog_sync_retries_run_hydration_from_a_replaced_base() {
+    let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let base = Path::from("catalog-sync-run-base");
+    let from_run = BlobId::new(Digest::hash(b"same run across bases"));
+    let from_base = BlobId::new(Digest::hash(b"new base manifest"));
+    let mut index = Index {
+        manifests_complete: true,
+        ..Index::default()
+    };
+    let old = sharded_fixture(&objects, &base, &index).await;
+    index.manifests.insert(from_base);
+    let new = sharded_fixture(&objects, &base, &index).await;
+    index.manifests.insert(from_run);
+    let mut changes = IndexMutations::default();
+    changes.record_manifest_add(from_run);
+    let run = CatalogRun {
+        first_generation: 2,
+        last_generation: 2,
+        delta: encode_index_mutations(&index, &changes).unwrap(),
+    };
+    let bytes = encode_catalog_run(&run).unwrap();
+    let digest = Digest::from(blake3::hash(&bytes));
+    put_object(
+        &objects,
+        &sharded_path(&base, INDEXES_KIND, &digest),
+        bytes.clone(),
+        true,
+    )
+    .await
+    .unwrap();
+    let catalogs = [old, new].map(|catalog| {
+        let mut root = decode_delta_catalog(&catalog).unwrap();
+        root.generation = 2;
+        root.runs.insert(
+            0,
+            CatalogRunRef {
+                digest,
+                first_generation: 2,
+                last_generation: 2,
+                encoded_bytes: bytes.len() as u64,
+                query: None,
+            },
+        );
+        encode_delta_catalog(&root).unwrap()
+    });
+    let writer = PackedChunks::open_with_state_catalog(objects, base, u64::MAX, 0, &catalogs[0])
+        .await
+        .unwrap();
+    let (reached_tx, reached) = tokio::sync::oneshot::channel();
+    let (resume, resume_rx) = tokio::sync::oneshot::channel();
+    *writer.catalog_read_hook.lock().unwrap() = Some(FlushHandoffHook {
+        reached: reached_tx,
+        resume: resume_rx,
+    });
+    let load = tokio::spawn({
+        let writer = writer.clone();
+        async move { writer.list_manifests().try_collect::<BTreeSet<_>>().await }
+    });
+    tokio::time::timeout(Duration::from_secs(10), reached)
+        .await
+        .unwrap()
+        .unwrap();
+    writer
+        .synchronize_state_catalog(Some(&catalogs[1]))
+        .await
+        .unwrap();
+    resume.send(()).unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(10), load)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        result.expect("a replaced catalog must be retried"),
+        BTreeSet::from([from_base, from_run])
+    );
+    assert_eq!(
+        writer
+            .list_manifests()
+            .try_collect::<BTreeSet<_>>()
+            .await
+            .unwrap(),
+        BTreeSet::from([from_base, from_run])
+    );
+}
+
 #[tokio::test]
 async fn catalog_sync_materialization_preserves_in_progress_preparation() {
     for outcome in ["commit", "abort", "cancel"] {
@@ -669,6 +1065,373 @@ async fn catalog_sync_materialization_preserves_in_progress_preparation() {
                 .await
                 .unwrap(),
             expected
+        );
+    }
+}
+
+async fn deferred_manifest_catalog(
+    objects: &Arc<dyn ObjectStore>,
+    base: &Path,
+    manifest: BlobId,
+) -> Vec<u8> {
+    let mut index = Index {
+        manifests_complete: true,
+        ..Index::default()
+    };
+    let catalog = sharded_fixture(objects, base, &index).await;
+    index.manifests.insert(manifest);
+    let mut mutations = IndexMutations::default();
+    mutations.record_manifest_add(manifest);
+    let bytes = encode_catalog_run(&CatalogRun {
+        first_generation: 2,
+        last_generation: 2,
+        delta: encode_index_mutations(&index, &mutations).unwrap(),
+    })
+    .unwrap();
+    let digest = Digest::from(blake3::hash(&bytes));
+    put_object(
+        objects,
+        &sharded_path(base, INDEXES_KIND, &digest),
+        bytes.clone(),
+        true,
+    )
+    .await
+    .unwrap();
+    let mut root = decode_delta_catalog(&catalog).unwrap();
+    root.generation = 2;
+    root.runs.insert(
+        0,
+        CatalogRunRef {
+            digest,
+            first_generation: 2,
+            last_generation: 2,
+            encoded_bytes: bytes.len() as u64,
+            query: None,
+        },
+    );
+    encode_delta_catalog(&root).unwrap().to_vec()
+}
+
+#[tokio::test]
+async fn catalog_sync_materialization_retries_an_empty_replacement() {
+    let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let base = Path::from("materialization-empty-replacement");
+    let removed = BlobId::new(Digest::hash(b"old deferred manifest"));
+    let local = BlobId::new(Digest::hash(b"pending local manifest"));
+    let catalog = deferred_manifest_catalog(&objects, &base, removed).await;
+    let writer = PackedChunks::open_with_state_catalog(objects, base, u64::MAX, 0, &catalog)
+        .await
+        .unwrap();
+    writer.register_manifest(local);
+    let (reached_tx, reached) = tokio::sync::oneshot::channel();
+    let (resume, resume_rx) = tokio::sync::oneshot::channel();
+    *writer.catalog_read_hook.lock().unwrap() = Some(FlushHandoffHook {
+        reached: reached_tx,
+        resume: resume_rx,
+    });
+    let read = tokio::spawn({
+        let writer = writer.clone();
+        async move { writer.list_manifests().try_collect::<BTreeSet<_>>().await }
+    });
+    tokio::time::timeout(Duration::from_secs(10), reached)
+        .await
+        .unwrap()
+        .unwrap();
+    writer
+        .synchronize_state_catalog(Some(&PackedChunks::empty_state_catalog().unwrap()))
+        .await
+        .unwrap();
+    resume.send(()).unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(10), read)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap(),
+        BTreeSet::from([local])
+    );
+}
+
+#[tokio::test]
+async fn catalog_sync_cancelled_materialization_retry_preserves_pending() {
+    for corrupt in [None, Some(false), Some(true)] {
+        cancelled_materialization_retry_preserves_pending(corrupt).await;
+    }
+}
+
+async fn cancelled_materialization_retry_preserves_pending(corrupt: Option<bool>) {
+    let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let base = Path::from("materialization-retry-cancellation");
+    let old = BlobId::new(Digest::hash(b"old deferred manifest"));
+    let new = BlobId::new(Digest::hash(b"new deferred manifest"));
+    let local = BlobId::new(Digest::hash(b"pending local manifest"));
+    let before = deferred_manifest_catalog(&objects, &base, old).await;
+    let after = deferred_manifest_catalog(&objects, &base, new).await;
+    let writer =
+        PackedChunks::open_with_state_catalog(objects.clone(), base.clone(), u64::MAX, 0, &before)
+            .await
+            .unwrap();
+    writer.register_manifest(local);
+    if let Some(corrupt) = corrupt {
+        remove_or_corrupt_run(&objects, &base, &before, corrupt).await;
+    }
+    let (reached_tx, reached) = tokio::sync::oneshot::channel();
+    let (resume, resume_rx) = tokio::sync::oneshot::channel();
+    *writer.catalog_read_hook.lock().unwrap() = Some(FlushHandoffHook {
+        reached: reached_tx,
+        resume: resume_rx,
+    });
+    let read = tokio::spawn({
+        let writer = writer.clone();
+        async move { writer.list_manifests().try_collect::<BTreeSet<_>>().await }
+    });
+    tokio::time::timeout(Duration::from_secs(10), reached)
+        .await
+        .unwrap()
+        .unwrap();
+    writer
+        .synchronize_state_catalog(Some(&after))
+        .await
+        .unwrap();
+    let (retry_tx, retry_reached) = tokio::sync::oneshot::channel();
+    let (_retry_resume, retry_rx) = tokio::sync::oneshot::channel();
+    *writer.catalog_read_hook.lock().unwrap() = Some(FlushHandoffHook {
+        reached: retry_tx,
+        resume: retry_rx,
+    });
+    resume.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), retry_reached)
+        .await
+        .unwrap()
+        .unwrap();
+    read.abort();
+    assert!(read.await.unwrap_err().is_cancelled());
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            writer.list_manifests().try_collect::<BTreeSet<_>>()
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+        BTreeSet::from([new, local])
+    );
+    let candidate = writer.prepare_catalog().await.unwrap();
+    let merged = candidate.catalog().unwrap().to_vec();
+    candidate.commit().unwrap();
+    let reader = PackedChunks::open_with_state_catalog(objects, base, u64::MAX, 0, &merged)
+        .await
+        .unwrap();
+    assert_eq!(
+        reader
+            .list_manifests()
+            .try_collect::<BTreeSet<_>>()
+            .await
+            .unwrap(),
+        BTreeSet::from([new, local])
+    );
+}
+
+#[tokio::test]
+async fn catalog_sync_materialization_propagates_run_failures() {
+    for corrupt in [false, true] {
+        let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let base = Path::from("materialization-run-failure");
+        let manifest = BlobId::new(Digest::hash(b"unreadable deferred manifest"));
+        let catalog = deferred_manifest_catalog(&objects, &base, manifest).await;
+        let writer = PackedChunks::open_with_state_catalog(
+            objects.clone(),
+            base.clone(),
+            u64::MAX,
+            0,
+            &catalog,
+        )
+        .await
+        .unwrap();
+        remove_or_corrupt_run(&objects, &base, &catalog, corrupt).await;
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            writer.list_manifests().try_collect::<Vec<_>>(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            result.is_err(),
+            "missing or corrupt runs must not be hidden by retry"
+        );
+    }
+}
+
+async fn remove_or_corrupt_run(
+    objects: &Arc<dyn ObjectStore>,
+    base: &Path,
+    catalog: &[u8],
+    corrupt: bool,
+) {
+    let root = decode_delta_catalog(catalog).unwrap();
+    let run = root.runs.values().next().unwrap();
+    let path = sharded_path(base, INDEXES_KIND, &run.digest);
+    objects.delete(&path).await.unwrap();
+    if corrupt {
+        put_object(
+            objects,
+            &path,
+            Bytes::from_static(b"corrupt catalog run"),
+            true,
+        )
+        .await
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn catalog_sync_materialization_retries_obsolete_run_failures() {
+    for corrupt in [false, true] {
+        for empty in [false, true] {
+            let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let base = Path::from("obsolete-run-failure");
+            let old = BlobId::new(Digest::hash(b"old deferred manifest"));
+            let new = BlobId::new(Digest::hash(b"new deferred manifest"));
+            let local = BlobId::new(Digest::hash(b"pending local manifest"));
+            let before = deferred_manifest_catalog(&objects, &base, old).await;
+            let after = if empty {
+                PackedChunks::empty_state_catalog().unwrap()
+            } else {
+                deferred_manifest_catalog(&objects, &base, new).await
+            };
+            let writer = PackedChunks::open_with_state_catalog(
+                objects.clone(),
+                base.clone(),
+                u64::MAX,
+                0,
+                &before,
+            )
+            .await
+            .unwrap();
+            writer.register_manifest(local);
+            remove_or_corrupt_run(&objects, &base, &before, corrupt).await;
+            let (reached_tx, reached) = tokio::sync::oneshot::channel();
+            let (resume, resume_rx) = tokio::sync::oneshot::channel();
+            *writer.catalog_read_hook.lock().unwrap() = Some(FlushHandoffHook {
+                reached: reached_tx,
+                resume: resume_rx,
+            });
+            let read = tokio::spawn({
+                let writer = writer.clone();
+                async move { writer.list_manifests().try_collect::<BTreeSet<_>>().await }
+            });
+            // Hold the failed load at its completion boundary, then replace the
+            // selected catalog before the reader handles that obsolete result.
+            tokio::time::timeout(Duration::from_secs(10), reached)
+                .await
+                .unwrap()
+                .unwrap();
+            writer
+                .synchronize_state_catalog(Some(&after))
+                .await
+                .unwrap();
+            resume.send(()).unwrap();
+            let expected = if empty {
+                BTreeSet::from([local])
+            } else {
+                BTreeSet::from([new, local])
+            };
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(10), read)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap(),
+                expected,
+                "corrupt={corrupt}, empty={empty}"
+            );
+            let candidate = writer.prepare_catalog().await.unwrap();
+            let merged = candidate.catalog().unwrap().to_vec();
+            candidate.commit().unwrap();
+            let reader = PackedChunks::open_with_state_catalog(objects, base, u64::MAX, 0, &merged)
+                .await
+                .unwrap();
+            assert_eq!(
+                reader
+                    .list_manifests()
+                    .try_collect::<BTreeSet<_>>()
+                    .await
+                    .unwrap(),
+                expected
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn catalog_sync_materialization_reports_replacement_run_failure() {
+    for corrupt in [false, true] {
+        let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let base = Path::from("replacement-run-failure");
+        let old = BlobId::new(Digest::hash(b"old deferred manifest"));
+        let new = BlobId::new(Digest::hash(b"new deferred manifest"));
+        let local = BlobId::new(Digest::hash(b"pending local manifest"));
+        let before = deferred_manifest_catalog(&objects, &base, old).await;
+        let after = deferred_manifest_catalog(&objects, &base, new).await;
+        let writer = PackedChunks::open_with_state_catalog(
+            objects.clone(),
+            base.clone(),
+            u64::MAX,
+            0,
+            &before,
+        )
+        .await
+        .unwrap();
+        writer.register_manifest(local);
+        // Different failure kinds distinguish the replacement's error from the
+        // obsolete result: the reader must return the error for its current run.
+        remove_or_corrupt_run(&objects, &base, &before, !corrupt).await;
+        let (reached_tx, reached) = tokio::sync::oneshot::channel();
+        let (resume, resume_rx) = tokio::sync::oneshot::channel();
+        *writer.catalog_read_hook.lock().unwrap() = Some(FlushHandoffHook {
+            reached: reached_tx,
+            resume: resume_rx,
+        });
+        let read = tokio::spawn({
+            let writer = writer.clone();
+            async move { writer.list_manifests().try_collect::<BTreeSet<_>>().await }
+        });
+        tokio::time::timeout(Duration::from_secs(10), reached)
+            .await
+            .unwrap()
+            .unwrap();
+        writer
+            .synchronize_state_catalog(Some(&after))
+            .await
+            .unwrap();
+        remove_or_corrupt_run(&objects, &base, &after, corrupt).await;
+        resume.send(()).unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(10), read)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            if corrupt {
+                io::ErrorKind::Other
+            } else {
+                io::ErrorKind::NotFound
+            }
+        );
+
+        // Repairing the current run must allow a fresh attempt, with local work
+        // intact and no load/transition lock retained by the failed attempt.
+        deferred_manifest_catalog(&objects, &base, new).await;
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                writer.list_manifests().try_collect::<BTreeSet<_>>()
+            )
+            .await
+            .unwrap()
+            .unwrap(),
+            BTreeSet::from([new, local])
         );
     }
 }
