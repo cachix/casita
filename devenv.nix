@@ -1,5 +1,59 @@
 { pkgs, lib, ... }:
 
+let
+  # RustFS 1.0.1 is not in devenv-nixpkgs yet, and 1.0.0-rc.1 there reports
+  # healthy before it serves S3. Use the release binaries, the same artifacts
+  # Windows CI installs, until pkgs.rustfs catches up. The hashes are the
+  # digests GitHub publishes for each asset.
+  rustfsVersion = "1.0.1";
+  rustfsAssets = {
+    x86_64-linux = {
+      name = "rustfs-linux-x86_64-musl-v${rustfsVersion}.zip";
+      sha256 = "a834096dafa1f1a55825a2cdaf49d006a193978d344f2d508c2be475133738a3";
+    };
+    aarch64-linux = {
+      name = "rustfs-linux-aarch64-musl-v${rustfsVersion}.zip";
+      sha256 = "d2533e293204597416cb8d30790ea35df14cb4521633fa3574c64333141bafdf";
+    };
+    aarch64-darwin = {
+      name = "rustfs-macos-aarch64-v${rustfsVersion}.zip";
+      sha256 = "18aac7101c3484b98f93de64a0609aaa8e02aba072ba7927172c4b2eae7d4843";
+    };
+  };
+  rustfsAsset = rustfsAssets.${pkgs.stdenv.hostPlatform.system} or null;
+  rustfs =
+    if rustfsAsset == null then
+      pkgs.rustfs
+    else
+      pkgs.stdenvNoCC.mkDerivation {
+        pname = "rustfs";
+        version = rustfsVersion;
+        src = pkgs.fetchurl {
+          url = "https://github.com/rustfs/rustfs/releases/download/${rustfsVersion}/${rustfsAsset.name}";
+          inherit (rustfsAsset) sha256;
+        };
+        nativeBuildInputs = [
+          pkgs.unzip
+        ]
+        ++ lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
+          pkgs.cctools
+          pkgs.darwin.autoSignDarwinBinariesHook
+        ];
+        unpackPhase = "unzip -q $src";
+        installPhase = ''
+          binary=$(find . -name rustfs -type f)
+          install -Dm755 "$binary" $out/bin/rustfs
+        ''
+        + lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+          # The macOS release links Homebrew's xz; the fixup re-signs it.
+          install_name_tool -change /opt/homebrew/opt/xz/lib/liblzma.5.dylib \
+            ${lib.getLib pkgs.xz}/lib/liblzma.5.dylib $out/bin/rustfs
+        '';
+        # The musl builds are static. On macOS the fixup only re-signs.
+        dontFixup = !pkgs.stdenv.hostPlatform.isDarwin;
+        dontStrip = true;
+      };
+in
 {
   languages.rust.enable = true;
   # the casita-worker crate (Cloudflare Workers) compiles to wasm, which
@@ -40,7 +94,7 @@
     pkgs.secretspec
     # The wal3 integration test starts this local S3-compatible server and
     # races independent Casita runners against its conditional manifest PUTs.
-    pkgs.rustfs
+    rustfs
     # wal3's currently in-tree Chroma dependency graph generates protobuf
     # bindings while compiling `chroma-types`.
     pkgs.protobuf
