@@ -449,15 +449,27 @@ impl FormatRegistry {
     /// Whether a present record alone proves its complete closure.
     ///
     /// A built-in raw blob has no links and its identity is the payload digest
-    /// the record binds, so its closure is the record and that payload. Both
-    /// outlive the record under the same rules as a stored witness, so the
-    /// repository derives this instead of storing one witness per blob.
+    /// the record binds, so its closure is the record and that payload. A
+    /// built-in Git blob has no links either, and its record was admitted only
+    /// after that immutable payload hashed to its object ID: checking its
+    /// closure would repeat exactly that check. Payloads outlive their records
+    /// under the same rules as a stored witness, so the repository derives
+    /// this instead of storing one witness per blob.
     #[cfg(feature = "native")]
     pub(crate) fn intrinsically_complete(&self, record: &ObjectRecord) -> bool {
+        let key = record.key();
         self.builtin
             && record.links().is_empty()
-            && record.key().namespace().as_str() == crate::object::BLOB_NAMESPACE
-            && record.key().native_id() == record.payload().digest().as_bytes().as_slice()
+            && ((key.namespace().as_str() == BLOB_NAMESPACE
+                && key.native_id() == record.payload().digest().as_bytes().as_slice())
+                || is_git_blob(key))
+    }
+
+    /// Whether any present record under this key is intrinsically complete,
+    /// so presence alone settles it without reading the record's links.
+    #[cfg(feature = "git")]
+    pub(crate) fn complete_when_present(&self, key: &ObjectKey) -> bool {
+        self.builtin && is_git_blob(key)
     }
 
     /// Resolve the verifier for an exact namespace.
@@ -805,6 +817,15 @@ fn invalid_direct_record(source: &ObjectKey, target: &ObjectKey) -> FormatError 
         target: target.clone(),
         message: "record does not match its declared key or verified payload".to_owned(),
     }
+}
+
+/// Whether a key names a native Git blob in either object format.
+#[cfg(feature = "native")]
+fn is_git_blob(key: &ObjectKey) -> bool {
+    matches!(
+        key.namespace().as_str(),
+        crate::git::GIT_SHA1_BLOB_NAMESPACE | crate::git::GIT_SHA256_BLOB_NAMESPACE
+    )
 }
 
 #[cfg(all(test, feature = "native"))]

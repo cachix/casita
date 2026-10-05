@@ -837,6 +837,38 @@ impl MetadataSnapshot for MemorySnapshot {
         Ok(self.objects.get(key).cloned())
     }
 
+    async fn object_payload_batch(
+        &self,
+        keys: &[ObjectKey],
+    ) -> Result<Vec<Option<(crate::BlobId, u64)>>, MetadataError> {
+        Ok(keys
+            .iter()
+            .map(|key| {
+                self.objects
+                    .get(key)
+                    .map(|record| (record.payload(), record.payload_size()))
+            })
+            .collect())
+    }
+
+    async fn validated_payload_batch(
+        &self,
+        keys: &[ObjectKey],
+    ) -> Result<Vec<Option<(crate::BlobId, u64)>>, MetadataError> {
+        Ok(keys
+            .iter()
+            .map(|key| {
+                if self.validated.contains(key) {
+                    self.objects
+                        .get(key)
+                        .map(|record| (record.payload(), record.payload_size()))
+                } else {
+                    None
+                }
+            })
+            .collect())
+    }
+
     async fn validated_closures(&self, keys: &[ObjectKey]) -> Result<Vec<bool>, MetadataError> {
         Ok(keys
             .iter()

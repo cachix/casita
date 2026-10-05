@@ -2801,6 +2801,144 @@ benchmark run git-verified-stream --profile smoke --output /tmp/git-verified-str
 benchmark run git-verified-stream --backend both --repetitions 7 --cpu-affinity 0,1,2,3 --output /tmp/git-verified-stream-paired.json
 ```
 
+## Git closure import
+
+`git-closure-import` measures cold import, source-free warm reuse, a changed root
+sharing a complete subtree, and a changed wide tree sharing individual blobs.
+Every sample checks exact imported/reused counts and exhaustively verifies the
+resulting closure outside the timed region. The suite is included in
+`benchmark all`; both memory and local persistent backends run by default.
+Memory cases use a 64-object publication limit; local cases use the production
+limit, recorded in each sample. Both use a 64-object in-memory spill threshold.
+Each sample also reports `blob_witnesses`, the stored witnesses among every
+blob imported so far, which must match the probe's declared
+[witness policy](#git-witness-policies) exactly.
+
+```sh
+benchmark run git-closure-import --profile smoke --output /tmp/git-closure-smoke.json
+benchmark run git-closure-import --counts 1024 --max-buffered-bytes 67108864 --file-bytes 1024 --concurrency 1,4,16 --backend local --repetitions 5 --output /tmp/git-closure-small.json
+benchmark run git-closure-import --counts 16 --max-buffered-bytes 67108864 --file-bytes 4194304 --content random --backend local --repetitions 5 --output /tmp/git-closure-large.json
+benchmark run git-closure-import --counts 256 --max-buffered-bytes 67108864 --file-bytes 4194304 --content mixed --backend local --repetitions 5 --output /tmp/git-closure-mixed.json
+```
+
+`--layout loose|packed|both` selects Git source layout. Repeated contents are
+highly compressible and differ by file index, encouraging Git pack deltas.
+Random contents use a deterministic xorshift sequence; mixed workloads use a
+large file every 16 entries and 1 KiB files otherwise. Source generation and
+Git packing are outside import timing. Cold means a fresh Casita destination,
+not a cold operating-system page cache.
+
+For comparisons, preserve the baseline integration-test executable and supply
+`--baseline-binary /path/to/baseline --probe-binary /path/to/candidate --no-build`.
+Runs alternate baseline/candidate order on successive repetitions and retain
+executable SHA-256 fingerprints, raw process output and all audited samples.
+Builds use `--no-default-features --features native,git,experimental`, matching
+the evaluator library. Use the same flags for both binaries. The per-operation
+wall time excludes fixture creation and audits; process CPU time and peak RSS
+include them and must not be described as import-only measurements.
+Large-object memory claims need a separate import-only measurement to avoid the
+fixture's high-water mark.
+
+When `/path/to/probe.build.json` exists, the closure harness checks that its
+`executable_sha256` matches the binary and records the build metadata. Paired
+manifests must agree on `lockfile_sha256`, `features`, `default_features`, and
+any recorded `rustc_version` and `rustflags`. Archives must copy the exact
+`Cargo.lock` before building: Git archives omit this repository's ignored lockfile.
+A report without manifests does not establish dependency equality. Preserve each
+built executable outside the shared Cargo target directory before building
+another checkout, which can replace the same test-executable filename.
+
+On Linux, `--cpu-affinity 0,1,2,3` restricts the benchmark and its children to
+those allowed CPUs and restores the caller's affinity afterwards. Choose CPUs
+from the same core class on heterogeneous machines. Reports record the actual
+affinity and available maximum-frequency metadata. This controls placement,
+not exclusive access: competing workloads can still add noise. Paired summaries
+include each workload's median and range of paired wall-time reductions; fewer
+than five pairs are explicitly marked as insufficient samples.
+
+The default source-byte windows include 1023/1024/1025 and 2047/2048/2049
+bytes: the former straddle single-body admission and the latter straddle
+two-body read-ahead for 1 KiB blobs. Paired reports preserve every sample,
+including noisy or negative results.
+
+Dashboards and `benchmark revisions` report one observation per operation,
+variant and complete workload: backend, layout, file count and size, content,
+concurrency and source window. Only repetitions of one configuration share an
+observation.
+
+`git-closure-import-small-files` registers the workload where storing a
+witness per blob was a large share of import cost: 16384 64-byte files from
+a packed source into a local repository, with a 64 MiB source window and 16
+objects staged concurrently. It uses the same probe and correctness gates,
+and is included in `benchmark all`. Deriving Git blob completeness was
+measured on it against the last `stored-blobs` revision:
+
+```sh
+benchmark run git-closure-import-small-files --repetitions 11 --baseline-binary /path/to/baseline --probe-binary /path/to/candidate --no-build --output /tmp/git-closure-derived-blobs.json
+```
+
+Over eleven pairs, cold imports fell from a median 4.46 s to 3.10 s, a median
+paired reduction of 31% (23% to 44%), as the stored blob witnesses fell from
+16384 to none. Wide deltas probe every present blob either way and stayed
+within noise: a median 3% reduction, with pairs from 26% slower to 9% faster.
+The host was shared.
+
+## Git closure audit
+
+`git-closure-audit` imports one packed linear Git history whose commits each
+add a distinct tree and blob. A built-in registry trusts the importer's closure
+construction; a custom registry wrapping the native formats must audit every
+imported object with its link verifier before closure witnesses are recorded.
+Each sample reports `link_audits`, the custom verifier's call count during the
+cold import, or null for a built-in registry, whose trusted construction calls
+no verifier. Candidates must audit each object exactly once, since walks that
+repeated shared history would grow quadratically; a paired baseline must audit
+each at least once.
+
+Samples also report `witnesses`, `witness_commits` and `max_witness_batch`
+from the witnesses each metadata commit of the cold import records. Proofs
+spill and stream into witness-only commits, so the largest commit, and the
+witness inventory held in memory, is one publication batch. The gate requires
+exactly the witnesses the probe's declared [witness policy](#git-witness-policies)
+implies, in full batches of the configured size.
+
+Every sample also checks exact imported counts, a source-free warm import and
+an exhaustive closure verification outside the timed region. Defaults straddle
+publication batching for custom registries, which witness every object: 16
+commits (48 objects) fit one 64-object witness batch while 64 commits span
+three, and 4096 commits span three default 4096-object batches. Built-in
+registries under `derived-blobs` witness only trees and commits, two per
+commit. Custom registries can only be configured over in-memory stores, so
+every case uses the memory backend. The suite is included in `benchmark all`.
+
+```sh
+benchmark run git-closure-audit --profile smoke --output /tmp/git-closure-audit-smoke.json
+benchmark run git-closure-audit --registry custom --repetitions 5 --output /tmp/git-closure-audit.json
+```
+
+Paired runs accept `--baseline-binary /path/to/baseline --probe-binary
+/path/to/candidate --no-build`, alternate execution order and report each
+variant's deterministic `link_audits`, `witnesses` and `max_witness_batch`
+beside paired wall-time reductions. Build both executables with `cargo test
+--release -p casita --no-default-features --features native,git,experimental
+--test git_closure_custom_formats --no-run`. Dashboards and `benchmark
+revisions` report one cold-import observation per commit count, registry,
+publication batch and variant.
+
+### Git witness policies
+
+Both Git closure probes declare a witness policy: a constant in their source
+naming the closure witnesses their revision's imports store. Under
+`stored-blobs`, imports witness every object they import. Under
+`derived-blobs`, a present built-in Git blob is complete without a witness, so
+built-in imports store none for one unless it is a selected root. The harness
+never infers a policy from what a probe measured, so a regression fails the
+policy its own revision declares. Each probe asserts its own measurements
+against its declaration, and the harness holds every artifact exactly to it,
+rejects an unknown or changing one, and records it with the artifact.
+`benchmark revisions` therefore checks every revision strictly, including
+revisions on either side of a deliberate witness change.
+
 ### Chunk upload completion
 
 `chunk-upload-completion` compares production writers using separate immutable

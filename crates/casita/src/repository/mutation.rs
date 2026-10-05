@@ -2,7 +2,12 @@
 
 use super::*;
 
+#[cfg(feature = "git")]
+mod proven_closures;
 mod verified_stream;
+
+#[cfg(feature = "git")]
+pub(crate) use proven_closures::PendingGitWitnesses;
 
 /// Private construction evidence and public requests for normal verification
 /// must remain distinct, even when they share the publication transaction.
@@ -10,13 +15,16 @@ mod verified_stream;
 pub(super) struct ClosurePublication {
     pub(super) constructed: BTreeSet<ObjectKey>,
     pub(super) requested: BTreeSet<ObjectKey>,
+    /// Closures this session already proved complete against an earlier
+    /// snapshot, under protection it still holds. They gain witnesses as is.
+    pub(super) proven: BTreeSet<ObjectKey>,
 }
 
 impl ClosurePublication {
     fn constructed(constructed: BTreeSet<ObjectKey>) -> Self {
         Self {
             constructed,
-            requested: BTreeSet::new(),
+            ..Default::default()
         }
     }
 }
@@ -1079,7 +1087,8 @@ where
             root_changes = root_changes.len(),
             exact_revision = exact_revision.is_some(),
             constructed_closures = closures.constructed.len(),
-            checked_closures = closures.requested.len()
+            checked_closures = closures.requested.len(),
+            proven_closures = closures.proven.len()
         )
     )]
     pub(super) async fn publish_inner_with_metadata(
@@ -1104,6 +1113,13 @@ where
                     return Err(RepositoryError::LimitExceeded(format!(
                         "mutation checks {} closures, limit is {}",
                         closures.requested.len(),
+                        self.repository.limits.max_batch_objects
+                    )));
+                }
+                if closures.proven.len() > self.repository.limits.max_batch_objects {
+                    return Err(RepositoryError::LimitExceeded(format!(
+                        "mutation witnesses {} proven closures, limit is {}",
+                        closures.proven.len(),
                         self.repository.limits.max_batch_objects
                     )));
                 }
@@ -1315,14 +1331,16 @@ where
         let constructed_closures = &closures.constructed;
         let formats = &self.repository.formats;
         let trust_construction = formats.is_builtin();
-        let mut newly_verified = Vec::new();
+        // Proved under this registry's own rules by this session, which has
+        // retained them since, so they need no walk.
+        let mut newly_verified: Vec<_> = closures.proven.iter().cloned().collect();
         // Every walk is planned first and driven by one await: a debug build
         // reserves frame space per await point, and publication already runs
         // beneath deep import and command futures. `true` witnesses every
         // object the walk verifies; `false` only the target, planned below.
         let mut walks = Vec::new();
         if trust_construction {
-            // A raw blob's record already proves its closure, so a witness
+            // A blob's record already proves its closure, so a witness
             // per file would only add metadata writes.
             newly_verified.extend(
                 constructed_closures
@@ -1377,7 +1395,7 @@ where
                     },
                 });
             };
-            // A present raw blob is complete; the pins keep its payload.
+            // A present built-in blob is complete; the pins keep its payload.
             if !formats.intrinsically_complete(&record) {
                 newly_verified.push(target.clone());
                 walks.push((target, false));

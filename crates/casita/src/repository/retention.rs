@@ -359,7 +359,7 @@ where
     ///
     /// This is a fast precondition check rather than a fresh audit: closures
     /// already verified for the snapshot may be trusted, and a present
-    /// built-in raw blob is complete without reading its payload.
+    /// built-in raw or Git blob is complete without reading its payload.
     pub async fn verify_closure_incremental(
         &self,
         root: &ObjectKey,
@@ -447,7 +447,7 @@ where
     ///
     /// This is a fast precondition check rather than a fresh audit: closures
     /// already verified for the snapshot may be trusted, and a present
-    /// built-in raw blob is complete without reading its payload.
+    /// built-in raw or Git blob is complete without reading its payload.
     pub(crate) async fn verify_closure_incremental(
         &self,
         root: &ObjectKey,

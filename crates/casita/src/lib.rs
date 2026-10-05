@@ -258,6 +258,8 @@ pub use casitar::{
 };
 #[cfg(feature = "git")]
 pub use git::repository::NativeGitImportOutcome;
+#[cfg(feature = "git")]
+pub use importers::{GitClosureImportOutcome, GitClosureImportReport};
 #[cfg(feature = "native")]
 pub use spill::SpillMetrics;
 #[cfg(feature = "native")]

@@ -65,6 +65,8 @@ pub use integrity::{
     FsckDisposition, FsckIssue, FsckIssueKind, FsckRepairAction, FsckRepairActionKind,
     FsckRepairActionStatus, FsckRepairFinding, FsckRepairFindingKind, FsckRepairReport, FsckReport,
 };
+#[cfg(feature = "git")]
+pub(crate) use mutation::PendingGitWitnesses;
 #[cfg(test)]
 use mutation::PublicationTimer;
 pub use mutation::{ConditionalPublishResult, MutationSession, RootExpectation, StagedObject};
