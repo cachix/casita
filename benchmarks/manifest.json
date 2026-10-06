@@ -1375,6 +1375,8 @@
         "--bench",
         "optimization",
         "--bench",
+        "metadata_verification",
+        "--bench",
         "compression_handoff",
         "--bench",
         "git_fetch_fairness",
@@ -2281,6 +2283,44 @@
             "EOF observed",
             "configured buffer cap"
           ]
+        },
+        "metadata-verification-buffers": {
+          "runner": "cargo bench --no-default-features --features experimental --bench metadata_verification",
+          "payload_sizes_bytes": [
+            0,
+            1,
+            128,
+            1024,
+            16384,
+            65535,
+            65536,
+            65537,
+            262144
+          ],
+          "length_hints": [
+            "known",
+            "unknown",
+            "understated: one byte, for payloads over one byte"
+          ],
+          "metadata_limit_bytes": 268435456,
+          "variants": [
+            "scratch_64k: former 64 KiB scratch helper",
+            "hybrid: rejected direct read of known payloads up to 64 KiB",
+            "production: hint-sized scratch, switching to 64 KiB after an understated hint"
+          ],
+          "metrics": [
+            "bounded metadata read latency",
+            "largest read buffer in bytes, emitted as JSON"
+          ],
+          "correctness": [
+            "complete payload bytes",
+            "whole-payload identity",
+            "complete payload size",
+            "EOF observed",
+            "64 KiB read cap",
+            "hint-sized production scratch for accurate hints"
+          ],
+          "included_in": "benchmark all --suites core-primitives"
         },
         "sliced-transfer": {
           "runner": "cargo bench --features ssh,experimental --bench sliced_transfer",

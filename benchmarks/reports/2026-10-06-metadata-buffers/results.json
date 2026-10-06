@@ -1,0 +1,1843 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-06",
+  "build": {
+    "crates_casita_tree": "dbb21e518940fa829ce922c6a2b9d457af4d5ff4",
+    "command": "cargo bench --no-default-features --features experimental --bench metadata_verification --no-run",
+    "profile": "Cargo bench profile defaults",
+    "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+    "lockfile": {
+      "sha256": "6d53fd6e7d4836f70c740024695f3d11a106e71f074157b442da08194e2673f3",
+      "note": "Cargo.lock is untracked; generated at cachix/casita 84ec292 and shared by every build."
+    },
+    "binary_sha256": "12103defdd17357a3fa75291dd5d203ab04360d153e1a8417cfb0984b4e6a84d"
+  },
+  "host": {
+    "cpu": "AMD EPYC 9454P 48-Core Processor, 96 hardware threads",
+    "kernel": "Linux 6.18.42",
+    "filesystem": "ZFS",
+    "pinning": "taskset -c 32-47",
+    "note": "Shared host; other users' load was present. Runs were serial and no builds from this investigation ran during timing."
+  },
+  "command": "[CASITA_METADATA_READ_REVERSE=1] taskset -c 32-47 target/release/deps/metadata_verification-<hash> --bench --noplot",
+  "runs": [
+    {
+      "order": "forward",
+      "started": "2026-10-06T18:00:19+00:00",
+      "load_average_1m": 2.99,
+      "preflight": [
+        {
+          "case": "metadata_verification_buffers/known/0/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/0/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 1
+        },
+        {
+          "case": "metadata_verification_buffers/known/0/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 1
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/0/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/0/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/0/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/1/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/1/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 1
+        },
+        {
+          "case": "metadata_verification_buffers/known/1/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 1
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/1/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/1/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/1/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/128/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/128/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 128
+        },
+        {
+          "case": "metadata_verification_buffers/known/128/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 128
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/128/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/128/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/128/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/128/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/128/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/128/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/1024/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/1024/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 1024
+        },
+        {
+          "case": "metadata_verification_buffers/known/1024/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 1024
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/1024/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/1024/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/1024/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/1024/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/1024/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/1024/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/16384/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/16384/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 16384
+        },
+        {
+          "case": "metadata_verification_buffers/known/16384/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 16384
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/16384/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/16384/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/16384/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/16384/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/16384/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/16384/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/65535/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/65535/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65535
+        },
+        {
+          "case": "metadata_verification_buffers/known/65535/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65535
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/65535/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/65535/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/65535/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/65535/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/65535/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/65535/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/65536/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/65536/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/65536/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/65536/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/65536/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/65536/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/65536/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/65536/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/65536/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/65537/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/65537/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/65537/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/65537/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/65537/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/65537/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/65537/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/65537/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/65537/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/262144/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/262144/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/262144/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/262144/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/262144/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/262144/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/262144/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/262144/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/262144/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        }
+      ],
+      "criterion_medians": {
+        "metadata_verification_buffers/known/0/hybrid": {
+          "median_ci95_ns": [
+            369.43021925198764,
+            370.4685629800151
+          ],
+          "median_ns": 369.5051825699451
+        },
+        "metadata_verification_buffers/known/0/production": {
+          "median_ci95_ns": [
+            374.04783738519274,
+            374.88159387310577
+          ],
+          "median_ns": 374.55228956118117
+        },
+        "metadata_verification_buffers/known/0/scratch_64k": {
+          "median_ci95_ns": [
+            998.0661754852316,
+            1000.3502400070299
+          ],
+          "median_ns": 998.6942030948885
+        },
+        "metadata_verification_buffers/known/1/hybrid": {
+          "median_ci95_ns": [
+            334.3296426829809,
+            336.22622586566706
+          ],
+          "median_ns": 334.8214609629151
+        },
+        "metadata_verification_buffers/known/1/production": {
+          "median_ci95_ns": [
+            325.99691159276915,
+            326.8336965254669
+          ],
+          "median_ns": 326.29086188805945
+        },
+        "metadata_verification_buffers/known/1/scratch_64k": {
+          "median_ci95_ns": [
+            962.4817797819812,
+            965.0591605203813
+          ],
+          "median_ns": 963.3446094446617
+        },
+        "metadata_verification_buffers/known/1024/hybrid": {
+          "median_ci95_ns": [
+            1268.8338420240016,
+            1271.4703838865885
+          ],
+          "median_ns": 1269.9290862516668
+        },
+        "metadata_verification_buffers/known/1024/production": {
+          "median_ci95_ns": [
+            1285.0733268891795,
+            1296.3832873713538
+          ],
+          "median_ns": 1288.6595766759538
+        },
+        "metadata_verification_buffers/known/1024/scratch_64k": {
+          "median_ci95_ns": [
+            1944.9716835421314,
+            1960.6323666715698
+          ],
+          "median_ns": 1947.849458817192
+        },
+        "metadata_verification_buffers/known/128/hybrid": {
+          "median_ci95_ns": [
+            383.0138100655299,
+            386.64825635273667
+          ],
+          "median_ns": 384.06592047220164
+        },
+        "metadata_verification_buffers/known/128/production": {
+          "median_ci95_ns": [
+            385.1675590979155,
+            386.73033176361685
+          ],
+          "median_ns": 386.3657444169378
+        },
+        "metadata_verification_buffers/known/128/scratch_64k": {
+          "median_ci95_ns": [
+            1002.0422528984626,
+            1004.1711616323494
+          ],
+          "median_ns": 1002.4862481901878
+        },
+        "metadata_verification_buffers/known/16384/hybrid": {
+          "median_ci95_ns": [
+            3475.826241813795,
+            3485.218252843629
+          ],
+          "median_ns": 3476.5663677596194
+        },
+        "metadata_verification_buffers/known/16384/production": {
+          "median_ci95_ns": [
+            3713.0315130342406,
+            3714.5577551687506
+          ],
+          "median_ns": 3713.1939609381384
+        },
+        "metadata_verification_buffers/known/16384/scratch_64k": {
+          "median_ci95_ns": [
+            4290.222707216397,
+            4329.192877307018
+          ],
+          "median_ns": 4303.47729564537
+        },
+        "metadata_verification_buffers/known/262144/hybrid": {
+          "median_ci95_ns": [
+            54669.158878103255,
+            54889.79542994588
+          ],
+          "median_ns": 54807.99448787332
+        },
+        "metadata_verification_buffers/known/262144/production": {
+          "median_ci95_ns": [
+            54559.49966947115,
+            54821.78111979167
+          ],
+          "median_ns": 54585.236278044875
+        },
+        "metadata_verification_buffers/known/262144/scratch_64k": {
+          "median_ci95_ns": [
+            54626.88033674083,
+            54771.571858087795
+          ],
+          "median_ns": 54652.035640910006
+        },
+        "metadata_verification_buffers/known/65535/hybrid": {
+          "median_ci95_ns": [
+            17430.775618645694,
+            17475.617604340798
+          ],
+          "median_ns": 17434.725673796278
+        },
+        "metadata_verification_buffers/known/65535/production": {
+          "median_ci95_ns": [
+            18470.97740450453,
+            18543.895625127472
+          ],
+          "median_ns": 18491.01480952705
+        },
+        "metadata_verification_buffers/known/65535/scratch_64k": {
+          "median_ci95_ns": [
+            18464.059375848956,
+            18508.6345377162
+          ],
+          "median_ns": 18466.82675224124
+        },
+        "metadata_verification_buffers/known/65536/hybrid": {
+          "median_ci95_ns": [
+            12887.604447439353,
+            12936.779755993757
+          ],
+          "median_ns": 12893.072737267697
+        },
+        "metadata_verification_buffers/known/65536/production": {
+          "median_ci95_ns": [
+            13899.071091592512,
+            13978.023615920747
+          ],
+          "median_ns": 13936.15295144216
+        },
+        "metadata_verification_buffers/known/65536/scratch_64k": {
+          "median_ci95_ns": [
+            13889.848947489285,
+            13950.97020650473
+          ],
+          "median_ns": 13897.946844108126
+        },
+        "metadata_verification_buffers/known/65537/hybrid": {
+          "median_ci95_ns": [
+            14165.09572723012,
+            14173.789381867417
+          ],
+          "median_ns": 14171.252927493968
+        },
+        "metadata_verification_buffers/known/65537/production": {
+          "median_ci95_ns": [
+            14147.32619010492,
+            14183.121335568378
+          ],
+          "median_ns": 14152.901801029158
+        },
+        "metadata_verification_buffers/known/65537/scratch_64k": {
+          "median_ci95_ns": [
+            14161.630165289256,
+            14304.032272987162
+          ],
+          "median_ns": 14165.685027808098
+        },
+        "metadata_verification_buffers/understated/1024/hybrid": {
+          "median_ci95_ns": [
+            2089.265422701971,
+            2102.8690492665373
+          ],
+          "median_ns": 2095.480579389243
+        },
+        "metadata_verification_buffers/understated/1024/production": {
+          "median_ci95_ns": [
+            2130.299770771618,
+            2144.232491131278
+          ],
+          "median_ns": 2134.5560062874074
+        },
+        "metadata_verification_buffers/understated/1024/scratch_64k": {
+          "median_ci95_ns": [
+            1941.2566579616525,
+            1949.455384681565
+          ],
+          "median_ns": 1941.6934549286989
+        },
+        "metadata_verification_buffers/understated/128/hybrid": {
+          "median_ci95_ns": [
+            1153.2586661235089,
+            1160.403149784222
+          ],
+          "median_ns": 1154.2162043461103
+        },
+        "metadata_verification_buffers/understated/128/production": {
+          "median_ci95_ns": [
+            1189.3193294795497,
+            1192.738485655442
+          ],
+          "median_ns": 1190.4978568430165
+        },
+        "metadata_verification_buffers/understated/128/scratch_64k": {
+          "median_ci95_ns": [
+            1001.3875658308767,
+            1005.4159190455687
+          ],
+          "median_ns": 1002.8602348381968
+        },
+        "metadata_verification_buffers/understated/16384/hybrid": {
+          "median_ci95_ns": [
+            8258.385525875954,
+            8285.38554839613
+          ],
+          "median_ns": 8260.458729145774
+        },
+        "metadata_verification_buffers/understated/16384/production": {
+          "median_ci95_ns": [
+            8239.763072163072,
+            8242.22053872054
+          ],
+          "median_ns": 8240.697990920213
+        },
+        "metadata_verification_buffers/understated/16384/scratch_64k": {
+          "median_ci95_ns": [
+            4257.444920746467,
+            4272.643851018974
+          ],
+          "median_ns": 4261.617069766534
+        },
+        "metadata_verification_buffers/understated/262144/hybrid": {
+          "median_ci95_ns": [
+            71872.75455265242,
+            72135.48420867423
+          ],
+          "median_ns": 71951.01179730799
+        },
+        "metadata_verification_buffers/understated/262144/production": {
+          "median_ci95_ns": [
+            71819.20704097804,
+            71991.92868462758
+          ],
+          "median_ns": 71882.69200123262
+        },
+        "metadata_verification_buffers/understated/262144/scratch_64k": {
+          "median_ci95_ns": [
+            54628.259314903844,
+            54761.67077323718
+          ],
+          "median_ns": 54687.288979033125
+        },
+        "metadata_verification_buffers/understated/65535/hybrid": {
+          "median_ci95_ns": [
+            22604.508478802993,
+            22674.827649625935
+          ],
+          "median_ns": 22610.040306179
+        },
+        "metadata_verification_buffers/understated/65535/production": {
+          "median_ci95_ns": [
+            22638.742314722498,
+            22809.224638584248
+          ],
+          "median_ns": 22667.27653151656
+        },
+        "metadata_verification_buffers/understated/65535/scratch_64k": {
+          "median_ci95_ns": [
+            18462.74668585383,
+            18484.396011396013
+          ],
+          "median_ns": 18465.51057183557
+        },
+        "metadata_verification_buffers/understated/65536/hybrid": {
+          "median_ci95_ns": [
+            18398.974416243655,
+            18497.013482233502
+          ],
+          "median_ns": 18403.774382402706
+        },
+        "metadata_verification_buffers/understated/65536/production": {
+          "median_ci95_ns": [
+            18436.525865339023,
+            18464.92170903449
+          ],
+          "median_ns": 18439.75317516765
+        },
+        "metadata_verification_buffers/understated/65536/scratch_64k": {
+          "median_ci95_ns": [
+            13896.867544396815,
+            13958.074104409065
+          ],
+          "median_ns": 13919.670372780158
+        },
+        "metadata_verification_buffers/understated/65537/hybrid": {
+          "median_ci95_ns": [
+            18547.61456843109,
+            18642.421902036924
+          ],
+          "median_ns": 18576.87852260599
+        },
+        "metadata_verification_buffers/understated/65537/production": {
+          "median_ci95_ns": [
+            18589.59868959869,
+            18595.969765219765
+          ],
+          "median_ns": 18592.682893120393
+        },
+        "metadata_verification_buffers/understated/65537/scratch_64k": {
+          "median_ci95_ns": [
+            14164.589659892234,
+            14235.157804459692
+          ],
+          "median_ns": 14184.137299235927
+        },
+        "metadata_verification_buffers/unknown/0/hybrid": {
+          "median_ci95_ns": [
+            1020.3188439999251,
+            1023.271165084003
+          ],
+          "median_ns": 1021.1078870970763
+        },
+        "metadata_verification_buffers/unknown/0/production": {
+          "median_ci95_ns": [
+            1020.7375213598345,
+            1022.9927752077275
+          ],
+          "median_ns": 1021.9057300566598
+        },
+        "metadata_verification_buffers/unknown/0/scratch_64k": {
+          "median_ci95_ns": [
+            1019.108020274968,
+            1019.9267667705833
+          ],
+          "median_ns": 1019.4440489941014
+        },
+        "metadata_verification_buffers/unknown/1/hybrid": {
+          "median_ci95_ns": [
+            971.4937632838833,
+            972.4007830782111
+          ],
+          "median_ns": 971.9823060463585
+        },
+        "metadata_verification_buffers/unknown/1/production": {
+          "median_ci95_ns": [
+            960.3584993085105,
+            963.6573647805702
+          ],
+          "median_ns": 960.6957680308994
+        },
+        "metadata_verification_buffers/unknown/1/scratch_64k": {
+          "median_ci95_ns": [
+            973.8620035015359,
+            977.6393611308027
+          ],
+          "median_ns": 974.4578413400834
+        },
+        "metadata_verification_buffers/unknown/1024/hybrid": {
+          "median_ci95_ns": [
+            1927.4032117409338,
+            1940.683648582266
+          ],
+          "median_ns": 1928.1067063703072
+        },
+        "metadata_verification_buffers/unknown/1024/production": {
+          "median_ci95_ns": [
+            1921.4992532823726,
+            1928.3086960753087
+          ],
+          "median_ns": 1922.978246098312
+        },
+        "metadata_verification_buffers/unknown/1024/scratch_64k": {
+          "median_ci95_ns": [
+            1945.7330718281783,
+            1956.8184236097713
+          ],
+          "median_ns": 1948.964161698375
+        },
+        "metadata_verification_buffers/unknown/128/hybrid": {
+          "median_ci95_ns": [
+            1006.2540995569744,
+            1009.3441706479849
+          ],
+          "median_ns": 1006.8992590551568
+        },
+        "metadata_verification_buffers/unknown/128/production": {
+          "median_ci95_ns": [
+            1001.898187832149,
+            1012.3235312682457
+          ],
+          "median_ns": 1006.1366143819728
+        },
+        "metadata_verification_buffers/unknown/128/scratch_64k": {
+          "median_ci95_ns": [
+            988.2371128674824,
+            990.9788223820908
+          ],
+          "median_ns": 988.3592634642
+        },
+        "metadata_verification_buffers/unknown/16384/hybrid": {
+          "median_ci95_ns": [
+            4255.017860768786,
+            4259.740190244131
+          ],
+          "median_ns": 4256.593446551574
+        },
+        "metadata_verification_buffers/unknown/16384/production": {
+          "median_ci95_ns": [
+            4262.646289790555,
+            4283.675284322007
+          ],
+          "median_ns": 4266.321804017271
+        },
+        "metadata_verification_buffers/unknown/16384/scratch_64k": {
+          "median_ci95_ns": [
+            4246.133311558024,
+            4252.735945333603
+          ],
+          "median_ns": 4247.25109070972
+        },
+        "metadata_verification_buffers/unknown/262144/hybrid": {
+          "median_ci95_ns": [
+            54615.406137184116,
+            54764.577767749695
+          ],
+          "median_ns": 54660.111938427595
+        },
+        "metadata_verification_buffers/unknown/262144/production": {
+          "median_ci95_ns": [
+            54538.776357987575,
+            54716.26806975346
+          ],
+          "median_ns": 54577.67615420592
+        },
+        "metadata_verification_buffers/unknown/262144/scratch_64k": {
+          "median_ci95_ns": [
+            54694.03474729242,
+            55014.56842014784
+          ],
+          "median_ns": 54854.14512635379
+        },
+        "metadata_verification_buffers/unknown/65535/hybrid": {
+          "median_ci95_ns": [
+            18490.94150213719,
+            18542.194004245295
+          ],
+          "median_ns": 18492.520998710905
+        },
+        "metadata_verification_buffers/unknown/65535/production": {
+          "median_ci95_ns": [
+            18463.965832315833,
+            18542.15325826437
+          ],
+          "median_ns": 18469.730345272015
+        },
+        "metadata_verification_buffers/unknown/65535/scratch_64k": {
+          "median_ci95_ns": [
+            18468.32958082439,
+            18534.051381252968
+          ],
+          "median_ns": 18476.220717663295
+        },
+        "metadata_verification_buffers/unknown/65536/hybrid": {
+          "median_ci95_ns": [
+            13905.324616564418,
+            13989.542229038856
+          ],
+          "median_ns": 13946.287777777778
+        },
+        "metadata_verification_buffers/unknown/65536/production": {
+          "median_ci95_ns": [
+            13900.718726553441,
+            13926.791008945016
+          ],
+          "median_ns": 13904.637044071005
+        },
+        "metadata_verification_buffers/unknown/65536/scratch_64k": {
+          "median_ci95_ns": [
+            13893.967218137255,
+            13934.991881127451
+          ],
+          "median_ns": 13904.55267310049
+        },
+        "metadata_verification_buffers/unknown/65537/hybrid": {
+          "median_ci95_ns": [
+            14164.110251209237,
+            14169.473266760284
+          ],
+          "median_ns": 14166.825665544733
+        },
+        "metadata_verification_buffers/unknown/65537/production": {
+          "median_ci95_ns": [
+            14157.78799937578,
+            14218.158142166041
+          ],
+          "median_ns": 14171.607751595227
+        },
+        "metadata_verification_buffers/unknown/65537/scratch_64k": {
+          "median_ci95_ns": [
+            14160.335284019975,
+            14235.065364722668
+          ],
+          "median_ns": 14162.492496358718
+        }
+      }
+    },
+    {
+      "order": "reverse",
+      "started": "2026-10-06T18:11:56+00:00",
+      "load_average_1m": 2.64,
+      "preflight": [
+        {
+          "case": "metadata_verification_buffers/known/0/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 1
+        },
+        {
+          "case": "metadata_verification_buffers/known/0/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 1
+        },
+        {
+          "case": "metadata_verification_buffers/known/0/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/0/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/0/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/0/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/1/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 1
+        },
+        {
+          "case": "metadata_verification_buffers/known/1/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 1
+        },
+        {
+          "case": "metadata_verification_buffers/known/1/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/1/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/1/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/1/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/128/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 128
+        },
+        {
+          "case": "metadata_verification_buffers/known/128/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 128
+        },
+        {
+          "case": "metadata_verification_buffers/known/128/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/128/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/128/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/128/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/128/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/128/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/128/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/1024/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 1024
+        },
+        {
+          "case": "metadata_verification_buffers/known/1024/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 1024
+        },
+        {
+          "case": "metadata_verification_buffers/known/1024/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/1024/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/1024/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/1024/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/1024/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/1024/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/1024/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/16384/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 16384
+        },
+        {
+          "case": "metadata_verification_buffers/known/16384/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 16384
+        },
+        {
+          "case": "metadata_verification_buffers/known/16384/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/16384/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/16384/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/16384/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/16384/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/16384/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/16384/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/65535/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65535
+        },
+        {
+          "case": "metadata_verification_buffers/known/65535/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65535
+        },
+        {
+          "case": "metadata_verification_buffers/known/65535/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/65535/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/65535/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/65535/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/65535/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/65535/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/65535/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/65536/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/65536/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/65536/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/65536/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/65536/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/65536/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/65536/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/65536/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/65536/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/65537/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/65537/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/65537/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/65537/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/65537/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/65537/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/65537/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/65537/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/65537/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/262144/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/262144/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/known/262144/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/262144/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/262144/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/unknown/262144/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/262144/production",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/262144/hybrid",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        },
+        {
+          "case": "metadata_verification_buffers/understated/262144/scratch_64k",
+          "correctness": "passed",
+          "largest_read_buffer_bytes": 65536
+        }
+      ],
+      "criterion_medians": {
+        "metadata_verification_buffers/known/0/hybrid": {
+          "median_ci95_ns": [
+            364.46142245553574,
+            365.10906930613714
+          ],
+          "median_ns": 364.8976170630548
+        },
+        "metadata_verification_buffers/known/0/production": {
+          "median_ci95_ns": [
+            370.47554758115,
+            371.7257106187088
+          ],
+          "median_ns": 370.8520534548862
+        },
+        "metadata_verification_buffers/known/0/scratch_64k": {
+          "median_ci95_ns": [
+            1005.7608456283093,
+            1010.5076393276653
+          ],
+          "median_ns": 1006.0052223626307
+        },
+        "metadata_verification_buffers/known/1/hybrid": {
+          "median_ci95_ns": [
+            337.97350409810576,
+            340.2549839558226
+          ],
+          "median_ns": 338.8172163085599
+        },
+        "metadata_verification_buffers/known/1/production": {
+          "median_ci95_ns": [
+            325.7827011227297,
+            326.78808567025305
+          ],
+          "median_ns": 326.2490388862483
+        },
+        "metadata_verification_buffers/known/1/scratch_64k": {
+          "median_ci95_ns": [
+            956.0959946332863,
+            958.8507029323753
+          ],
+          "median_ns": 956.5536820643583
+        },
+        "metadata_verification_buffers/known/1024/hybrid": {
+          "median_ci95_ns": [
+            1270.1903541233637,
+            1272.3115248675167
+          ],
+          "median_ns": 1270.6297109361835
+        },
+        "metadata_verification_buffers/known/1024/production": {
+          "median_ci95_ns": [
+            1293.3139654577185,
+            1296.166080820102
+          ],
+          "median_ns": 1293.906275833072
+        },
+        "metadata_verification_buffers/known/1024/scratch_64k": {
+          "median_ci95_ns": [
+            1936.2631097322615,
+            1951.0184130910159
+          ],
+          "median_ns": 1942.297374601347
+        },
+        "metadata_verification_buffers/known/128/hybrid": {
+          "median_ci95_ns": [
+            385.98868847579155,
+            394.07501686087227
+          ],
+          "median_ns": 390.9172320169014
+        },
+        "metadata_verification_buffers/known/128/production": {
+          "median_ci95_ns": [
+            382.49489225925487,
+            384.42399019499976
+          ],
+          "median_ns": 383.5814332707032
+        },
+        "metadata_verification_buffers/known/128/scratch_64k": {
+          "median_ci95_ns": [
+            997.2486686558838,
+            1000.3034363542274
+          ],
+          "median_ns": 997.3495650881384
+        },
+        "metadata_verification_buffers/known/16384/hybrid": {
+          "median_ci95_ns": [
+            3460.087915869981,
+            3473.2169335564054
+          ],
+          "median_ns": 3461.2972275334605
+        },
+        "metadata_verification_buffers/known/16384/production": {
+          "median_ci95_ns": [
+            3734.8333911463496,
+            3752.9637058143376
+          ],
+          "median_ns": 3746.114234619902
+        },
+        "metadata_verification_buffers/known/16384/scratch_64k": {
+          "median_ci95_ns": [
+            4307.7836529311,
+            4319.15264560335
+          ],
+          "median_ns": 4308.731269826165
+        },
+        "metadata_verification_buffers/known/262144/hybrid": {
+          "median_ci95_ns": [
+            53741.48859126984,
+            54064.8506547619
+          ],
+          "median_ns": 53765.030922619044
+        },
+        "metadata_verification_buffers/known/262144/production": {
+          "median_ci95_ns": [
+            53763.57997630332,
+            54121.28263583277
+          ],
+          "median_ns": 54003.15442338073
+        },
+        "metadata_verification_buffers/known/262144/scratch_64k": {
+          "median_ci95_ns": [
+            53780.31068249258,
+            54134.695252225516
+          ],
+          "median_ns": 53898.896691394664
+        },
+        "metadata_verification_buffers/known/65535/hybrid": {
+          "median_ci95_ns": [
+            17464.08434849653,
+            17524.472353783458
+          ],
+          "median_ns": 17475.048043562063
+        },
+        "metadata_verification_buffers/known/65535/production": {
+          "median_ci95_ns": [
+            18488.10553400041,
+            18553.175119971413
+          ],
+          "median_ns": 18516.721869398498
+        },
+        "metadata_verification_buffers/known/65535/scratch_64k": {
+          "median_ci95_ns": [
+            18491.058886619,
+            18571.011819641033
+          ],
+          "median_ns": 18521.599351378958
+        },
+        "metadata_verification_buffers/known/65536/hybrid": {
+          "median_ci95_ns": [
+            12856.156986496091,
+            12858.788788201848
+          ],
+          "median_ns": 12857.480411998962
+        },
+        "metadata_verification_buffers/known/65536/production": {
+          "median_ci95_ns": [
+            13865.83570662992,
+            13970.993381990167
+          ],
+          "median_ns": 13888.52892359516
+        },
+        "metadata_verification_buffers/known/65536/scratch_64k": {
+          "median_ci95_ns": [
+            13874.442913318662,
+            13994.822385997237
+          ],
+          "median_ns": 13916.187606837608
+        },
+        "metadata_verification_buffers/known/65537/hybrid": {
+          "median_ci95_ns": [
+            14123.836684358414,
+            14162.645334668887
+          ],
+          "median_ns": 14133.31738474347
+        },
+        "metadata_verification_buffers/known/65537/production": {
+          "median_ci95_ns": [
+            14121.974877419132,
+            14277.474530900774
+          ],
+          "median_ns": 14141.486218098653
+        },
+        "metadata_verification_buffers/known/65537/scratch_64k": {
+          "median_ci95_ns": [
+            14117.188341915014,
+            14154.85512560462
+          ],
+          "median_ns": 14122.827073534983
+        },
+        "metadata_verification_buffers/understated/1024/hybrid": {
+          "median_ci95_ns": [
+            2081.5348287854467,
+            2095.296893487732
+          ],
+          "median_ns": 2086.6199442979437
+        },
+        "metadata_verification_buffers/understated/1024/production": {
+          "median_ci95_ns": [
+            2126.6871462859704,
+            2134.0105079424584
+          ],
+          "median_ns": 2128.84253080924
+        },
+        "metadata_verification_buffers/understated/1024/scratch_64k": {
+          "median_ci95_ns": [
+            1923.8704526181896,
+            1934.7908204367181
+          ],
+          "median_ns": 1926.108030225022
+        },
+        "metadata_verification_buffers/understated/128/hybrid": {
+          "median_ci95_ns": [
+            1167.7089991877217,
+            1169.7919959599844
+          ],
+          "median_ns": 1168.1691002949851
+        },
+        "metadata_verification_buffers/understated/128/production": {
+          "median_ci95_ns": [
+            1173.8630535396571,
+            1179.519544207893
+          ],
+          "median_ns": 1175.3288143911263
+        },
+        "metadata_verification_buffers/understated/128/scratch_64k": {
+          "median_ci95_ns": [
+            994.9267391328144,
+            1001.567962327455
+          ],
+          "median_ns": 998.7604512167088
+        },
+        "metadata_verification_buffers/understated/16384/hybrid": {
+          "median_ci95_ns": [
+            8231.610964899013,
+            8265.355444005809
+          ],
+          "median_ns": 8245.053816135765
+        },
+        "metadata_verification_buffers/understated/16384/production": {
+          "median_ci95_ns": [
+            8272.63878216828,
+            8304.242329297722
+          ],
+          "median_ns": 8281.026761270305
+        },
+        "metadata_verification_buffers/understated/16384/scratch_64k": {
+          "median_ci95_ns": [
+            4268.989556912478,
+            4280.9328075257035
+          ],
+          "median_ns": 4270.474312554519
+        },
+        "metadata_verification_buffers/understated/262144/hybrid": {
+          "median_ci95_ns": [
+            71258.95968059936,
+            71721.53635646688
+          ],
+          "median_ns": 71358.71928671573
+        },
+        "metadata_verification_buffers/understated/262144/production": {
+          "median_ci95_ns": [
+            71434.01968503937,
+            71822.44173228346
+          ],
+          "median_ns": 71691.2549343832
+        },
+        "metadata_verification_buffers/understated/262144/scratch_64k": {
+          "median_ci95_ns": [
+            53765.1663940115,
+            53941.63768920616
+          ],
+          "median_ns": 53833.91402226566
+        },
+        "metadata_verification_buffers/understated/65535/hybrid": {
+          "median_ci95_ns": [
+            22682.32179181316,
+            22768.264368228458
+          ],
+          "median_ns": 22707.48549723757
+        },
+        "metadata_verification_buffers/understated/65535/production": {
+          "median_ci95_ns": [
+            22735.9016247248,
+            23000.622188780202
+          ],
+          "median_ns": 22808.168568681547
+        },
+        "metadata_verification_buffers/understated/65535/scratch_64k": {
+          "median_ci95_ns": [
+            18492.65229473541,
+            18533.141951133974
+          ],
+          "median_ns": 18506.38613270595
+        },
+        "metadata_verification_buffers/understated/65536/hybrid": {
+          "median_ci95_ns": [
+            18419.777612850754,
+            18494.555568465694
+          ],
+          "median_ns": 18429.197639058337
+        },
+        "metadata_verification_buffers/understated/65536/production": {
+          "median_ci95_ns": [
+            18437.163165551352,
+            18507.239027494907
+          ],
+          "median_ns": 18477.161554650374
+        },
+        "metadata_verification_buffers/understated/65536/scratch_64k": {
+          "median_ci95_ns": [
+            13889.429023341523,
+            13967.286518052144
+          ],
+          "median_ns": 13936.719553461742
+        },
+        "metadata_verification_buffers/understated/65537/hybrid": {
+          "median_ci95_ns": [
+            18558.279240367476,
+            18618.670777914896
+          ],
+          "median_ns": 18583.47465034965
+        },
+        "metadata_verification_buffers/understated/65537/production": {
+          "median_ci95_ns": [
+            18611.625925545042,
+            18703.95531674208
+          ],
+          "median_ns": 18681.610198992184
+        },
+        "metadata_verification_buffers/understated/65537/scratch_64k": {
+          "median_ci95_ns": [
+            14149.459686400285,
+            14273.352683366247
+          ],
+          "median_ns": 14180.295681322108
+        },
+        "metadata_verification_buffers/unknown/0/hybrid": {
+          "median_ci95_ns": [
+            1010.4882031877846,
+            1015.3382967069764
+          ],
+          "median_ns": 1011.1908759524661
+        },
+        "metadata_verification_buffers/unknown/0/production": {
+          "median_ci95_ns": [
+            1010.1936859496751,
+            1018.5464689990846
+          ],
+          "median_ns": 1011.2293817182294
+        },
+        "metadata_verification_buffers/unknown/0/scratch_64k": {
+          "median_ci95_ns": [
+            1006.7182550700816,
+            1009.7896223446396
+          ],
+          "median_ns": 1007.0021642537524
+        },
+        "metadata_verification_buffers/unknown/1/hybrid": {
+          "median_ci95_ns": [
+            954.0520627875533,
+            960.3569960243588
+          ],
+          "median_ns": 955.1910016933286
+        },
+        "metadata_verification_buffers/unknown/1/production": {
+          "median_ci95_ns": [
+            958.0671070821769,
+            964.1781586856013
+          ],
+          "median_ns": 959.6023412024188
+        },
+        "metadata_verification_buffers/unknown/1/scratch_64k": {
+          "median_ci95_ns": [
+            957.1071135462237,
+            963.033405306526
+          ],
+          "median_ns": 959.4379788183951
+        },
+        "metadata_verification_buffers/unknown/1024/hybrid": {
+          "median_ci95_ns": [
+            1923.1391238446536,
+            1932.6181915825773
+          ],
+          "median_ns": 1926.2584955058087
+        },
+        "metadata_verification_buffers/unknown/1024/production": {
+          "median_ci95_ns": [
+            1922.7244489614432,
+            1928.4823095979164
+          ],
+          "median_ns": 1924.9378764795774
+        },
+        "metadata_verification_buffers/unknown/1024/scratch_64k": {
+          "median_ci95_ns": [
+            1930.9506598947487,
+            1934.9506242936045
+          ],
+          "median_ns": 1931.8981262306386
+        },
+        "metadata_verification_buffers/unknown/128/hybrid": {
+          "median_ci95_ns": [
+            999.0819378387347,
+            1001.196935477358
+          ],
+          "median_ns": 999.6656225804668
+        },
+        "metadata_verification_buffers/unknown/128/production": {
+          "median_ci95_ns": [
+            997.1014523103602,
+            1003.2007270474238
+          ],
+          "median_ns": 997.3998857403183
+        },
+        "metadata_verification_buffers/unknown/128/scratch_64k": {
+          "median_ci95_ns": [
+            993.4293893898291,
+            998.3280029873367
+          ],
+          "median_ns": 993.7018978374756
+        },
+        "metadata_verification_buffers/unknown/16384/hybrid": {
+          "median_ci95_ns": [
+            4241.396829119565,
+            4251.004567354406
+          ],
+          "median_ns": 4243.159052175681
+        },
+        "metadata_verification_buffers/unknown/16384/production": {
+          "median_ci95_ns": [
+            4252.6253187528355,
+            4255.870314528871
+          ],
+          "median_ns": 4254.126894917163
+        },
+        "metadata_verification_buffers/unknown/16384/scratch_64k": {
+          "median_ci95_ns": [
+            4258.496754923795,
+            4275.335320208803
+          ],
+          "median_ns": 4260.839465157776
+        },
+        "metadata_verification_buffers/unknown/262144/hybrid": {
+          "median_ci95_ns": [
+            53759.94329313176,
+            54006.034155766945
+          ],
+          "median_ns": 53824.946294094334
+        },
+        "metadata_verification_buffers/unknown/262144/production": {
+          "median_ci95_ns": [
+            53702.00949554896,
+            54084.617115303095
+          ],
+          "median_ns": 53923.689772502476
+        },
+        "metadata_verification_buffers/unknown/262144/scratch_64k": {
+          "median_ci95_ns": [
+            53829.05911968349,
+            53956.860237388726
+          ],
+          "median_ns": 53912.96314822665
+        },
+        "metadata_verification_buffers/unknown/65535/hybrid": {
+          "median_ci95_ns": [
+            18518.57675393741,
+            18632.877036885526
+          ],
+          "median_ns": 18539.02363582646
+        },
+        "metadata_verification_buffers/unknown/65535/production": {
+          "median_ci95_ns": [
+            18481.80715742251,
+            18522.989253670472
+          ],
+          "median_ns": 18484.545467418888
+        },
+        "metadata_verification_buffers/unknown/65535/scratch_64k": {
+          "median_ci95_ns": [
+            18516.052138695828,
+            18617.804338716272
+          ],
+          "median_ns": 18565.656718451894
+        },
+        "metadata_verification_buffers/unknown/65536/hybrid": {
+          "median_ci95_ns": [
+            13879.663035021937,
+            13916.576660544843
+          ],
+          "median_ns": 13880.88373453146
+        },
+        "metadata_verification_buffers/unknown/65536/production": {
+          "median_ci95_ns": [
+            13859.252286780113,
+            13883.998601103787
+          ],
+          "median_ns": 13864.106827124533
+        },
+        "metadata_verification_buffers/unknown/65536/scratch_64k": {
+          "median_ci95_ns": [
+            13870.580339917318,
+            13919.162073189404
+          ],
+          "median_ns": 13875.274022792397
+        },
+        "metadata_verification_buffers/unknown/65537/hybrid": {
+          "median_ci95_ns": [
+            14124.027838371248,
+            14201.484498953836
+          ],
+          "median_ns": 14167.704619819258
+        },
+        "metadata_verification_buffers/unknown/65537/production": {
+          "median_ci95_ns": [
+            14106.745941938505,
+            14153.689442103256
+          ],
+          "median_ns": 14110.851783205868
+        },
+        "metadata_verification_buffers/unknown/65537/scratch_64k": {
+          "median_ci95_ns": [
+            14118.005824637907,
+            14216.129508087302
+          ],
+          "median_ns": 14141.694171901228
+        }
+      }
+    }
+  ]
+}

@@ -284,23 +284,47 @@ impl<'a> VerificationContext<'a> {
     /// Materialize the payload while enforcing a bound before growing the
     /// returned allocation beyond it.
     pub async fn read_to_end_bounded(&mut self, limit: u64) -> Result<Vec<u8>, FormatError> {
-        let mut output = Vec::new();
+        const MAX_READ: u64 = 64 * 1024;
+        let hint = self.exact_len();
+        let scratch_limit = MAX_READ.min(limit.saturating_add(1)) as usize;
+        let initial = hint
+            .unwrap_or(MAX_READ)
+            .clamp(1, MAX_READ)
+            .min(scratch_limit as u64) as usize;
         // This future is nested through directory verification, publication,
         // and callers' build graphs. Keep the scratch space out of each
         // enclosing future and its poll stack frame.
-        let mut buffer = vec![0u8; 64 * 1024];
+        let mut buffer = vec![0; initial];
+        let mut output = Vec::new();
         loop {
             let read = self.read(&mut buffer).await?;
             if read == 0 {
                 return Ok(output);
             }
-            let new_len = (output.len() as u64)
-                .checked_add(read as u64)
+            let new_len = output
+                .len()
+                .checked_add(read)
                 .ok_or(FormatError::PayloadSizeOverflow)?;
-            if new_len > limit {
+            if new_len as u64 > limit {
                 return Err(FormatError::MetadataLimit { limit });
             }
+            if new_len > output.capacity() {
+                // Vec's default growth can exceed the metadata limit, even
+                // for tiny allocations. Bound geometric growth explicitly.
+                let capacity = output
+                    .capacity()
+                    .saturating_mul(2)
+                    .max(new_len)
+                    .min(usize::try_from(limit).unwrap_or(usize::MAX));
+                output.reserve_exact(capacity - output.len());
+            }
             output.extend_from_slice(&buffer[..read]);
+            // A hint sizes scratch space only; it never proves EOF. If it
+            // understates the payload, continue with full-size reads rather
+            // than many small ones. Accurate hints keep their small EOF buffer.
+            if new_len as u64 > hint.unwrap_or(u64::MAX) && buffer.len() < scratch_limit {
+                buffer.resize(scratch_limit, 0);
+            }
         }
     }
 
