@@ -24,6 +24,25 @@ not hold a snapshot, so checkpoints proceed between reads
 (`tests/application_api.rs`). `object-reader.json` holds the raw Criterion
 medians and confidence intervals.
 
+## Immutable lookups without explicit transactions
+
+The previous object reader opened an explicit read transaction and revalidated
+repository state for each lookup. The candidate runs each lookup's statements
+in their implicit transactions on a pooled query connection. Previous and
+candidate executables alternated in twelve processes (ABBAAB, twice). Absolute
+times drift between processes on this shared host, so the table compares each
+process's object-reader time with its own unchanged snapshot control: median
+ratio and range over six processes per build.
+
+| Payload bytes | Previous ratio | Candidate ratio |
+|---:|---:|---:|
+| 128 | 1.19 (1.04 to 1.22) | 1.05 (0.97 to 1.10) |
+| 4,096 | 1.12 (1.02 to 1.31) | 1.05 (0.98 to 1.09) |
+
+Lookups that fail during decoding still release their implicit transaction,
+which `tests/application_api.rs` checks with WAL truncation after corrupted
+records. `immutable-lookups.json` holds both builds and all twelve processes.
+
 ## Build and host
 
 Each JSON file records the `crates/casita` tree of every build it measured,

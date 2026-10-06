@@ -831,10 +831,11 @@ impl MetadataStore for TursoMetadataStore {
         let generation = i64::try_from(generation).unwrap_or(i64::MAX);
         let keys = keys.to_vec();
         self.db
-            .read(move |connection| {
+            .read_immutable(move |connection| {
                 Box::pin(async move {
                     Ok(async {
-                        read_snapshot_state(connection).await?;
+                        // The generation was already admitted by a retained reader.
+                        // Immutable records need no new revision or catalog snapshot.
                         if keys.len() == 1 {
                             let key = &keys[0];
                             let mut statement = connection

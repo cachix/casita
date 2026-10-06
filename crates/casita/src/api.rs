@@ -148,7 +148,7 @@ impl RetainedReader {
     /// Detach immutable-object reads from this metadata snapshot. The returned
     /// reader shares existing collection protection, admits no additional pin,
     /// and never exposes objects born after this reader's generation. It uses
-    /// short metadata transactions, allowing checkpoints between operations.
+    /// short metadata reads, allowing checkpoints between operations.
     /// Supported by local and in-memory metadata backends; others fail with
     /// [`ErrorKind::Unsupported`].
     pub fn object_reader(&self) -> Result<ObjectReader, Error> {
