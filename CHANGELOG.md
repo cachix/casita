@@ -42,6 +42,9 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 - `RetainedReader::object_batch` looks up several object records in the
   reader's protected snapshot in one call, preserving input order and
   duplicate keys.
+- `RetainedReader::validated_closures` reports which objects have a
+  completeness record in the protected snapshot, without traversing their
+  graphs. `false` means only that no record exists.
 - `experimental::RepositoryProfile` groups a repository's deployment policy
   (cross-process coordination, spill placement and limits, emergency
   collection, the import cache and disk-pressure maintenance) in one value.

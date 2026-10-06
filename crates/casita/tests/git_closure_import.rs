@@ -191,6 +191,13 @@ async fn an_existing_parent_is_not_a_complete_closure_and_can_be_repaired() {
     let mutation = repository.mutation_session().await.unwrap();
     let staged = mutation.stage_object(root.clone(), &bytes).await.unwrap();
     mutation.publish_unrooted(vec![staged]).await.unwrap();
+    let before = repository.retained_reader().await.unwrap();
+    let queried = [root.clone(), tree(&"00".repeat(20)), root.clone()];
+    assert!(before.validated_closures(&[]).await.unwrap().is_empty());
+    assert_eq!(
+        before.validated_closures(&queried).await.unwrap(),
+        [false; 3]
+    );
     source.remove(&oid);
     source.remove(&blob);
     assert!(
@@ -216,6 +223,20 @@ async fn an_existing_parent_is_not_a_complete_closure_and_can_be_repaired() {
         .await
         .unwrap();
     assert_eq!(repaired.report.imported_objects, 1);
+    assert_eq!(
+        before.validated_closures(&queried).await.unwrap(),
+        [false; 3]
+    );
+    assert_eq!(
+        repository
+            .retained_reader()
+            .await
+            .unwrap()
+            .validated_closures(&queried)
+            .await
+            .unwrap(),
+        [true, false, true]
+    );
     assert!(matches!(
         repository.verify_closure(&root).await.unwrap(),
         ClosureStatus::Complete { objects: 2 }
@@ -363,6 +384,16 @@ async fn closure_witnesses_survive_reopening_a_local_repository() {
         .await
         .unwrap();
     let repository = Repository::local(destination.path()).await.unwrap();
+    assert_eq!(
+        repository
+            .retained_reader()
+            .await
+            .unwrap()
+            .validated_closures(std::slice::from_ref(&root))
+            .await
+            .unwrap(),
+        [true]
+    );
     let imported = repository
         .import(GitClosureImport::new(
             source.0.path().join("missing"),

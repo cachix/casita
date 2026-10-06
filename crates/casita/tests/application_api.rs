@@ -1159,3 +1159,41 @@ async fn retained_batches_preserve_order_missing_duplicates_and_snapshot() {
         repository.flush().await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn retained_closure_completeness_keeps_the_reader_snapshot() {
+    let directory = tempfile::tempdir().unwrap();
+    let files = directory.path().join("files");
+    std::fs::create_dir(&files).unwrap();
+    std::fs::write(files.join("file"), b"unwitnessed child").unwrap();
+    for repository in [
+        Repository::memory().unwrap(),
+        Repository::local(directory.path().join("repository"))
+            .await
+            .unwrap(),
+    ] {
+        let tree = repository
+            .import(casita::import::FilesystemImport::new(&files, name("tree")))
+            .await
+            .unwrap();
+        let child = repository.object(&tree).await.unwrap().unwrap().links()[0].clone();
+        let missing = ObjectKey::blob(BlobId::new(Digest::hash(b"absent")));
+        let keys = [tree.clone(), child.clone(), missing, tree];
+        let held = repository.retained_reader().await.unwrap();
+        // A named root records its complete closure; its child has no record.
+        assert_eq!(
+            held.validated_closures(&keys).await.unwrap(),
+            [true, false, false, true]
+        );
+        repository.set_root(name("child"), child).await.unwrap();
+        let fresh = repository.retained_reader().await.unwrap();
+        assert_eq!(
+            fresh.validated_closures(&keys).await.unwrap(),
+            [true, true, false, true]
+        );
+        assert_eq!(
+            held.validated_closures(&keys).await.unwrap(),
+            [true, false, false, true]
+        );
+    }
+}

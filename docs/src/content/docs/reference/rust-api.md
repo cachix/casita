@@ -64,6 +64,11 @@ standard error source chain.
 
 `RetainedReader::object_batch` looks up several object records in the protected
 snapshot in one call, preserving input order and duplicate keys.
+`validated_closures` reports which keys have a completeness record in that
+snapshot without traversing their graphs; `false` means only that no record
+exists. Imports record the directories, trees, commits, and tags they construct,
+and `publish_closures` and root publication record their targets. Raw and Git
+blobs usually have none.
 
 `set_root` unconditionally creates or replaces a name after verifying the
 complete target graph. `compare_and_set_root(name, expected, target)` publishes
