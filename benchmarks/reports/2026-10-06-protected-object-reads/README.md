@@ -43,6 +43,27 @@ Lookups that fail during decoding still release their implicit transaction,
 which `tests/application_api.rs` checks with WAL truncation after corrupted
 records. `immutable-lookups.json` holds both builds and all twelve processes.
 
+## Batched protected handles
+
+`ObjectReader::objects` looks up the whole working set in one call and returns
+handles that open verified payloads without a further lookup. Working sets
+reach both sides of the 256-key query chunk. The sections above used the
+128-object benchmark of their commits; this one reruns all three readers with
+the extended benchmark. Milliseconds per pass, mean of two processes' Criterion
+medians, with batched time relative to per-key object reads and to snapshot
+reads.
+
+| Payload bytes | Objects | Snapshot | ObjectReader | Batched | Batched / ObjectReader | Batched / snapshot |
+|---:|---:|---:|---:|---:|---:|---:|
+| 128 | 128 | 16.43 | 15.96 | 12.35 | 0.77 | 0.75 |
+| 128 | 256 | 30.08 | 31.97 | 24.75 | 0.77 | 0.82 |
+| 128 | 257 | 26.70 | 32.27 | 24.41 | 0.76 | 0.91 |
+| 4,096 | 128 | 17.12 | 17.89 | 13.96 | 0.78 | 0.82 |
+| 4,096 | 256 | 32.92 | 36.17 | 28.01 | 0.77 | 0.85 |
+| 4,096 | 257 | 34.58 | 36.22 | 28.13 | 0.78 | 0.81 |
+
+`batched-handles.json` holds the raw medians.
+
 ## Build and host
 
 Each JSON file records the `crates/casita` tree of every build it measured,

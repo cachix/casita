@@ -26,7 +26,7 @@ use crate::{
 };
 
 mod objects;
-pub use objects::ObjectReader;
+pub use objects::{ObjectReader, ProtectedObject};
 
 /// A consistent view of object records, roots, and application metadata. Holding this reader
 /// keeps one metadata revision stable, but does not retain payloads.

@@ -62,6 +62,24 @@ impl ObjectReader {
             .app()
     }
 
+    /// Look up protected object handles in one batch. Order, duplicate keys and
+    /// absent/future entries match [`Self::object_batch`]. Each handle can open
+    /// verified payloads without another metadata lookup. It retains this
+    /// reader's protection without retaining a database cursor or payload I/O.
+    pub async fn objects(&self, keys: &[ObjectKey]) -> Result<Vec<Option<ProtectedObject>>, Error> {
+        Ok(self
+            .object_batch(keys)
+            .await?
+            .into_iter()
+            .map(|record| {
+                record.map(|record| ProtectedObject {
+                    record,
+                    inner: self.inner.clone(),
+                })
+            })
+            .collect())
+    }
+
     /// Open a seekable payload while sharing this reader's collection protection.
     pub async fn open(&self, key: &ObjectKey) -> Result<Option<Reader>, Error> {
         let Some(record) = self.object(key).await? else {
@@ -94,5 +112,33 @@ impl ObjectReader {
         open_verified_record(&self.inner.repository, record, self.inner.clone())
             .await
             .map(Some)
+    }
+}
+
+/// An immutable record bound to the collection protection that admitted it.
+/// Created by [`ObjectReader::objects`]; opens reuse this verified metadata
+/// without querying it again. Payload bytes are still authenticated on every
+/// verified read. Clones and opened streams keep the same protection alive.
+#[derive(Clone)]
+pub struct ProtectedObject {
+    record: ObjectRecord,
+    inner: Arc<Inner>,
+}
+
+impl ProtectedObject {
+    /// Immutable logical metadata selected by the protected batch lookup.
+    pub fn record(&self) -> &ObjectRecord {
+        &self.record
+    }
+
+    /// Open a sequential reader that authenticates every byte before returning it.
+    /// A missing or damaged payload is an error, even though the record exists.
+    pub async fn open_verified(&self) -> Result<VerifiedReader, Error> {
+        open_verified_record(
+            &self.inner.repository,
+            self.record.clone(),
+            self.inner.clone(),
+        )
+        .await
     }
 }

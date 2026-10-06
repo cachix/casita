@@ -57,6 +57,8 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
   in with `experimental::MetadataStore::object_batch_created_through` and
   `supports_object_reads_created_through`; without them it fails with
   `experimental::MetadataError::UnsupportedObjectReads`.
+- `ObjectReader::objects` resolves a batch of keys to `ProtectedObject`
+  handles that open verified payloads without another metadata lookup.
 - `experimental::RepositoryProfile` groups a repository's deployment policy
   (cross-process coordination, spill placement and limits, emergency
   collection, the import cache and disk-pressure maintenance) in one value.

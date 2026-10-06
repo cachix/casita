@@ -1,0 +1,293 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-06",
+  "build": {
+    "crates_casita_tree": "30844f8bc6db16e0cbac9b99ebdcec4bf090024f",
+    "command": "cargo bench --no-default-features --features native,experimental --bench object_reads --no-run",
+    "profile": "Cargo bench profile defaults",
+    "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+    "lockfile": {
+      "sha256": "6d53fd6e7d4836f70c740024695f3d11a106e71f074157b442da08194e2673f3",
+      "note": "Cargo.lock is untracked; generated at cachix/casita 84ec292 and shared by every build."
+    },
+    "binary_sha256": "9b981be476cd29d4e3299648edb710be06f926b75743f4f1c89091abb86bd2f6"
+  },
+  "host": {
+    "cpu": "AMD EPYC 9454P 48-Core Processor, 96 hardware threads",
+    "kernel": "Linux 6.18.42",
+    "filesystem": "ZFS",
+    "pinning": "taskset -c 32-47",
+    "note": "Shared host; other users' load was present. Runs were serial and no builds from this investigation ran during timing."
+  },
+  "command": "taskset -c 32-47 target/release/deps/object_reads-<hash> --bench --noplot",
+  "runs": [
+    {
+      "run": 1,
+      "started": "2026-10-06T16:36:10+00:00",
+      "load_average_1m": 2.57,
+      "binary": "candidate",
+      "criterion_medians": {
+        "protected_object_reads/batched/128/128": {
+          "median_ci95_ns": [
+            12265875.515625,
+            13052522.6625
+          ],
+          "median_ns": 12401087.331845239
+        },
+        "protected_object_reads/batched/128/256": {
+          "median_ci95_ns": [
+            24686434.9375,
+            24932590.833333332
+          ],
+          "median_ns": 24805446.819444444
+        },
+        "protected_object_reads/batched/128/257": {
+          "median_ci95_ns": [
+            22769596.083333332,
+            24885887.876736112
+          ],
+          "median_ns": 24753932.625
+        },
+        "protected_object_reads/batched/4096/128": {
+          "median_ci95_ns": [
+            13769201.67857143,
+            13999648.947916668
+          ],
+          "median_ns": 13951676.2875
+        },
+        "protected_object_reads/batched/4096/256": {
+          "median_ci95_ns": [
+            27486788.35277778,
+            27937713.39285714
+          ],
+          "median_ns": 27851504.328125
+        },
+        "protected_object_reads/batched/4096/257": {
+          "median_ci95_ns": [
+            27528594.375,
+            28065360.0
+          ],
+          "median_ns": 27900537.895833336
+        },
+        "protected_object_reads/objects/128/128": {
+          "median_ci95_ns": [
+            15533116.333333334,
+            16444339.011904761
+          ],
+          "median_ns": 15911261.71875
+        },
+        "protected_object_reads/objects/128/256": {
+          "median_ci95_ns": [
+            30137352.347222224,
+            32377894.40079365
+          ],
+          "median_ns": 31782651.166666664
+        },
+        "protected_object_reads/objects/128/257": {
+          "median_ci95_ns": [
+            32238928.708333336,
+            32924153.9375
+          ],
+          "median_ns": 32437793.01785714
+        },
+        "protected_object_reads/objects/4096/128": {
+          "median_ci95_ns": [
+            17212091.910714287,
+            17663904.60714286
+          ],
+          "median_ns": 17590680.36904762
+        },
+        "protected_object_reads/objects/4096/256": {
+          "median_ci95_ns": [
+            35434101.666666664,
+            35796858.0
+          ],
+          "median_ns": 35648646.675925925
+        },
+        "protected_object_reads/objects/4096/257": {
+          "median_ci95_ns": [
+            34844156.32142857,
+            35795893.12962963
+          ],
+          "median_ns": 35638983.14583333
+        },
+        "protected_object_reads/snapshot/128/128": {
+          "median_ci95_ns": [
+            16063924.0,
+            16598016.537037037
+          ],
+          "median_ns": 16475989.395833332
+        },
+        "protected_object_reads/snapshot/128/256": {
+          "median_ci95_ns": [
+            29708514.0,
+            30387031.308333334
+          ],
+          "median_ns": 30192859.541666664
+        },
+        "protected_object_reads/snapshot/128/257": {
+          "median_ci95_ns": [
+            20797236.166666668,
+            30054126.65
+          ],
+          "median_ns": 24416054.725
+        },
+        "protected_object_reads/snapshot/4096/128": {
+          "median_ci95_ns": [
+            14515626.916666666,
+            16717937.9375
+          ],
+          "median_ns": 15935602.716666667
+        },
+        "protected_object_reads/snapshot/4096/256": {
+          "median_ci95_ns": [
+            30845622.69940476,
+            33384527.116666667
+          ],
+          "median_ns": 32330179.435185187
+        },
+        "protected_object_reads/snapshot/4096/257": {
+          "median_ci95_ns": [
+            32881923.875,
+            33595751.61607143
+          ],
+          "median_ns": 33449468.027777776
+        }
+      }
+    },
+    {
+      "run": 2,
+      "started": "2026-10-06T16:39:18+00:00",
+      "load_average_1m": 2.72,
+      "binary": "candidate",
+      "criterion_medians": {
+        "protected_object_reads/batched/128/128": {
+          "median_ci95_ns": [
+            12219813.771604938,
+            12358827.755555555
+          ],
+          "median_ns": 12305628.722222222
+        },
+        "protected_object_reads/batched/128/256": {
+          "median_ci95_ns": [
+            24656263.961309522,
+            24793204.21875
+          ],
+          "median_ns": 24693006.8875
+        },
+        "protected_object_reads/batched/128/257": {
+          "median_ci95_ns": [
+            22648131.78125,
+            24734709.416666664
+          ],
+          "median_ns": 24064338.25
+        },
+        "protected_object_reads/batched/4096/128": {
+          "median_ci95_ns": [
+            13433475.3671875,
+            14130364.4875
+          ],
+          "median_ns": 13976087.325
+        },
+        "protected_object_reads/batched/4096/256": {
+          "median_ci95_ns": [
+            27312510.52232143,
+            28250485.652777776
+          ],
+          "median_ns": 28173379.6375
+        },
+        "protected_object_reads/batched/4096/257": {
+          "median_ci95_ns": [
+            28319797.817460317,
+            28408984.46666667
+          ],
+          "median_ns": 28366347.4375
+        },
+        "protected_object_reads/objects/128/128": {
+          "median_ci95_ns": [
+            15140155.319444444,
+            16134337.667592593
+          ],
+          "median_ns": 16006806.305555556
+        },
+        "protected_object_reads/objects/128/256": {
+          "median_ci95_ns": [
+            32029026.7125,
+            32424029.538194444
+          ],
+          "median_ns": 32163862.958333336
+        },
+        "protected_object_reads/objects/128/257": {
+          "median_ci95_ns": [
+            31139338.558333334,
+            32248856.6
+          ],
+          "median_ns": 32098239.26190476
+        },
+        "protected_object_reads/objects/4096/128": {
+          "median_ci95_ns": [
+            17453668.675925925,
+            18320033.791666668
+          ],
+          "median_ns": 18186546.559027776
+        },
+        "protected_object_reads/objects/4096/256": {
+          "median_ci95_ns": [
+            34679101.5925926,
+            37116026.333333336
+          ],
+          "median_ns": 36687419.39285714
+        },
+        "protected_object_reads/objects/4096/257": {
+          "median_ci95_ns": [
+            36518562.666666664,
+            37065757.46666667
+          ],
+          "median_ns": 36796003.52380952
+        },
+        "protected_object_reads/snapshot/128/128": {
+          "median_ci95_ns": [
+            16190422.5,
+            16470692.092592593
+          ],
+          "median_ns": 16380780.448412698
+        },
+        "protected_object_reads/snapshot/128/256": {
+          "median_ci95_ns": [
+            29893707.5,
+            30021938.208333332
+          ],
+          "median_ns": 29971459.425
+        },
+        "protected_object_reads/snapshot/128/257": {
+          "median_ci95_ns": [
+            27155587.75,
+            29978251.92857143
+          ],
+          "median_ns": 28990411.125
+        },
+        "protected_object_reads/snapshot/4096/128": {
+          "median_ci95_ns": [
+            16525987.541666666,
+            18737641.333333332
+          ],
+          "median_ns": 18294534.243055556
+        },
+        "protected_object_reads/snapshot/4096/256": {
+          "median_ci95_ns": [
+            31989309.6,
+            34217083.666666664
+          ],
+          "median_ns": 33509293.14285714
+        },
+        "protected_object_reads/snapshot/4096/257": {
+          "median_ci95_ns": [
+            34040441.29166667,
+            38123460.16111112
+          ],
+          "median_ns": 35703321.796875
+        }
+      }
+    }
+  ]
+}

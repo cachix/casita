@@ -2290,8 +2290,8 @@
           "runner": "cargo bench --no-default-features --features native,experimental --bench object_reads",
           "included_in": "benchmark all --suites core-primitives",
           "payload_sizes_bytes": [128, 4096],
-          "working_set": 128,
-          "readers": ["stable snapshot", "generation-bounded object reader"],
+          "working_sets": [128, 256, 257],
+          "readers": ["stable snapshot", "generation-bounded object reader", "batched protected object handles"],
           "metrics": ["verified read latency for one complete working-set pass"],
           "correctness": ["imported blob identities", "complete read bytes on every iteration"]
         },

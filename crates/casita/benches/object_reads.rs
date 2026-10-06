@@ -6,13 +6,34 @@ use tokio::io::AsyncReadExt;
 enum Session {
     Snapshot(RetainedReader),
     Objects(ObjectReader),
+    Batched(ObjectReader),
 }
 
 impl Session {
+    async fn read_all(&self, fixtures: &[(ObjectKey, Vec<u8>)]) {
+        match self {
+            Self::Batched(session) => {
+                let keys: Vec<_> = fixtures.iter().map(|(key, _)| key.clone()).collect();
+                let objects = session.objects(&keys).await.unwrap();
+                for (object, (_, expected)) in objects.into_iter().zip(fixtures) {
+                    let mut opened = object.unwrap().open_verified().await.unwrap();
+                    let mut bytes = Vec::new();
+                    opened.read_to_end(&mut bytes).await.unwrap();
+                    assert_eq!(&bytes, expected);
+                }
+            }
+            Self::Snapshot(_) | Self::Objects(_) => {
+                for (key, bytes) in fixtures {
+                    self.read(key, bytes).await;
+                }
+            }
+        }
+    }
+
     async fn read(&self, key: &ObjectKey, expected: &[u8]) {
         let mut reader = match self {
             Self::Snapshot(session) => session.open_verified(key).await,
-            Self::Objects(session) => session.open_verified(key).await,
+            Self::Objects(session) | Self::Batched(session) => session.open_verified(key).await,
         }
         .unwrap()
         .unwrap();
@@ -35,7 +56,7 @@ fn object_reads(c: &mut Criterion) {
         let (repository, fixtures) = runtime.block_on(async {
             let repository = Repository::local(directory.path()).await.unwrap();
             let mut fixtures = Vec::new();
-            for index in 0..128u64 {
+            for index in 0..257u64 {
                 let mut bytes = vec![42; size];
                 bytes[..8].copy_from_slice(&index.to_le_bytes());
                 let key = repository
@@ -54,30 +75,28 @@ fn object_reads(c: &mut Criterion) {
             repository.flush().await.unwrap();
             (repository, fixtures)
         });
-        group.throughput(Throughput::Elements(fixtures.len() as u64));
-        for objects in [false, true] {
-            let session = runtime.block_on(async {
-                let snapshot = repository.retained_reader().await.unwrap();
-                if objects {
-                    Session::Objects(snapshot.object_reader().unwrap())
-                } else {
-                    Session::Snapshot(snapshot)
-                }
-            });
-            let read = || async {
-                for (key, bytes) in &fixtures {
-                    session.read(key, bytes).await;
-                }
-            };
-            runtime.block_on(read());
-            group.bench_function(
-                BenchmarkId::new(if objects { "objects" } else { "snapshot" }, size),
-                |b| b.to_async(&runtime).iter(read),
-            );
-            runtime.block_on(async {
-                drop(session);
-                repository.flush().await.unwrap();
-            });
+        for count in [128, 256, 257] {
+            let fixtures = &fixtures[..count];
+            group.throughput(Throughput::Elements(count as u64));
+            for mode in ["snapshot", "objects", "batched"] {
+                let session = runtime.block_on(async {
+                    let snapshot = repository.retained_reader().await.unwrap();
+                    match mode {
+                        "snapshot" => Session::Snapshot(snapshot),
+                        "objects" => Session::Objects(snapshot.object_reader().unwrap()),
+                        _ => Session::Batched(snapshot.object_reader().unwrap()),
+                    }
+                });
+                let read = || session.read_all(fixtures);
+                runtime.block_on(read());
+                group.bench_function(BenchmarkId::new(format!("{mode}/{size}"), count), |b| {
+                    b.to_async(&runtime).iter(read)
+                });
+                runtime.block_on(async {
+                    drop(session);
+                    repository.flush().await.unwrap();
+                });
+            }
         }
         runtime.block_on(async { drop(repository) });
     }

@@ -14,9 +14,9 @@ and portable identity and filesystem types. Implementation modules remain privat
 ## Repository API
 
 With `native`, the crate exports `Repository`, `Reader`, `VerifiedReader`,
-`MetadataReader`, `RetainedReader`, `ObjectRetention`, `ObjectReader`, `Error`,
-`ErrorKind`, `CollectionReport`, `IntegrityReport`, `IntegrityIssue`,
-`IntegrityIssueKind`, and `IntegrityDisposition`.
+`MetadataReader`, `RetainedReader`, `ObjectRetention`, `ObjectReader`,
+`ProtectedObject`, `Error`, `ErrorKind`, `CollectionReport`, `IntegrityReport`,
+`IntegrityIssue`, `IntegrityIssueKind`, and `IntegrityDisposition`.
 
 | Area | `Repository` methods |
 |---|---|
@@ -85,6 +85,9 @@ opens protected `Reader` and `VerifiedReader` streams. Roots and application
 metadata still require the retained reader. Local and in-memory metadata
 support it; on other backends `object_reader` fails with
 `ErrorKind::Unsupported`.
+`ObjectReader::objects` resolves a batch of keys to `ProtectedObject` handles,
+whose `open_verified` reuses the looked-up record instead of querying metadata
+again.
 
 `set_root` unconditionally creates or replaces a name after verifying the
 complete target graph. `compare_and_set_root(name, expected, target)` publishes
