@@ -248,6 +248,15 @@ impl RetainedReader {
         self.hold.object(key).await.app()
     }
 
+    /// Look up immutable object records in this protected snapshot, preserving
+    /// input order and duplicate keys. Absent keys produce `None` entries.
+    pub async fn object_batch(
+        &self,
+        keys: &[ObjectKey],
+    ) -> Result<Vec<Option<ObjectRecord>>, Error> {
+        self.hold.object_batch(keys).await.app()
+    }
+
     /// Open content from this exact snapshot. The returned reader keeps the
     /// protection alive even after the session and repository are dropped.
     /// Keys absent from the snapshot return `None`; opaque records do not

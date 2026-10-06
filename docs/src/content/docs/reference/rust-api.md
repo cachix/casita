@@ -62,6 +62,9 @@ and the content read must share a protected snapshot. `get`, `scan`, and
 it. `Error` exposes `kind()` and `retry_disposition()` and preserves the
 standard error source chain.
 
+`RetainedReader::object_batch` looks up several object records in the protected
+snapshot in one call, preserving input order and duplicate keys.
+
 `set_root` unconditionally creates or replaces a name after verifying the
 complete target graph. `compare_and_set_root(name, expected, target)` publishes
 only if the name is absent (`None`) or still points to the expected key

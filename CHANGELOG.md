@@ -39,6 +39,9 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
   reader's position in the commit order, so an application holding several
   readers can tell which one observes the newest state without comparing
   their unordered `RepositoryRevision`s.
+- `RetainedReader::object_batch` looks up several object records in the
+  reader's protected snapshot in one call, preserving input order and
+  duplicate keys.
 - `experimental::RepositoryProfile` groups a repository's deployment policy
   (cross-process coordination, spill placement and limits, emergency
   collection, the import cache and disk-pressure maintenance) in one value.
