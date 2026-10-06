@@ -184,6 +184,7 @@ SUITE_BUILD_SPECS["git-ingest-scheduling"] = SuiteBuildSpec(
 )
 SUITE_BUILD_SPECS["git-import-profile"] = SUITE_BUILD_SPECS["git-ingest-scheduling"]
 SUITE_BUILD_SPECS["git-closure-import-small-files"] = SUITE_BUILD_SPECS["git-closure-import"]
+SUITE_BUILD_SPECS["git-closure-import-rotation"] = SUITE_BUILD_SPECS["git-closure-import"]
 SUITE_BUILD_SPECS["git-ingest-concurrency"] = SuiteBuildSpec(
     ("build", "--release", "--features", "cli,git", "--bin", "casita"),
     "--casita-bin", "casita", relative_artifact="release/casita",

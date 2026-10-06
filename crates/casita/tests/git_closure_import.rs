@@ -560,6 +560,83 @@ async fn incremental_checks_settle_git_blobs_without_reading_them() {
     drop(imported);
 }
 
+/// Bytes this process passed to write calls, including the repository's
+/// payload, metadata and pin ledger writes. Linux only.
+fn process_written_bytes() -> Option<u64> {
+    let io = std::fs::read_to_string("/proc/self/io").ok()?;
+    io.lines()
+        .find_map(|line| line.strip_prefix("wchar:"))?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// Reset the process's peak resident set to its current one, so the next
+/// reading covers only what follows. Linux 4.0 and later.
+fn reset_peak_rss() -> bool {
+    std::fs::write("/proc/self/clear_refs", "5").is_ok()
+}
+
+/// The process's peak resident set since start or the last reset. Linux only.
+fn process_peak_rss_bytes() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let kib: u64 = status
+        .lines()
+        .find_map(|line| line.strip_prefix("VmHWM:"))?
+        .trim()
+        .strip_suffix("kB")?
+        .trim()
+        .parse()
+        .ok()?;
+    kib.checked_mul(1024)
+}
+
+thread_local! {
+    static WRITER_ROTATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Writer rotation events the importer has emitted on this thread. Imports
+/// polled by a single-threaded test runtime emit them on the test's thread.
+///
+/// The counter is the process-wide default subscriber. A thread-scoped one is
+/// not enough: with a single dispatcher, tracing caches a callsite's interest
+/// from whichever thread reaches it first, which may be another test's.
+fn writer_rotations() -> usize {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        tracing::subscriber::set_global_default(tracing_subscriber::layer::SubscriberExt::with(
+            tracing_subscriber::Registry::default(),
+            WriterRotations,
+        ))
+        .expect("no other global subscriber");
+    });
+    WRITER_ROTATIONS.with(std::cell::Cell::get)
+}
+
+/// Counts the importer's writer rotation events. Every other callsite stays
+/// disabled, so measured imports pay nothing for unrelated instrumentation.
+struct WriterRotations;
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for WriterRotations {
+    fn register_callsite(
+        &self,
+        metadata: &'static tracing::Metadata<'static>,
+    ) -> tracing::subscriber::Interest {
+        if metadata.is_event()
+            && metadata.target() == "casita::git::repository::closure_import"
+            && metadata.fields().field("rotated_writers").is_some()
+        {
+            tracing::subscriber::Interest::always()
+        } else {
+            tracing::subscriber::Interest::never()
+        }
+    }
+
+    fn on_event(&self, _: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        WRITER_ROTATIONS.with(|count| count.set(count.get() + 1));
+    }
+}
+
 /// Permanent workload: benchmark run git-closure-import. Correctness audits
 /// deliberately run outside the timed region.
 #[tokio::test]
@@ -687,9 +764,19 @@ async fn run_git_closure_benchmark<PS: casita::experimental::BlobStore, SS: Meta
             .request(vec![root.clone()])
             .with_max_buffered_bytes(budget.try_into().unwrap())
             .with_concurrency(concurrency.try_into().unwrap());
+        let rotated = writer_rotations();
+        let peak_reset = reset_peak_rss();
+        let written = process_written_bytes();
         let start = std::time::Instant::now();
         let imported = repository.import(request).await.unwrap();
         let nanos = start.elapsed().as_nanos();
+        // Sampled before the audits below, which are not part of the import.
+        // Without a reset, the peak could belong to an earlier operation.
+        let peak_rss_bytes = peak_reset.then(process_peak_rss_bytes).flatten();
+        let rotations = writer_rotations() - rotated;
+        let written_bytes = process_written_bytes()
+            .zip(written)
+            .map(|(after, before)| after - before);
         let (new, reused, reachable) = match operation {
             "cold" => (count + 2, 0, count + 2),
             "warm" => (0, 1, count + 2),
@@ -733,6 +820,8 @@ async fn run_git_closure_benchmark<PS: casita::experimental::BlobStore, SS: Meta
                 "backend": backend, "file_bytes": file_bytes, "content": content,
                 "concurrency": concurrency, "publication_batch_objects": repository.limits().max_batch_objects,
                 "max_buffered_bytes": budget, "wall_nanos": nanos,
+                "written_bytes": written_bytes, "peak_rss_bytes": peak_rss_bytes,
+                "writer_rotations": rotations,
                 "imported_objects": imported.report.imported_objects,
                 "reused_objects": imported.report.reused_objects,
                 "source_bytes": imported.report.source_bytes,
@@ -1042,3 +1131,6 @@ async fn application_import_reports_cancellation_without_retrying() {
     assert_eq!(error.kind(), casita::ErrorKind::Cancelled);
     assert_eq!(error.retry_disposition(), casita::RetryDisposition::Never);
 }
+
+#[path = "git_closure_import/rotation.rs"]
+mod rotation;

@@ -23,6 +23,24 @@ CORRECTNESS = "exact imported/reused counts and exhaustive closure verification"
 ADDED_BLOBS = {"cold": 0, "warm": 0, "subtree-delta": 1, "wide-delta": 2}
 # Every configuration that makes one sample's workload differ from another's.
 WORKLOAD = ("backend", "files", "file_bytes", "content", "packed", "concurrency", "max_buffered_bytes")
+# Per-import resource measurements. Probes that predate them, or platforms
+# without /proc, report none; such pairs are summarized by time alone.
+RESOURCES = ("written_bytes", "peak_rss_bytes")
+
+
+def rotation_expectations(value):
+    """Parse FILES=ROTATIONS pairs for the candidate's cold imports."""
+    expected = {}
+    for part in value.split(","):
+        files, separator, rotations = part.partition("=")
+        try:
+            files, rotations = int(files), int(rotations)
+        except ValueError as error:
+            raise argparse.ArgumentTypeError("expected comma-separated FILES=ROTATIONS pairs") from error
+        if not separator or files < 1 or rotations < 0 or files in expected:
+            raise argparse.ArgumentTypeError("expected distinct positive file counts and non-negative rotations")
+        expected[files] = rotations
+    return expected
 
 
 def expected_blob_witnesses(operation, files, policy):
@@ -57,13 +75,23 @@ def summarize_pairs(samples):
             baseline.append(before["wall_seconds"])
             candidate.append(after["wall_seconds"])
             reductions.append(100 * (1 - after["wall_seconds"] / before["wall_seconds"]))
-        summaries.append(dict(zip(dimensions, key), pairs=len(baseline),
+        summary = dict(zip(dimensions, key), pairs=len(baseline),
             enough_samples=len(baseline) >= 5,
             baseline_median_seconds=statistics.median(baseline),
             candidate_median_seconds=statistics.median(candidate),
             median_paired_reduction_percent=statistics.median(reductions),
             minimum_paired_reduction_percent=min(reductions),
-            maximum_paired_reduction_percent=max(reductions)))
+            maximum_paired_reduction_percent=max(reductions))
+        for resource in RESOURCES:
+            values = [(pair["baseline"].get(resource), pair["candidate"].get(resource))
+                      for pair in repetitions.values()]
+            # A zero baseline, such as a warm import that writes nothing, has no ratio.
+            if all(before is not None and after is not None and before > 0 for before, after in values):
+                summary[f"baseline_median_{resource}"] = statistics.median(before for before, _ in values)
+                summary[f"candidate_median_{resource}"] = statistics.median(after for _, after in values)
+                summary[f"median_paired_{resource}_reduction_percent"] = statistics.median(
+                    100 * (1 - after / before) for before, after in values)
+        summaries.append(summary)
     return summaries
 
 
@@ -78,6 +106,8 @@ def main(argv=None):
     parser.add_argument("--concurrency", type=positive_csv, default=[16])
     parser.add_argument("--content", choices=("repeated", "random", "mixed"), default="repeated")
     parser.add_argument("--repetitions", type=int, default=1)
+    parser.add_argument("--expected-rotations", type=rotation_expectations,
+                        help="FILES=ROTATIONS writer rotations each candidate cold import must perform")
     parser.add_argument("--probe-binary", type=pathlib.Path)
     parser.add_argument("--baseline-binary", type=pathlib.Path)
     parser.add_argument("--cpu-affinity", type=cpu_list)
@@ -126,7 +156,10 @@ def main(argv=None):
     if len(artifacts) == 2 and artifacts[0]["sha256"] == artifacts[1]["sha256"]:
         parser.error("baseline and candidate executables must have distinct hashes")
     by_variant = {artifact["variant"]: artifact for artifact in artifacts}
-    counts = args.counts or ([63, 64, 65] if args.profile == "smoke" else [63, 64, 65, 255, 256, 257, 10000])
+    counts = args.counts or ([63, 64, 65] if args.profile == "smoke" else
+                            [63, 64, 65, 255, 256, 257, 509, 510, 511, 1022, 1023, 10000])
+    if args.expected_rotations is not None and set(args.expected_rotations) != set(counts):
+        parser.error("--expected-rotations must name exactly the file counts")
     layouts = [False, True] if args.layout == "both" else [args.layout == "packed"]
     backends = ["memory", "local"] if args.backend == "both" else [args.backend]
     result = dict(schema_version=1, result_schema="casita.git-closure-import.v1", suite_id="native-git",
@@ -135,6 +168,8 @@ def main(argv=None):
                       backends=backends, file_bytes=args.file_bytes, concurrency=args.concurrency,
                       content=args.content, paired=bool(args.baseline_binary), cpu_affinity=args.cpu_affinity,
                       memory_measurement="whole-process peak RSS includes fixture creation and audits",
+                      import_memory_measurement="peak_rss_bytes is the resident high-water mark during each import, reset just before it",
+                      expected_rotations=args.expected_rotations,
                       witness_policy="each probe declares its own; blob witnesses must match it exactly",
                       spill_memory_objects=64, metadata_frontier=256,
                       repetitions=args.repetitions, timing="import only; fixture generation and exhaustive audits excluded"))
@@ -181,8 +216,17 @@ def main(argv=None):
                                 or row.get("packed") != packed or row.get("max_buffered_bytes") != budget
                                 or row.get("backend") != backend or row.get("file_bytes") != file_bytes
                                 or row.get("concurrency") != concurrency or row.get("content") != args.content
-                                or not isinstance(row.get("wall_nanos"), int) or row["wall_nanos"] <= 0):
+                                or not isinstance(row.get("wall_nanos"), int) or row["wall_nanos"] <= 0
+                                or any(row.get(resource) is not None
+                                       and (type(row[resource]) is not int or row[resource] < 0)
+                                       for resource in (*RESOURCES, "writer_rotations"))):
                             raise common.BenchmarkError("wrong benchmark configuration or correctness gate")
+                        if (args.expected_rotations is not None and variant == "candidate"
+                                and row["operation"] == "cold"
+                                and row.get("writer_rotations") != args.expected_rotations[count]):
+                            raise common.BenchmarkError(
+                                f"cold import of {count} files rotated its writer {row.get('writer_rotations')!r} "
+                                f"times, expected {args.expected_rotations[count]}")
                         expected = {"cold": (count + 2, 0), "warm": (0, 1),
                                     "subtree-delta": (2, 1), "wide-delta": (2, count)}[row["operation"]]
                         if ((row.get("imported_objects"), row.get("reused_objects")) != expected

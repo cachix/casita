@@ -205,8 +205,10 @@ impl<PS: BlobStore, SS: MetadataStore> BackendImporter<Repository<PS, SS>> for G
         repository: &Repository<PS, SS>,
     ) -> Result<Self::Report, Self::Error> {
         self.cancellation.check()?;
-        let session = repository.mutation_session().await?;
-        let report = crate::git::repository::closure_import::import(&session, &self).await?;
+        let mut writer = crate::git::repository::closure_import::ImportWriter::owned(
+            repository.mutation_session().await?,
+        );
+        let report = crate::git::repository::closure_import::import(&mut writer, &self).await?;
         let reader = repository.owned_read_hold().await?;
         Ok(GitClosureImportOutcome { report, reader })
     }
@@ -251,6 +253,7 @@ impl<'session, PS: BlobStore, SS: MetadataStore> Importer<crate::MutationSession
         self,
         session: &crate::MutationSession<'session, PS, SS>,
     ) -> Result<Self::Report, Self::Error> {
-        crate::git::repository::closure_import::import(session, &self).await
+        let mut writer = crate::git::repository::closure_import::ImportWriter::Borrowed(session);
+        crate::git::repository::closure_import::import(&mut writer, &self).await
     }
 }

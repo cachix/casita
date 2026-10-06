@@ -133,6 +133,12 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Changed
 
+- A `GitClosureImport` run through `Repository::import` replaces its mutation
+  writer once more objects follow every eight object publications, so objects
+  published earlier stay protected by one read hold instead of accumulating in
+  a single pin. A local 131,072-file import's peak RSS fell by a median 27%,
+  with import time unchanged; a single rotation costs about 13 MiB. Imports
+  into a caller's `MutationSession` keep that session.
 - Chunk hashing batches up to four chunks and 1 MiB per blocking job;
   larger individual chunks run alone. A lone chunk of at most 4 KiB
   is hashed inline.

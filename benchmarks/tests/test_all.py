@@ -35,6 +35,26 @@ class AllSuiteTests(unittest.TestCase):
         self.assertEqual(workload[workload.index("--counts") + 1], "16384")
         self.assertEqual(workload[workload.index("--file-bytes") + 1], "64")
 
+    def test_rotation_closure_imports_straddle_the_first_local_writer_rotation(self):
+        commands = runner.build_commands(["git-closure-import", "git-closure-import-rotation"],
+                                         pathlib.Path("/build"))
+        self.assertEqual(len(commands), 1)
+        args = runner.suite_arguments("git-closure-import-rotation", pathlib.Path("/binaries"), "smoke", 1)
+        self.assertIn("/binaries/git_closure_import", args)
+        entry, = [entry for entry in cli.entrypoints() if entry["id"] == "git-closure-import-rotation"]
+        workload = entry["default_arguments"]
+        self.assertEqual(workload[workload.index("--backend") + 1], "local")
+        # The probe counts the candidate's actual rotations, and the suite
+        # fails unless every cold import matches its expectation.
+        from benchmarks.suites.git_closure_import import rotation_expectations
+        counts = [int(count) for count in workload[workload.index("--counts") + 1].split(",")]
+        expected = rotation_expectations(
+            workload[workload.index("--expected-rotations") + 1])
+        self.assertEqual(set(expected), set(counts))
+        self.assertTrue(any(expected[count] == 0 and expected.get(count + 1) == 1 for count in counts),
+                        expected)
+        self.assertTrue(any(rotations > 1 for rotations in expected.values()), expected)
+
     def test_git_closure_audit_builds_and_receives_its_custom_format_probe(self):
         commands = runner.build_commands(["git-closure-audit"], pathlib.Path("/build"))
         self.assertEqual(len(commands), 1)

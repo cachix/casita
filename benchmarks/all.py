@@ -37,6 +37,7 @@ SMOKE = {
     "output-import": ["--profile", "smoke"],
     "git-closure-import": ["--profile", "smoke"],
     "git-closure-import-small-files": ["--profile", "smoke"],
+    "git-closure-import-rotation": ["--profile", "smoke"],
     "git-closure-audit": ["--profile", "smoke"],
     "git-import-profile": ["--profile", "smoke"],
     "git-blob-file": ["--profile", "smoke"],

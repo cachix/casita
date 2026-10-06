@@ -17,13 +17,67 @@ use crate::importers::{
     CancellationCheck, GitClosureImport, GitClosureImportError, GitClosureImportReport,
 };
 use crate::metadata::MetadataStore;
-use crate::repository::{MutationSession, PendingGitWitnesses, RepositoryError};
+use crate::repository::{
+    MutationSession, OwnedRetentionHold, PendingGitWitnesses, RepositoryError,
+};
 use crate::spill::{SpillSet, TraversalQueue};
 
 const FRONTIER: usize = 256;
 const PACK_CACHE_BYTES: usize = 16 * 1024 * 1024;
+const PUBLICATIONS_PER_WRITER: usize = 8;
 
 type Result<T> = std::result::Result<T, GitClosureImportError>;
+
+/// Only an importer-owned session may release its accumulated resources.
+/// A supplied session promises to retain the imported objects after return.
+pub(crate) enum ImportWriter<'session, 'repository, PS, SS> {
+    Owned(Box<OwnedWriter<'repository, PS, SS>>),
+    Borrowed(&'session MutationSession<'repository, PS, SS>),
+}
+
+pub(crate) struct OwnedWriter<'repository, PS, SS> {
+    session: MutationSession<'repository, PS, SS>,
+    /// Protects every object published by the writers this one replaced.
+    published: Option<OwnedRetentionHold<PS, SS>>,
+    rotations: usize,
+}
+
+impl<'repository, PS: BlobStore, SS: MetadataStore> ImportWriter<'_, 'repository, PS, SS> {
+    pub(crate) fn owned(session: MutationSession<'repository, PS, SS>) -> Self {
+        Self::Owned(Box::new(OwnedWriter {
+            session,
+            published: None,
+            rotations: 0,
+        }))
+    }
+
+    fn session(&self) -> &MutationSession<'repository, PS, SS> {
+        match self {
+            Self::Owned(owned) => &owned.session,
+            Self::Borrowed(session) => session,
+        }
+    }
+
+    fn owns_session(&self) -> bool {
+        matches!(self, Self::Owned(_))
+    }
+
+    async fn rotate(&mut self) -> Result<()> {
+        if let Self::Owned(owned) = self {
+            // Protect every publication before releasing its writer. Keep the
+            // old hold too until admission and replacement both succeed.
+            let retained = owned.session.repository().owned_read_hold().await?;
+            owned.session.rotate().await?;
+            owned.published = Some(retained);
+            owned.rotations += 1;
+            tracing::debug!(
+                rotated_writers = owned.rotations,
+                "rotated the Git closure import writer"
+            );
+        }
+        Ok(())
+    }
+}
 
 fn source_error(error: impl std::fmt::Display) -> GitClosureImportError {
     GitClosureImportError::Source(error.to_string())
@@ -160,11 +214,11 @@ impl Source {
 }
 
 pub(crate) async fn import<PS: BlobStore, SS: MetadataStore>(
-    session: &MutationSession<'_, PS, SS>,
+    writer: &mut ImportWriter<'_, '_, PS, SS>,
     request: &GitClosureImport,
 ) -> Result<GitClosureImportReport> {
     request.cancellation.check()?;
-    let repository = session.repository();
+    let repository = writer.session().repository().clone();
     let limits = repository.limits();
     if limits.max_batch_objects == 0 {
         return Err(RepositoryError::LimitExceeded(
@@ -218,6 +272,7 @@ pub(crate) async fn import<PS: BlobStore, SS: MetadataStore>(
     let mut source: Option<Source> = None;
     let mut staged = Vec::new();
     let mut staged_links = 0usize;
+    let mut publications = 0usize;
     loop {
         request.cancellation.check()?;
         let mut keys = Vec::new();
@@ -363,6 +418,18 @@ pub(crate) async fn import<PS: BlobStore, SS: MetadataStore>(
                     .checked_add(body.len() as u64)
                     .ok_or_else(|| source_error("imported byte count overflow"))?;
             }
+            if writer.owns_session() && publications >= PUBLICATIONS_PER_WRITER {
+                // The previous decoded group was fully published. Consuming
+                // even the empty vector ends its staged-object borrow before
+                // replacing the writer. Defer this until more objects arrive
+                // to avoid a trailing empty writer at an exact boundary.
+                debug_assert!(staged.is_empty());
+                drop(staged);
+                writer.rotate().await?;
+                staged = Vec::new();
+                publications = 0;
+            }
+            let session = writer.session();
             // Drain every active writer before publication: a payload flush can
             // wait on a writer, and must not prevent that writer being polled.
             let objects: Vec<_> = futures::stream::iter(decoded)
@@ -387,13 +454,27 @@ pub(crate) async fn import<PS: BlobStore, SS: MetadataStore>(
                         .publish_unrooted(std::mem::take(&mut staged))
                         .await?;
                     staged_links = 0;
+                    publications += 1;
                 }
+            }
+            if writer.owns_session()
+                && publications >= PUBLICATIONS_PER_WRITER
+                && !staged.is_empty()
+            {
+                // A decoded group can straddle a publication boundary. Drain
+                // its tail before rotation; no staged borrow may cross it.
+                request.cancellation.check()?;
+                session
+                    .publish_unrooted(std::mem::take(&mut staged))
+                    .await?;
+                staged_links = 0;
+                publications += 1;
             }
         }
     }
     if !staged.is_empty() {
         request.cancellation.check()?;
-        session.publish_unrooted(staged).await?;
+        writer.session().publish_unrooted(staged).await?;
     }
     // Only now does every discovered native record have all its canonical
     // dependencies. Built-in formats add no rules beyond construction, and a
@@ -401,7 +482,10 @@ pub(crate) async fn import<PS: BlobStore, SS: MetadataStore>(
     // Mark in bounded batches without rereading payloads or retaining an O(N)
     // in-memory inventory. A failed discovery cannot publish any false marks.
     request.cancellation.check()?;
-    let proof = session.prove_git_closures(&request.roots, pending).await?;
+    let proof = writer
+        .session()
+        .prove_git_closures(&request.roots, pending)
+        .await?;
     request.cancellation.check()?;
     proof.publish().await?;
     Ok(report)

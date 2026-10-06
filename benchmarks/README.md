@@ -2822,9 +2822,23 @@ resulting closure outside the timed region. The suite is included in
 `benchmark all`; both memory and local persistent backends run by default.
 Memory cases use a 64-object publication limit; local cases use the production
 limit, recorded in each sample. Both use a 64-object in-memory spill threshold.
+The standard profile includes 509/510/511 and 1022/1023 files, plus two tree
+objects, to exercise the memory backend around eight-publication writer
+boundaries. Finishing a decoded group can extend a writer past the boundary;
+these counts use the suite's small default byte budgets. A wide tree can pin
+all its child keys at once, so these cases measure boundary overhead rather
+than asserting a fixed memory cap.
 Each sample also reports `blob_witnesses`, the stored witnesses among every
 blob imported so far, which must match the probe's declared
-[witness policy](#git-witness-policies) exactly.
+[witness policy](#git-witness-policies) exactly. On Linux, `written_bytes` is
+what the probe process passed to write calls during the import, including
+payload, metadata and pin ledger writes. `peak_rss_bytes` is its resident
+high-water mark during the import: the probe resets the mark through
+`/proc/self/clear_refs` just before each import and reports none if it cannot,
+so the peak starts from what the fixture and earlier operations left resident.
+Paired summaries report both when every pair has them. `writer_rotations`
+counts the writer rotations each import performed, from the importer's
+`tracing` events.
 
 ```sh
 benchmark run git-closure-import --profile smoke --output /tmp/git-closure-smoke.json
@@ -2894,6 +2908,26 @@ paired reduction of 31% (23% to 44%), as the stored blob witnesses fell from
 16384 to none. Wide deltas probe every present blob either way and stayed
 within noise: a median 3% reduction, with pairs from 26% slower to 9% faster.
 The host was shared.
+
+`git-closure-import-rotation` imports 1 KiB files from a loose source into a
+local repository. An owned writer rotates when a decoded group arrives after
+eight publications of the default 4,096 objects. Here the 32,766th file ends
+the eighth, its 16-object group is published whole, and the 32,769th file
+starts the next group, so 32,768 files never rotate and 32,769 rotate once.
+65,536 and 131,072 files rotate once and three times. `--expected-rotations`
+fails the run unless every candidate cold import performs exactly these
+rotations, so the candidate must emit the importer's rotation events. It uses
+the same probe and other correctness gates, and is included in `benchmark all`
+and revision comparisons. One repetition takes about 15 minutes per build.
+After three rotations at 131,072 files, the import's peak RSS was a median
+27% lower, lower in every pair, it wrote 1% fewer bytes, and its time was
+unchanged. A single rotation at 32,769 files raised peak RSS by a median 7%;
+the [rotation report](reports/2026-10-08-git-closure-rotation/README.md) has
+the paired results on both sides of the boundary.
+
+```sh
+benchmark run git-closure-import-rotation --repetitions 5 --baseline-binary /path/to/baseline --probe-binary /path/to/candidate --no-build --output /tmp/git-closure-rotation.json
+```
 
 ## Git closure audit
 

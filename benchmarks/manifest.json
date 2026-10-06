@@ -690,6 +690,16 @@
       "correctness": ["exact imported and reused object counts", "blob witnesses exactly as each probe's declared witness policy requires", "exhaustive closure verification", "zero source bytes for warm imports"]
     },
     {
+      "id": "git-closure-import-rotation",
+      "suite_id": "native-git",
+      "title": "Local Git closure imports on both sides of the first writer rotation, and imports that rotate once and three times",
+      "kind": "module",
+      "target": "benchmarks.suites.git_closure_import",
+      "default_arguments": ["--counts", "32768,32769,65536,131072", "--expected-rotations", "32768=0,32769=1,65536=1,131072=3", "--file-bytes", "1024", "--max-buffered-bytes", "67108864", "--concurrency", "16", "--layout", "loose", "--backend", "local"],
+      "profiles": ["smoke", "standard"],
+      "correctness": ["exact imported and reused object counts", "blob witnesses exactly as each probe's declared witness policy requires", "exhaustive closure verification", "zero source bytes for warm imports", "exact writer rotations for each candidate cold import"]
+    },
+    {
       "id": "git-closure-audit",
       "suite_id": "native-git",
       "title": "Git closure import audits of linear histories with built-in and custom registries",
