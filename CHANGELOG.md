@@ -49,6 +49,14 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
   keeps the snapshot's immutable objects protected from collection without
   holding its metadata snapshot, so local WAL checkpoints can proceed while
   the guard is alive.
+- `RetainedReader::object_reader` returns an `ObjectReader` that shares the
+  reader's collection protection but looks objects up with short metadata
+  reads instead of a held snapshot. It never returns objects published after
+  the reader's generation. Local and in-memory metadata support it; other
+  backends report `ErrorKind::Unsupported` when it is opened. Custom stores opt
+  in with `experimental::MetadataStore::object_batch_created_through` and
+  `supports_object_reads_created_through`; without them it fails with
+  `experimental::MetadataError::UnsupportedObjectReads`.
 - `experimental::RepositoryProfile` groups a repository's deployment policy
   (cross-process coordination, spill placement and limits, emergency
   collection, the import cache and disk-pressure maintenance) in one value.

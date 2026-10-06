@@ -25,6 +25,9 @@ use crate::{
     MetadataChange, MetadataCheck, MetadataCommitResult, MetadataCursor, MetadataKey, MetadataPage,
 };
 
+mod objects;
+pub use objects::ObjectReader;
+
 /// A consistent view of object records, roots, and application metadata. Holding this reader
 /// keeps one metadata revision stable, but does not retain payloads.
 /// Release readers when finished so old metadata files and WAL pages can be reclaimed.
@@ -142,6 +145,28 @@ pub struct RetainedReader {
 }
 
 impl RetainedReader {
+    /// Detach immutable-object reads from this metadata snapshot. The returned
+    /// reader shares existing collection protection, admits no additional pin,
+    /// and never exposes objects born after this reader's generation. It uses
+    /// short metadata transactions, allowing checkpoints between operations.
+    /// Supported by local and in-memory metadata backends; others fail with
+    /// [`ErrorKind::Unsupported`].
+    pub fn object_reader(&self) -> Result<ObjectReader, Error> {
+        if !self
+            .hold
+            .repository()
+            .metadata()
+            .supports_object_reads_created_through()
+        {
+            return Err(MetadataError::UnsupportedObjectReads.into_application_error());
+        }
+        Ok(ObjectReader::new(
+            self.hold.repository().clone(),
+            self.generation()?,
+            self.hold.data_protection(),
+        ))
+    }
+
     /// Keep this snapshot's immutable objects alive independently of its
     /// metadata view. Drop the reader and its payload readers to release their
     /// snapshots; this guard alone does not block database checkpoints.
@@ -158,40 +183,11 @@ impl RetainedReader {
         let Some(record) = self.hold.object(key).await.app()? else {
             return Ok(None);
         };
-        let opened = self
-            .hold
-            .repository()
-            .payloads()
-            .open_verified(&record.payload(), record.payload_size())
-            .await;
-        let inner = match opened {
-            Ok(Some(inner)) => inner,
-            result => {
-                // Only missing or unauthenticated bytes say anything about
-                // stored content; a busy or throttled backend does not.
-                let damaged = match &result {
-                    Ok(_) => true,
-                    Err(error) => crate::blob::is_damaged_payload_error(error),
-                };
-                if damaged && let Some(store) = &self.hold.repository().nar_store {
-                    store.record_read_failure().await;
-                }
-                return Err(match result {
-                    Err(error) => RepositoryError::Payload(error),
-                    _ => RepositoryError::MissingPayload(record.payload()),
-                }
-                .into_application_error());
-            }
-        };
-        Ok(Some(VerifiedReader {
-            record,
-            inner,
-            _hold: Some(self.hold.clone()),
-            nar_health: crate::nar::store::ReadHealth::new(
-                self.hold.repository().nar_store.clone(),
-            ),
-        }))
+        open_verified_record(self.hold.repository(), record, self.hold.clone())
+            .await
+            .map(Some)
     }
+
     pub(crate) fn new(hold: BuiltinRetentionHold) -> Self {
         Self {
             hold: Arc::new(hold),
@@ -459,6 +455,42 @@ impl IntegrityReport {
     }
 }
 
+async fn open_verified_record(
+    repository: &BuiltinRepository,
+    record: ObjectRecord,
+    protection: Arc<dyn Send + Sync>,
+) -> Result<VerifiedReader, Error> {
+    let opened = repository
+        .payloads()
+        .open_verified(&record.payload(), record.payload_size())
+        .await;
+    let inner = match opened {
+        Ok(Some(inner)) => inner,
+        result => {
+            // Only missing or unauthenticated bytes say anything about
+            // stored content; a busy or throttled backend does not.
+            let damaged = match &result {
+                Ok(_) => true,
+                Err(error) => crate::blob::is_damaged_payload_error(error),
+            };
+            if damaged && let Some(store) = &repository.nar_store {
+                store.record_read_failure().await;
+            }
+            return Err(match result {
+                Err(error) => RepositoryError::Payload(error),
+                _ => RepositoryError::MissingPayload(record.payload()),
+            }
+            .into_application_error());
+        }
+    };
+    Ok(VerifiedReader {
+        record,
+        inner,
+        _hold: Some(protection),
+        nar_health: crate::nar::store::ReadHealth::new(repository.nar_store.clone()),
+    })
+}
+
 /// A seekable payload reader with collection protection.
 ///
 /// Implements Tokio's [`AsyncRead`] and [`AsyncSeek`]. Ordinary opens retain the
@@ -468,7 +500,7 @@ pub struct Reader {
     record: ObjectRecord,
     inner: Box<dyn BlobReader>,
     // Drop the physical reader before releasing the collection hold.
-    _hold: Option<Arc<BuiltinRetentionHold>>,
+    _hold: Option<Arc<dyn Send + Sync>>,
     nar_health: crate::nar::store::ReadHealth,
 }
 
@@ -479,7 +511,7 @@ pub struct Reader {
 pub struct VerifiedReader {
     record: ObjectRecord,
     inner: Box<dyn crate::blob::BlobStreamReader>,
-    _hold: Option<Arc<BuiltinRetentionHold>>,
+    _hold: Option<Arc<dyn Send + Sync>>,
     nar_health: crate::nar::store::ReadHealth,
 }
 
@@ -1053,6 +1085,26 @@ mod tests {
             reader.generation().unwrap_err().kind(),
             ErrorKind::Unsupported
         );
+    }
+
+    #[cfg(feature = "s3")]
+    #[tokio::test]
+    async fn object_readers_require_generation_bounded_reads() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Arc::new(chroma_storage::Storage::Local(
+            chroma_storage::local::LocalStorage::new(directory.path().to_str().unwrap()),
+        ));
+        let metadata = crate::metadata::Wal3MetadataStore::open(storage, "casita/state", "reader")
+            .await
+            .unwrap();
+        let repository = Repository {
+            inner: CoreRepository::new(crate::blob::MemoryBlobStore::new(), metadata)
+                .into_builtin(),
+        };
+        let retained = repository.retained_reader().await.unwrap();
+        let error = retained.object_reader().err().unwrap();
+        assert_eq!(error.kind(), ErrorKind::Unsupported);
+        assert!(error.to_string().contains("object reads"), "{error}");
     }
 
     #[tokio::test]

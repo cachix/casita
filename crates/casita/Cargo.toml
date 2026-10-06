@@ -373,3 +373,8 @@ required-features = ["ssh", "experimental"]
 name = "retained_wal"
 harness = false
 required-features = ["native", "experimental"]
+
+[[bench]]
+name = "object_reads"
+harness = false
+required-features = ["native", "experimental"]

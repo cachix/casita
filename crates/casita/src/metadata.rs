@@ -323,6 +323,10 @@ pub enum MetadataError {
     /// The selected backend does not implement mutable application records.
     #[error("mutable metadata is unsupported by this backend")]
     UnsupportedMetadata,
+    /// The selected backend cannot read immutable objects by generation
+    /// without a metadata snapshot.
+    #[error("generation-bounded object reads are unsupported by this backend")]
+    UnsupportedObjectReads,
     /// The state engine could not durably commit because its filesystem is full.
     #[error("state storage is full")]
     StorageFull,
@@ -641,6 +645,11 @@ pub trait MetadataStore: Send + Sync {
         false
     }
 
+    /// Whether this store implements [`Self::object_batch_created_through`].
+    fn supports_object_reads_created_through(&self) -> bool {
+        false
+    }
+
     /// Whether root changes also maintain the built-in retention-policy
     /// record atomically. Custom stores opt in only after implementing that
     /// invariant; opaque application-record support alone is insufficient.
@@ -676,6 +685,19 @@ pub trait MetadataStore: Send + Sync {
     ) -> Result<Vec<Option<bytes::Bytes>>, MetadataError> {
         let (snapshot, _pin) = read_snapshot(self).await?;
         snapshot.get(keys).await
+    }
+
+    /// Read immutable records born no later than `generation`, in input order.
+    /// Callers must already protect that generation against collection. This
+    /// method must not retain a metadata snapshot after returning. Local and
+    /// memory stores support it; other backends must explicitly opt in and
+    /// report it through [`Self::supports_object_reads_created_through`].
+    async fn object_batch_created_through(
+        &self,
+        _keys: &[ObjectKey],
+        _generation: u64,
+    ) -> Result<Vec<Option<ObjectRecord>>, MetadataError> {
+        Err(MetadataError::UnsupportedObjectReads)
     }
 
     /// Check current record/root values and commit without requiring a global
@@ -936,6 +958,25 @@ impl MemoryMetadataStore {
 
 #[async_trait]
 impl MetadataStore for MemoryMetadataStore {
+    async fn object_batch_created_through(
+        &self,
+        keys: &[ObjectKey],
+        generation: u64,
+    ) -> Result<Vec<Option<ObjectRecord>>, MetadataError> {
+        let state = self.state.lock().map_err(|_| MetadataError::Poisoned)?;
+        keys.iter()
+            .map(|key| {
+                let Some(record) = state.objects.get(key) else {
+                    return Ok(None);
+                };
+                let birth = state.births.get(key).ok_or_else(|| {
+                    MetadataError::Corruption(format!("missing birth generation for {key}"))
+                })?;
+                Ok((*birth <= generation).then(|| record.clone()))
+            })
+            .collect()
+    }
+
     async fn try_collection_lease(&self) -> Result<Option<RepositoryLease>, MetadataError> {
         Ok(Some(RepositoryLease::process_local()))
     }
@@ -943,6 +984,10 @@ impl MetadataStore for MemoryMetadataStore {
         false
     }
     fn supports_metadata_records(&self) -> bool {
+        true
+    }
+
+    fn supports_object_reads_created_through(&self) -> bool {
         true
     }
 

@@ -237,8 +237,8 @@ pub use path::{PathComponent, PathComponentError, SymlinkTarget, SymlinkTargetEr
 mod api;
 #[cfg(feature = "native")]
 pub use api::{
-    CollectionReport, Error, IntegrityReport, MetadataReader, ObjectRetention, Reader, Repository,
-    RetainedReader, VerifiedReader,
+    CollectionReport, Error, IntegrityReport, MetadataReader, ObjectReader, ObjectRetention,
+    Reader, Repository, RetainedReader, VerifiedReader,
 };
 #[cfg(feature = "native")]
 pub use metadata::{

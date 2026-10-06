@@ -14,9 +14,9 @@ and portable identity and filesystem types. Implementation modules remain privat
 ## Repository API
 
 With `native`, the crate exports `Repository`, `Reader`, `VerifiedReader`,
-`MetadataReader`, `RetainedReader`, `ObjectRetention`, `Error`, `ErrorKind`,
-`CollectionReport`, `IntegrityReport`, `IntegrityIssue`, `IntegrityIssueKind`,
-and `IntegrityDisposition`.
+`MetadataReader`, `RetainedReader`, `ObjectRetention`, `ObjectReader`, `Error`,
+`ErrorKind`, `CollectionReport`, `IntegrityReport`, `IntegrityIssue`,
+`IntegrityIssueKind`, and `IntegrityDisposition`.
 
 | Area | `Repository` methods |
 |---|---|
@@ -77,6 +77,14 @@ every immutable object at the snapshot's generation protected from collection
 without that snapshot. Drop the reader and its payload readers, and open a
 fresh reader for later reads. On remote backends the guard holds a durable pin,
 like the reader.
+
+`object_reader` returns an `ObjectReader` that shares the same protection and
+reads immutable objects through short metadata queries instead of a held
+snapshot. It never returns objects published after the reader's generation and
+opens protected `Reader` and `VerifiedReader` streams. Roots and application
+metadata still require the retained reader. Local and in-memory metadata
+support it; on other backends `object_reader` fails with
+`ErrorKind::Unsupported`.
 
 `set_root` unconditionally creates or replaces a name after verifying the
 complete target graph. `compare_and_set_root(name, expected, target)` publishes

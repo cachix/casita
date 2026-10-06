@@ -288,6 +288,14 @@ idempotent object inserts preserve their creation generation. Unsupported
 generation methods fail closed instead of retaining future garbage indefinitely.
 Lazy snapshots also report immutable files through `retention_resources()`.
 
+`RetainedReader::object_reader` additionally requires
+`object_batch_created_through(keys, generation)`. It returns immutable records
+born no later than `generation`, in input order, using short reads that hold no
+metadata snapshot after returning. A store that implements it also returns
+`true` from `supports_object_reads_created_through()`. The defaults fail with
+`MetadataError::UnsupportedObjectReads`, so `object_reader` reports
+`ErrorKind::Unsupported`. Wrappers forward both methods.
+
 `DataPinLease` protects scoped reads and staged writes while collection proceeds.
 `RepositoryLease` is collector-only ownership returned by `try_collection_lease()`.
 Both `try_collection_lease()` and `coordinates_payload_catalog()` are required:
