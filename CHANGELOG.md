@@ -45,6 +45,10 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 - `RetainedReader::validated_closures` reports which objects have a
   completeness record in the protected snapshot, without traversing their
   graphs. `false` means only that no record exists.
+- `RetainedReader::retain_objects` returns an `ObjectRetention` guard that
+  keeps the snapshot's immutable objects protected from collection without
+  holding its metadata snapshot, so local WAL checkpoints can proceed while
+  the guard is alive.
 - `experimental::RepositoryProfile` groups a repository's deployment policy
   (cross-process coordination, spill placement and limits, emergency
   collection, the import cache and disk-pressure maintenance) in one value.

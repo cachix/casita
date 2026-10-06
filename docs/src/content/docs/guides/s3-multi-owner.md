@@ -32,6 +32,7 @@ Named roots retain their complete graphs. Online pins protect active work:
 | Read API | Retention scope |
 | --- | --- |
 | `retained_reader` | The whole snapshot at its generation, including data from other owners. It can still resolve names removed later. |
+| `RetainedReader::retain_objects` | The same objects as its reader, without the reader's metadata snapshot. |
 | `open`, `open_verified` | Only the selected object's closure. Unrelated data stays collectible. |
 
 Pins survive root removal and dropping the repository handle. Process death

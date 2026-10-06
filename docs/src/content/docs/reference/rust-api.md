@@ -14,7 +14,7 @@ and portable identity and filesystem types. Implementation modules remain privat
 ## Repository API
 
 With `native`, the crate exports `Repository`, `Reader`, `VerifiedReader`,
-`MetadataReader`, `RetainedReader`, `Error`, `ErrorKind`,
+`MetadataReader`, `RetainedReader`, `ObjectRetention`, `Error`, `ErrorKind`,
 `CollectionReport`, `IntegrityReport`, `IntegrityIssue`, `IntegrityIssueKind`,
 and `IntegrityDisposition`.
 
@@ -69,6 +69,14 @@ snapshot without traversing their graphs; `false` means only that no record
 exists. Imports record the directories, trees, commits, and tags they construct,
 and `publish_closures` and root publication record their targets. Raw and Git
 blobs usually have none.
+
+On local repositories, a retained reader's snapshot holds a database read
+transaction that blocks WAL checkpoints while it lives, as do payload readers
+opened from it. `retain_objects` returns an `ObjectRetention` guard that keeps
+every immutable object at the snapshot's generation protected from collection
+without that snapshot. Drop the reader and its payload readers, and open a
+fresh reader for later reads. On remote backends the guard holds a durable pin,
+like the reader.
 
 `set_root` unconditionally creates or replaces a name after verifying the
 complete target graph. `compare_and_set_root(name, expected, target)` publishes

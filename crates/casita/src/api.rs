@@ -134,13 +134,23 @@ async fn scan_snapshot(
 /// session retains the snapshot's content until it and all payload readers
 /// opened from it are dropped. Local sessions share one process-owned pin;
 /// process death releases ownership safely. Remote backends use durable pins.
-/// Release it promptly after the read operation.
+/// Release it promptly after the read operation; [`Self::retain_objects`]
+/// keeps its collection protection without the snapshot.
 #[derive(Clone)]
 pub struct RetainedReader {
     pub(crate) hold: Arc<BuiltinRetentionHold>,
 }
 
 impl RetainedReader {
+    /// Keep this snapshot's immutable objects alive independently of its
+    /// metadata view. Drop the reader and its payload readers to release their
+    /// snapshots; this guard alone does not block database checkpoints.
+    pub fn retain_objects(&self) -> ObjectRetention {
+        ObjectRetention {
+            _protection: self.hold.data_protection(),
+        }
+    }
+
     /// Open a sequential payload reader that authenticates bytes before use.
     /// Writes generate the required proof metadata before publication. Missing
     /// or corrupt proofs fail verification; reads never fall back to EOF only.
@@ -283,6 +293,19 @@ impl RetainedReader {
             ),
         }))
     }
+}
+
+/// Collection protection for the immutable objects visible to a retained reader.
+/// Like the reader, it protects every immutable object at the snapshot's
+/// generation, including other owners' data, through the same pin: shared and
+/// process-owned locally, durable on remote backends, where process death does
+/// not release it. Unlike the reader, this guard does not keep a metadata
+/// snapshot open. Open a fresh [`RetainedReader`] for later reads; historical
+/// roots and application metadata require keeping the original reader instead.
+/// Clones share protection.
+#[derive(Clone)]
+pub struct ObjectRetention {
+    _protection: Arc<dyn Send + Sync>,
 }
 
 type BuiltinRepository = CoreRepository<Arc<dyn BlobGc>, Arc<dyn MetadataStore>>;
