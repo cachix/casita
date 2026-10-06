@@ -194,6 +194,155 @@ pub(super) fn parse(params: Params) -> Result<ImportParams, Error> {
     })
 }
 
+pub(super) enum ImportRequest {
+    Single(ImportParams),
+    Batch(Vec<ImportParams>),
+}
+
+pub(super) fn parse_request(params: Params) -> Result<ImportRequest, Error> {
+    match super::request_items(params)? {
+        super::RequestItems::Single(params) => parse(params).map(ImportRequest::Single),
+        super::RequestItems::Batch(items) => items
+            .into_iter()
+            .map(parse)
+            .collect::<Result<Vec<_>, _>>()
+            .map(ImportRequest::Batch),
+    }
+}
+
+pub(super) async fn run_request<PS: BlobGc + 'static, SS: MetadataStore + 'static>(
+    repository: Arc<Repository<PS, SS>>,
+    request: ImportRequest,
+) -> Result<Value, Error> {
+    let ImportRequest::Batch(items) = request else {
+        let ImportRequest::Single(params) = request else {
+            unreachable!()
+        };
+        return run(repository, params).await;
+    };
+    // Validate every request before opening sources or staging bytes.
+    let mut names = std::collections::HashSet::new();
+    for item in &items {
+        let name = match item {
+            ImportParams::Blob { root, .. }
+            | ImportParams::Filesystem { root, .. }
+            | ImportParams::Tar { root, .. } => root,
+            _ => {
+                return Err(error(
+                    "unsupported_importer",
+                    None,
+                    None,
+                    "batch import supports blob, filesystem, and tar",
+                ));
+            }
+        };
+        let name = root(name)?;
+        if !names.insert(name) {
+            return Err(Error::invalid_params("duplicate batch root"));
+        }
+    }
+    if items.len() > repository.limits().max_root_changes {
+        return Err(Error::invalid_params("batch exceeds mutation root limit"));
+    }
+    if items.is_empty() {
+        return Ok(Value::Array(Vec::new()));
+    }
+    let session = repository.mutation_session().await.map_err(failed)?;
+    let mut objects = Vec::new();
+    let mut changes = Vec::new();
+    let mut results = Vec::new();
+    for item in items {
+        let (staged, result) = match item {
+            ImportParams::Blob {
+                path, root: name, ..
+            } => {
+                let reader = tokio::fs::File::open(path).await.map_err(failed)?;
+                let staged = casita::import::BlobImport::new(reader, root(&name)?)
+                    .stage(&session)
+                    .await
+                    .map_err(failed)?;
+                let result = json!({"object": staged.report.to_string()});
+                (staged, result)
+            }
+            ImportParams::Filesystem {
+                path,
+                root: name,
+                options,
+            } => {
+                let mut request = casita::import::FilesystemImport::new(path, root(&name)?)
+                    .reread(options.reread);
+                if let Some(exclude) = options.exclude {
+                    request = request.exclude(exclude);
+                }
+                let staged = request.stage(&session).await.map_err(failed)?;
+                let result = json!({"object": staged.report.to_string()});
+                (staged, result)
+            }
+            ImportParams::Tar {
+                path,
+                root: name,
+                options,
+            } => {
+                let reader = tar_reader(path, &options).await?;
+                let staged = casita::import::TarImport::new(reader, root(&name)?)
+                    .with_limits(options.limits.resolve())
+                    .stage(&session)
+                    .await
+                    .map_err(failed)?;
+                let result = tar_result(&staged.report);
+                let staged = casita::import::StagedImport {
+                    report: staged.report.root,
+                    objects: staged.objects,
+                    root_change: staged.root_change,
+                    metadata_changes: staged.metadata_changes,
+                };
+                (staged, result)
+            }
+            _ => unreachable!("batch importers were validated"),
+        };
+        objects.extend(staged.objects);
+        if objects.len() > repository.limits().max_batch_objects {
+            return Err(failed("batch exceeds mutation object limit"));
+        }
+        changes.push(staged.root_change);
+        results.push(result);
+    }
+    if !changes.is_empty() {
+        session.publish(objects, changes).await.map_err(failed)?;
+    }
+    Ok(Value::Array(results))
+}
+
+async fn tar_reader(
+    path: PathBuf,
+    options: &TarOptions,
+) -> Result<Box<dyn tokio::io::AsyncRead + Unpin + Send>, Error> {
+    let reader = tokio::fs::File::open(path).await.map_err(failed)?;
+    Ok(match options.compression {
+        Compression::None => Box::new(reader),
+        Compression::Gzip => {
+            let limited = BoundedReader {
+                inner: reader,
+                remaining: options.max_compressed_bytes.unwrap_or(1 << 40),
+            };
+            let mut decoder = async_compression::tokio::bufread::GzipDecoder::new(
+                tokio::io::BufReader::new(limited),
+            );
+            decoder.multiple_members(true);
+            Box::new(decoder)
+        }
+    })
+}
+
+fn tar_result(report: &casita::TarImportReport) -> Value {
+    json!({
+        "object": report.root.to_string(), "archive_bytes": report.archive_bytes,
+        "entries": report.entries, "files": report.files, "directories": report.directories,
+        "symlinks": report.symlinks, "hardlinks": report.hardlinks,
+        "file_bytes": report.file_bytes, "sparse_expansion_bytes": report.sparse_expansion_bytes,
+    })
+}
+
 // Validate options independently of required parameters, so unsupported
 // requests are distinguishable even when the source does not exist. Testing
 // partial defaulted objects also identifies the offending typed option.
@@ -441,35 +590,11 @@ where
             options,
         } => {
             let name = root(&name)?;
-            let reader = tokio::fs::File::open(path).await.map_err(failed)?;
-            let reader: Box<dyn tokio::io::AsyncRead + Unpin + Send> = match options.compression {
-                Compression::None => Box::new(reader),
-                Compression::Gzip => {
-                    let limited = BoundedReader {
-                        inner: reader,
-                        remaining: options.max_compressed_bytes.unwrap_or(1 << 40),
-                    };
-                    let mut decoder = async_compression::tokio::bufread::GzipDecoder::new(
-                        tokio::io::BufReader::new(limited),
-                    );
-                    decoder.multiple_members(true);
-                    Box::new(decoder)
-                }
-            };
+            let reader = tar_reader(path, &options).await?;
             let request =
                 casita::import::TarImport::new(reader, name).with_limits(options.limits.resolve());
             let report = repository.import(request).await.map_err(failed)?;
-            Ok(json!({
-                "object": report.root.to_string(),
-                "archive_bytes": report.archive_bytes,
-                "entries": report.entries,
-                "files": report.files,
-                "directories": report.directories,
-                "symlinks": report.symlinks,
-                "hardlinks": report.hardlinks,
-                "file_bytes": report.file_bytes,
-                "sparse_expansion_bytes": report.sparse_expansion_bytes,
-            }))
+            Ok(tar_result(&report))
         }
         ImportParams::Casitar {
             path,

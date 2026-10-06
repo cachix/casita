@@ -28,6 +28,65 @@ pub(super) async fn run<PS: BlobGc + 'static, SS: MetadataStore + 'static>(
     repository: Arc<Repository<PS, SS>>,
     params: Params,
 ) -> Result<Value, Error> {
+    match super::request_items(params)? {
+        super::RequestItems::Single(params) => run_one(repository, params).await,
+        super::RequestItems::Batch(items) => {
+            let requests = items
+                .into_iter()
+                .map(parse)
+                .collect::<Result<Vec<_>, _>>()?;
+            if requests.is_empty() {
+                return Ok(Value::Array(Vec::new()));
+            }
+            let reader = repository
+                .retained_reader()
+                .await
+                .map_err(|e| error("execution_failure", None, None, e.to_string()))?;
+            let mut results = Vec::with_capacity(requests.len());
+            for params in requests {
+                let root = RootName::try_from(params.root.as_str()).unwrap();
+                let result = restore(&repository, &reader, &params, root)
+                    .await
+                    .map_err(|e| {
+                        error(
+                            "execution_failure",
+                            Some(&params.importer),
+                            None,
+                            e.to_string(),
+                        )
+                    })?;
+                results.push(result);
+            }
+            Ok(Value::Array(results))
+        }
+    }
+}
+
+fn parse(params: Params) -> Result<RestoreParams, Error> {
+    let params: RestoreParams = params.parse()?;
+    if !super::import::IMPORTERS.contains(&params.importer.as_str()) {
+        return Err(error(
+            "unsupported_importer",
+            Some(&params.importer),
+            None,
+            "unsupported restore importer",
+        ));
+    }
+    RootName::try_from(params.root.as_str()).map_err(|e| {
+        error(
+            "invalid_parameters",
+            Some(&params.importer),
+            None,
+            e.to_string(),
+        )
+    })?;
+    Ok(params)
+}
+
+async fn run_one<PS: BlobGc + 'static, SS: MetadataStore + 'static>(
+    repository: Arc<Repository<PS, SS>>,
+    params: Params,
+) -> Result<Value, Error> {
     let importer = match &params {
         Params::Map(v) => v
             .get("importer")
@@ -50,16 +109,22 @@ pub(super) async fn run<PS: BlobGc + 'static, SS: MetadataStore + 'static>(
     let failed = |e: Box<dyn std::error::Error + Send + Sync>| {
         error("execution_failure", Some(&importer), None, e.to_string())
     };
-    restore(&repository, &params, root).await.map_err(failed)
+    let reader = repository
+        .retained_reader()
+        .await
+        .map_err(|e| failed(Box::new(e)))?;
+    restore(&repository, &reader, &params, root)
+        .await
+        .map_err(failed)
 }
 
 type Failure = Box<dyn std::error::Error + Send + Sync>;
 async fn restore<PS: BlobGc + 'static, SS: MetadataStore + 'static>(
     repository: &Repository<PS, SS>,
+    reader: &casita::RetainedReader,
     params: &RestoreParams,
     root: RootName,
 ) -> Result<Value, Failure> {
-    let reader = repository.retained_reader().await?;
     let Some(object) = reader.root(&root).await? else {
         return Ok(json!({"present": false}));
     };
@@ -99,9 +164,9 @@ async fn restore<PS: BlobGc + 'static, SS: MetadataStore + 'static>(
             file.sync_all().await?;
         }
         #[cfg(feature = "git")]
-        "git" => restore_git(&reader, &object, &output).await?,
+        "git" => restore_git(reader, &object, &output).await?,
         "nar" | "filesystem_nar" => {
-            repository.checkout(&object, &output).await?;
+            reader.checkout(&object, &output).await?;
             result_path = output.join("root");
             // Require the envelope shape documented by the NAR adapter.
             let mut entries = tokio::fs::read_dir(&output).await?;
@@ -110,7 +175,7 @@ async fn restore<PS: BlobGc + 'static, SS: MetadataStore + 'static>(
                 return Err("root is not a NAR envelope".into());
             }
         }
-        _ => repository.checkout(&object, &output).await?,
+        _ => reader.checkout(&object, &output).await?,
     }
     if tokio::fs::symlink_metadata(&result_path).await?.is_dir() {
         // Rename cannot replace a nonempty directory, including one populated

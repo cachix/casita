@@ -3,7 +3,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream};
 
-use casita::experimental::Repository;
+use casita::experimental::{MetadataStore, Repository};
 use casita::{CasitarStreamLimits, RootName};
 
 #[tokio::test]
@@ -1079,4 +1079,231 @@ async fn nar_symlink_roots_survive_collection_and_restore_without_following_link
             std::path::Path::new("missing-target")
         );
     }
+}
+
+#[tokio::test]
+async fn batch_import_is_one_commit_and_failure_publishes_nothing() {
+    let repository = Arc::new(Repository::memory().unwrap());
+    let (client, server) = tokio::io::duplex(65536);
+    let task = tokio::spawn(super::server::serve_connection(repository.clone(), server));
+    let mut client = BufReader::new(client);
+    initialize(&mut client).await;
+    let work = tempfile::tempdir().unwrap();
+    let blob = work.path().join("blob");
+    std::fs::write(&blob, b"blob content").unwrap();
+    let filesystem = work.path().join("filesystem");
+    std::fs::create_dir(&filesystem).unwrap();
+    std::fs::write(filesystem.join("file"), b"filesystem content").unwrap();
+    let tar = work.path().join("archive.tar.gz");
+    std::fs::write(&tar, gzip_fixture(&tar_fixture().await).await).unwrap();
+    let requests = json!([
+        {"importer":"blob","path":blob,"root":"batch/blob"},
+        {"path":filesystem,"root":"batch/filesystem","options":{"reread":false}},
+        {"importer":"tar","path":tar,"root":"batch/tar","options":{"compression":"gzip"}}
+    ]);
+    let before = repository
+        .metadata()
+        .snapshot()
+        .await
+        .unwrap()
+        .generation()
+        .unwrap();
+    let response = call(&mut client, "artifact.import", requests.clone()).await;
+    assert!(response["result"].is_array(), "{response}");
+    assert_eq!(response["result"].as_array().unwrap().len(), 3);
+    assert_eq!(response["result"][2]["files"], 1);
+    let after = repository
+        .metadata()
+        .snapshot()
+        .await
+        .unwrap()
+        .generation()
+        .unwrap();
+    assert_eq!(after, before + 1);
+    let reader = repository.retained_reader().await.unwrap();
+    let original = reader
+        .root(&"batch/blob".parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    drop(reader);
+    std::fs::write(&blob, b"replacement").unwrap();
+    let mut broken = requests.as_array().unwrap().clone();
+    broken[2]["options"]["limits"] = json!({"max_file_bytes": 1});
+    let response = call(&mut client, "artifact.import", json!({"requests":broken})).await;
+    assert_eq!(
+        response["error"]["data"]["category"], "execution_failure",
+        "{response}"
+    );
+    assert_eq!(
+        repository
+            .metadata()
+            .snapshot()
+            .await
+            .unwrap()
+            .generation()
+            .unwrap(),
+        after
+    );
+    let reader = repository.retained_reader().await.unwrap();
+    assert_eq!(
+        reader.root(&"batch/blob".parse().unwrap()).await.unwrap(),
+        Some(original)
+    );
+    let replacement =
+        casita::ObjectKey::blob(casita::BlobId::new(blake3::hash(b"replacement").into()));
+    assert!(
+        repository
+            .metadata()
+            .snapshot()
+            .await
+            .unwrap()
+            .object(&replacement)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    drop(reader);
+    // A gzip trailer failure happens after tar payloads have been staged.
+    let mut corrupt = std::fs::read(&tar).unwrap();
+    let last = corrupt.len() - 1;
+    corrupt[last] ^= 1;
+    std::fs::write(&tar, corrupt).unwrap();
+    let response = call(&mut client, "artifact.import", requests.clone()).await;
+    assert_eq!(
+        response["error"]["data"]["category"], "execution_failure",
+        "{response}"
+    );
+    assert_eq!(
+        repository
+            .metadata()
+            .snapshot()
+            .await
+            .unwrap()
+            .generation()
+            .unwrap(),
+        after
+    );
+    for invalid in [
+        json!([{ "path":filesystem,"root":"same" }, {"path":filesystem,"root":"same"}]),
+        json!([{ "path":filesystem,"root":"valid" }, {"path":filesystem,"root":"../invalid"}]),
+        json!([{ "path":filesystem,"root":"valid" }, {"importer":"copy","path":"/missing","source_root":"old","root":"new"}]),
+        json!([42]),
+        json!({"requests":[],"extra":true}),
+    ] {
+        assert!(call(&mut client, "artifact.import", invalid).await["error"].is_object());
+        assert_eq!(
+            repository
+                .metadata()
+                .snapshot()
+                .await
+                .unwrap()
+                .generation()
+                .unwrap(),
+            after
+        );
+    }
+    assert_eq!(
+        call(&mut client, "artifact.import", json!([])).await["result"],
+        json!([])
+    );
+    assert_eq!(
+        repository
+            .metadata()
+            .snapshot()
+            .await
+            .unwrap()
+            .generation()
+            .unwrap(),
+        after
+    );
+    drop(client);
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn batch_checkout_and_restore_return_ordered_results() {
+    let repository = Arc::new(Repository::memory().unwrap());
+    let (client, server) = tokio::io::duplex(65536);
+    let task = tokio::spawn(super::server::serve_connection(repository, server));
+    let mut client = BufReader::new(client);
+    initialize(&mut client).await;
+    let work = tempfile::tempdir().unwrap();
+    let source = work.path().join("source");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("file"), b"contents").unwrap();
+    let imports = call(
+        &mut client,
+        "artifact.import",
+        json!([
+            {"path":source,"root":"tree"},
+            {"importer":"blob","path":source.join("file"),"root":"blob"}
+        ]),
+    )
+    .await;
+    assert!(imports["result"].is_array(), "{imports}");
+    let checkout = work.path().join("checkout");
+    let miss = work.path().join("miss");
+    let result = call(
+        &mut client,
+        "artifact.checkout",
+        json!({"requests":[
+            {"root":"tree","path":checkout}, {"root":"missing","path":miss}
+        ]}),
+    )
+    .await;
+    assert_eq!(
+        result["result"],
+        json!([{"present":true},{"present":false}]),
+        "{result}"
+    );
+    assert_eq!(std::fs::read(checkout.join("file")).unwrap(), b"contents");
+    assert!(miss.is_dir());
+    let restored_blob = work.path().join("restored-blob");
+    let restored_tree = work.path().join("restored-tree");
+    let absent = work.path().join("absent");
+    let result = call(
+        &mut client,
+        "artifact.restore",
+        json!([
+            {"importer":"blob","root":"blob","path":restored_blob},
+            {"root":"tree","path":restored_tree},
+            {"root":"missing","path":absent}
+        ]),
+    )
+    .await;
+    assert_eq!(
+        result["result"][0]["object"], imports["result"][1]["object"],
+        "{result}"
+    );
+    assert_eq!(
+        result["result"][1]["object"],
+        imports["result"][0]["object"]
+    );
+    assert_eq!(result["result"][2], json!({"present":false}));
+    assert_eq!(std::fs::read(restored_blob).unwrap(), b"contents");
+    assert_eq!(
+        std::fs::read(restored_tree.join("file")).unwrap(),
+        b"contents"
+    );
+    assert!(!absent.exists());
+    for method in ["artifact.checkout", "artifact.restore"] {
+        assert_eq!(
+            call(&mut client, method, json!([])).await["result"],
+            json!([])
+        );
+        let valid = work.path().join(format!("{method}-valid"));
+        let result = call(
+            &mut client,
+            method,
+            json!([
+                {"root":"tree","path":valid}, {"root":"tree"}
+            ]),
+        )
+        .await;
+        assert!(result["error"].is_object());
+        assert!(!valid.exists());
+    }
+    drop(client);
+    task.await.unwrap().unwrap();
 }

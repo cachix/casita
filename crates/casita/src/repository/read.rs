@@ -246,17 +246,38 @@ where
                 root.namespace()
             )));
         }
-        let digest = root.native_digest().ok_or_else(|| {
-            RepositoryError::InvalidInput(format!("directory key {root} is not digest-width"))
-        })?;
         let hold = self
             .retention_hold_for(&BTreeSet::from([root.clone()]))
             .await?;
+        self.checkout_snapshot(
+            hold.snapshot(),
+            hold.verify_closure_incremental(root).await?,
+            root,
+            target,
+        )
+        .await
+    }
+
+    /// Check out a directory using a caller-owned snapshot and retention hold.
+    pub(crate) async fn checkout_snapshot(
+        &self,
+        snapshot: &dyn MetadataSnapshot,
+        status: ClosureStatus,
+        root: &ObjectKey,
+        target: impl AsRef<Path>,
+    ) -> Result<(), RepositoryError> {
+        if root.namespace().as_str() != crate::DIRECTORY_NAMESPACE {
+            return Err(RepositoryError::InvalidInput(
+                "checkout requires a directory".into(),
+            ));
+        }
+        let digest = root.native_digest().ok_or_else(|| {
+            RepositoryError::InvalidInput("directory key is not digest-width".into())
+        })?;
         // Materializing asks whether the graph is complete, not whether the
         // bytes on disk have decayed since they were verified; `fsck` answers
         // the second question, and the checkout below reads and verifies every
         // payload it writes out anyway.
-        let status = hold.verify_closure_incremental(root).await?;
         if !matches!(status, ClosureStatus::Complete { .. }) {
             return Err(RepositoryError::RootNotPublishable {
                 root: root.clone(),
@@ -265,7 +286,7 @@ where
         }
         let directories = RepositoryDirectoryView {
             payloads: &self.payloads,
-            snapshot: hold.snapshot(),
+            snapshot,
             limit: self
                 .limits
                 .max_metadata_bytes
