@@ -368,3 +368,11 @@ required-features = ["native", "experimental"]
 name = "sliced_transfer"
 harness = false
 required-features = ["ssh", "experimental"]
+
+[[example]]
+name = "packed_archive_read"
+required-features = ["native", "experimental"]
+
+[[example]]
+name = "packed_read_latency"
+required-features = ["native", "experimental"]

@@ -2045,6 +2045,24 @@
       ]
     },
     {
+      "id": "pack-demand-latency",
+      "suite_id": "blob-backends",
+      "title": "Verified packed reads across calibrated GET delays and cache boundaries",
+      "kind": "module",
+      "target": "benchmarks.suites.pack.demand_latency",
+      "profiles": ["smoke", "standard"],
+      "correctness": ["exact bytes", "independent BLAKE3", "matching variant fixtures", "calibrated GET delay", "fitting warm cache issues no pack GETs"]
+    },
+    {
+      "id": "pack-demand-progress",
+      "suite_id": "blob-backends",
+      "title": "Demand progress and paired verified archive reads",
+      "kind": "module",
+      "target": "benchmarks.suites.pack.demand_progress",
+      "profiles": ["smoke", "standard"],
+      "correctness": ["exact bytes", "verified chunk digest", "demand completes while prefetch delivery is blocked", "all request and buffer permits released"]
+    },
+    {
       "id": "pack-read-planning",
       "suite_id": "blob-backends",
       "title": "Bounded read planning over audited physical traces (I/O model only)",

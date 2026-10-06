@@ -526,11 +526,18 @@ impl Context {
                     let work = futures::stream::iter(windows).map(move |range| {
                         let context = ahead.clone();
                         async move {
-                            match context.window(range.clone(), Admission::WhenFree).await {
-                                Ok(Some(frames)) => Ok(Prefetch::Ready(frames)),
-                                Ok(None) => Ok(Prefetch::Deferred(range)),
-                                Err(error) => Err(error),
-                            }
+                            // Window I/O must keep running even while the pump
+                            // is blocked delivering an earlier result. Otherwise
+                            // unpolled ranges can retain every request permit
+                            // needed by a consumer fetching a deferred window.
+                            let mut task = WindowTask::spawn(async move {
+                                match context.window(range.clone(), Admission::WhenFree).await {
+                                    Ok(Some(frames)) => Ok(Prefetch::Ready(frames)),
+                                    Ok(None) => Ok(Prefetch::Deferred(range)),
+                                    Err(error) => Err(error),
+                                }
+                            });
+                            task.join().await
                         }
                         .boxed()
                     });
@@ -663,23 +670,50 @@ struct Pump {
     receive: tokio::sync::mpsc::Receiver<io::Result<Prefetch>>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
+// Each buffered window owns one independently polled task. The two-window
+// limit and shared byte budget still bound queued and active compressed data.
+struct WindowTask {
+    task: Option<tokio::task::JoinHandle<io::Result<Prefetch>>>,
+}
+impl WindowTask {
+    fn spawn(
+        work: impl std::future::Future<Output = io::Result<Prefetch>> + Send + 'static,
+    ) -> Self {
+        Self {
+            task: Some(tokio::spawn(work)),
+        }
+    }
+    async fn join(&mut self) -> io::Result<Prefetch> {
+        let result = self.task.as_mut().unwrap().await;
+        self.task.take();
+        result.map_err(io::Error::other)?
+    }
+}
+fn abort_and_track<T: Send + 'static>(task: tokio::task::JoinHandle<T>) {
+    task.abort();
+    // Aborting schedules cancellation. Track the join so shutdown waits for
+    // both pump and window tasks to release their plans, buffers, and pins.
+    if tokio::runtime::Handle::try_current().is_ok() {
+        crate::metadata::spawn_lease_task(async move {
+            match task.await {
+                Ok(_) => Ok(()),
+                Err(error) if error.is_cancelled() => Ok(()),
+                Err(error) => Err(crate::metadata::MetadataError::Backend(error.to_string())),
+            }
+        });
+    }
+}
+impl Drop for WindowTask {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            abort_and_track(task);
+        }
+    }
+}
 impl Drop for Pump {
     fn drop(&mut self) {
         if let Some(task) = self.task.take() {
-            task.abort();
-            // Aborting only schedules cancellation. Track the join so shutdown
-            // waits for the task's plan and durable pin to actually be dropped.
-            if tokio::runtime::Handle::try_current().is_ok() {
-                crate::metadata::spawn_lease_task(async move {
-                    match task.await {
-                        Ok(()) => Ok(()),
-                        Err(error) if error.is_cancelled() => Ok(()),
-                        Err(error) => {
-                            Err(crate::metadata::MetadataError::Backend(error.to_string()))
-                        }
-                    }
-                });
-            }
+            abort_and_track(task);
         }
     }
 }
@@ -688,6 +722,128 @@ impl Drop for Pump {
 mod tests {
     use super::*;
     use crate::blob::BlobReader;
+
+    #[tokio::test]
+    async fn backpressured_pump_releases_requests_for_demand() {
+        use object_store::memory::InMemory;
+        use object_store::throttle::{ThrottleConfig, ThrottledStore};
+        use std::time::{Duration, Instant};
+
+        // Cover both sides of the four-request I/O concurrency limit.
+        for count in [2, 3, 4, 8] {
+            let objects = Arc::new(ThrottledStore::new(
+                InMemory::new(),
+                ThrottleConfig::default(),
+            ));
+            let packed =
+                PackedChunks::open_with_cache(objects.clone(), Path::default(), 64 * 1024, 0)
+                    .await
+                    .unwrap();
+            let mut data = vec![0; (count + 1) * 64 * 1024];
+            blake3::Hasher::new()
+                .update(b"reserved-demand-request")
+                .finalize_xof()
+                .fill(&mut data);
+            let mut chunks = Vec::new();
+            for bytes in data.chunks(64 * 1024) {
+                let chunk = ChunkMeta {
+                    digest: ChunkId::new(blake3::hash(bytes).into()),
+                    size: bytes.len() as u64,
+                };
+                packed
+                    .put(
+                        chunk.clone(),
+                        Bytes::from(zstd::encode_all(bytes, 0).unwrap()),
+                    )
+                    .await
+                    .unwrap();
+                chunks.push(chunk);
+            }
+            packed.flush().await.unwrap();
+            let context = Arc::new(Context {
+                packed: packed.reader(),
+                plan: ReadPlan {
+                    frozen: packed.freeze_manifest(&chunks).await.unwrap().unwrap(),
+                    chunks,
+                    _pin: None,
+                },
+                decode: ByteBudget::new(BUFFER_BYTES),
+            });
+            objects.config_mut(|c| c.wait_get_per_call = Duration::from_millis(100));
+            let (send, receive) = tokio::sync::mpsc::channel(1);
+            send.send(()).await.unwrap();
+            let ahead = context.clone();
+            let pending = tokio::spawn(async move {
+                let mut task = WindowTask::spawn(async move {
+                    Ok(Prefetch::Ready(
+                        ahead.window(0..count, Admission::WhenFree).await?.unwrap(),
+                    ))
+                });
+                // The pump cannot poll its window handle until this full
+                // channel is released, but the range futures must keep running.
+                let _ = send.send(()).await;
+                task.join().await
+            });
+            let expected_free = 4 - count.min(4);
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while packed.fetch.requests.available_permits() > expected_free {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            // Give every pending request a chance to attempt admission.
+            for _ in 0..32 {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(packed.fetch.requests.available_permits(), expected_free);
+            objects.config_mut(|c| c.wait_get_per_call = Duration::ZERO);
+            let started = Instant::now();
+            let frames =
+                tokio::time::timeout(Duration::from_secs(2), context.demand(count..count + 1))
+                    .await
+                    .expect("demand must progress while the pump delivery is blocked")
+                    .unwrap();
+            let elapsed = started.elapsed();
+            assert_eq!(frames.len(), 1);
+            let chunk = &context.plan.chunks[count];
+            let decoded = zstd::decode_all(frames[0].bytes.as_ref()).unwrap();
+            assert_eq!(decoded.len() as u64, chunk.size);
+            assert_eq!(ChunkId::new(blake3::hash(&decoded).into()), chunk.digest);
+            assert_eq!(decoded, data[count * 64 * 1024..]);
+            drop(frames);
+            assert!(
+                !pending.is_finished(),
+                "the delivery channel must remain blocked"
+            );
+            drop(receive);
+            match pending.await.unwrap().unwrap() {
+                Prefetch::Ready(frames) => assert_eq!(frames.len(), count),
+                Prefetch::Deferred(_) => panic!("small speculative window was deferred"),
+            }
+            let all = packed
+                .fetch
+                .requests
+                .clone()
+                .try_acquire_many_owned(4)
+                .expect("cancellation releases every request permit");
+            drop(all);
+            let buffers = packed
+                .fetch
+                .buffers
+                .try_reserve(BUFFER_BYTES)
+                .expect("cancellation releases compressed buffers");
+            drop(buffers);
+            println!(
+                "demand_progress_sample {}",
+                serde_json::json!({
+                    "speculative_requests": count,
+                    "demand_nanos": elapsed.as_nanos() as u64,
+                    "correctness": "exact bytes, verified digest, demand progress, permits released",
+                })
+            );
+        }
+    }
 
     fn id(n: u8) -> ChunkId {
         ChunkId::new(Digest::from([n; 32]))
@@ -914,11 +1070,17 @@ mod tests {
         let owner = Arc::new(());
         let task_owner = owner.clone();
         let (send, receive) = tokio::sync::mpsc::channel(1);
+        let (started, running) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
-            let _owner = task_owner;
             let _send = send;
-            futures::future::pending::<()>().await;
+            let mut window = WindowTask::spawn(async move {
+                let _owner = task_owner;
+                started.send(()).unwrap();
+                futures::future::pending::<io::Result<Prefetch>>().await
+            });
+            let _ = window.join().await;
         });
+        running.await.unwrap();
         let pump = Pump {
             receive,
             task: Some(task),

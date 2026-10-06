@@ -1,5 +1,95 @@
 # Benchmark suite
 
+## Packed reader demand progress
+
+`benchmark run pack-demand-progress` fills a delivery channel while its
+prefetched window handle is left unpolled. Independently running windows must
+release their I/O slots so a demanded chunk can complete. Cases with 2, 3, 4,
+and 8 speculative requests cover both sides of the four-request limit; range
+GETs are delayed by 100 ms. Every case verifies the demanded bytes and digest,
+releases the blocked channel, joins the window, and checks that every request
+and compressed-buffer permit is returned. Cancellation is also covered by the
+packed-fetch seek and park tests. The suite is included in `benchmark all`.
+Its timings measure demand progress, not storage throughput.
+
+```sh
+benchmark run pack-demand-progress --repetitions 3 --output /tmp/demand-progress.json
+benchmark all --suites pack-demand-progress --output /tmp/demand-progress-all
+```
+
+Use `--probe-binary` and `--no-build` with an existing Casita library test binary.
+
+For storage throughput, build `crates/casita/examples/packed_archive_read.rs`
+with identical release flags for each revision:
+
+```sh
+cargo build --release -p casita --no-default-features \
+  --features native,experimental --example packed_archive_read
+```
+
+Copy each resulting binary before changing revisions. Compare an existing repository
+blob with alternating process order, one excluded warmup per revision, and
+verified EOF plus expected size on every read:
+
+```sh
+benchmark run pack-demand-progress \
+  --archive-binary serial=/path/to/serial-probe \
+  --archive-binary demand-slot=/path/to/fixed-probe \
+  --repository /path/to/repository --object-key casita.blob.v1:KEY \
+  --expected-bytes 799102676 --repetitions 6 --output /tmp/archive-comparison.json
+```
+
+The archive mode reuses the registered suite and retains failed reads/timeouts.
+Its page cache is uncontrolled, so report warm process reads separately from
+cold storage or latency-shaped network measurements. It does not measure FUSE.
+
+## Packed reader latency
+
+`benchmark run pack-demand-latency` reads deterministic incompressible blobs
+through the production packed reader over an in-memory object store. A calibrated
+per-GET delay models request latency. It does not model TCP, shared bandwidth,
+disk, or FUSE. Cold means a fresh Casita compressed-chunk cache. Every read must
+match the expected bytes and an independent BLAKE3 digest. A fitting warm cache
+must issue zero pack GETs. Failures and timeouts remain in the raw report.
+
+The standard sizes 15/17 and 63/65 MiB straddle the 16 MiB fetch-window and
+64 MiB shared-buffer boundaries. Cache capacities zero and 192 MiB cover
+origin reads and fully fitting cached reads. Three binaries rotate through all
+six process orders; two binaries alternate. Fixture setup is outside the read
+timer and uses the unthrottled backend. Build each revision with identical flags:
+
+```sh
+cargo build --release -p casita --no-default-features \
+  --features native,experimental --example packed_read_latency
+benchmark run pack-demand-latency --profile standard --repetitions 3 \
+  --probe-binary /path/to/fixed --baseline-probe-binary /path/to/serial \
+  --original-probe-binary /path/to/original --no-build \
+  --delay-ms 0,20,80 --cache-mib 0,192 --output /tmp/packed-latency.json
+benchmark all --suites pack-demand-latency --output /tmp/packed-latency-all
+```
+
+The suite is registered for `benchmark all`; its bounded smoke matrix includes
+1, 17, and 65 MiB at zero and 20 ms. Successful-read medians must be accompanied
+by failure counts. They cannot characterize a variant that stalls.
+
+The retained [2026-10-02 report](reports/2026-10-02-demand-request-slot/get-delay.json)
+contains 432 verified reads across original, serial, and demand-slot readers,
+with three repetitions per case on one Linux host. At 20 ms per GET, reserving
+one demand slot increased cold origin-read time by 11–19% against the original;
+at 80 ms, by 16–26%. Zero-delay cases showed no slowdown, and every fitting
+warm cache issued zero pack GETs. This small deterministic fixture did not
+reproduce the real repository's deadlock. These numbers describe this request
+latency model and do not predict shared-bandwidth or real-S3 throughput.
+
+The [2026-10-04 refactor report](reports/2026-10-04-prefetch-progress/get-delay.json)
+compares independently running prefetch windows with the reserved-slot fix and
+the original four-slot reader. All 432 reads passed verification. At 80 ms per
+GET, cold read times were 13–22% lower than the reserved-slot fix and within
+about 6% of the original. Zero-delay and 20 ms cases varied between cells; no
+claim of zero scheduling overhead follows from these three-run medians. Builds
+were running on this host during the comparison. Warm fitting-cache reads all
+issued zero pack GETs. Use `--variant-binary LABEL=PATH` for named controls.
+
 ## WAL3 commit preparation
 
 `benchmark run wal3-commit-preparation --iterations 100 --output /tmp/wal3-commit-preparation.json`
