@@ -1375,11 +1375,12 @@ impl Drop for CatalogPreparation<'_> {
             ReplayCleanup::ClearOnRollback => Some(self.packed.catalog_transition.lock().unwrap()),
             ReplayCleanup::LeaveUntouched => None,
         };
-        self.packed
-            .pending_catalog
-            .lock()
-            .unwrap()
-            .prepend(mutations);
+        let mut pending = self.packed.pending_catalog.lock().unwrap();
+        pending.prepend(mutations);
+        // The changes are pending again, so a rebuild must not also replay
+        // them as a publication in flight.
+        self.packed.publication_in_flight.lock().unwrap().take();
+        drop(pending);
         if let Some(id) = self.background_start {
             let mut background = self.packed.background_catalog_rebase.lock().unwrap();
             if background.job.as_ref().is_some_and(|job| job.id == id) {
@@ -1524,7 +1525,8 @@ pub(crate) struct PackedChunks {
     index_catalog: StdMutex<IndexCatalogWitness>,
     lazy_catalog: RwLock<LazyCatalogOverlay>,
     pending_catalog: StdMutex<CatalogChanges>,
-    // Catalog installation/resolution -> index -> pending -> lazy. Writers
+    // Catalog installation/resolution -> index -> pending ->
+    // publication_in_flight -> lazy, with the witness taken last. Writers
     // start at index; none acquire this lock while holding an index guard.
     // Never hold synchronous locks across I/O. Preparation holds checkpoint
     // until this replay state is installed; resolution needs no async lock.
@@ -1537,6 +1539,10 @@ pub(crate) struct PackedChunks {
     #[cfg(test)]
     sync_dirty_hook: StdMutex<Option<FlushHandoffHook>>,
     #[cfg(test)]
+    rebuild_dirty_hook: StdMutex<Option<FlushHandoffHook>>,
+    #[cfg(test)]
+    publish_window_hook: StdMutex<Option<FlushHandoffHook>>,
+    #[cfg(test)]
     catalog_prepare_hook: StdMutex<Option<FlushHandoffHook>>,
     #[cfg(test)]
     catalog_read_hook: StdMutex<Option<FlushHandoffHook>>,
@@ -1547,6 +1553,12 @@ pub(crate) struct PackedChunks {
     #[cfg(test)]
     sync_install_hook: StdMutex<Option<CatalogStateHook>>,
     index_dirty: AtomicBool,
+    // The encoded changes a standalone publication has taken from pending but
+    // not installed. It is set under the pending lock and cleared with the
+    // published witness under the index lock, or under the pending lock when
+    // the changes return to pending. A rebuild therefore finds each change
+    // here, in pending, or in the catalog that witness names.
+    publication_in_flight: StdMutex<Option<Bytes>>,
     state_catalog_mode: AtomicBool,
     dirty_packs: Mutex<HashSet<PackId>>,
     deleted: Mutex<HashSet<ChunkId>>,
@@ -1715,6 +1727,10 @@ impl PackedChunks {
             #[cfg(test)]
             sync_dirty_hook: StdMutex::new(None),
             #[cfg(test)]
+            rebuild_dirty_hook: StdMutex::new(None),
+            #[cfg(test)]
+            publish_window_hook: StdMutex::new(None),
+            #[cfg(test)]
             catalog_prepare_hook: StdMutex::new(None),
             #[cfg(test)]
             catalog_read_hook: StdMutex::new(None),
@@ -1725,6 +1741,7 @@ impl PackedChunks {
             #[cfg(test)]
             sync_install_hook: StdMutex::new(None),
             index_dirty: AtomicBool::new(false),
+            publication_in_flight: StdMutex::new(None),
             state_catalog_mode: AtomicBool::new(state_catalog_mode),
             dirty_packs: Mutex::new(HashSet::new()),
             deleted: Mutex::new(HashSet::new()),
@@ -3250,7 +3267,14 @@ impl PackedChunks {
     }
 
     fn install_rebased_base(&self, base: ShardedIndexBase) -> io::Result<()> {
-        let mut current = self.index.write().unwrap();
+        self.install_rebased_base_locked(&mut self.index.write().unwrap(), base)
+    }
+
+    fn install_rebased_base_locked(
+        &self,
+        current: &mut Index,
+        base: ShardedIndexBase,
+    ) -> io::Result<()> {
         let pending = self.pending_catalog.lock().unwrap();
         let mut overlay = Index {
             manifests_complete: true,
@@ -3261,7 +3285,7 @@ impl PackedChunks {
             ..LazyCatalogOverlay::default()
         };
         if !pending.is_empty() {
-            let delta = encode_index_mutations(&current, &pending)?;
+            let delta = encode_index_mutations(current, &pending)?;
             let decoded = decode_index_delta(&delta)?;
             lazy.apply(&decoded);
             apply_decoded_index_delta(&mut overlay, decoded);
@@ -3977,11 +4001,13 @@ impl PackedChunks {
             {
                 // Recheck the selected catalog before using either loaded bytes
                 // or an error: a superseded run need no longer be readable.
-                // Replay prepared state before newer pending mutations while
-                // holding transition -> index -> pending -> lazy.
+                // Replay prepared state and a publication in flight before
+                // newer pending mutations while holding transition -> index ->
+                // pending -> publication_in_flight -> lazy.
                 let transition = self.catalog_transition.lock().unwrap();
                 let mut current = self.index.write().unwrap();
                 let pending = self.pending_catalog.lock().unwrap();
+                let in_flight = self.publication_in_flight.lock().unwrap();
                 let mut lazy = self.lazy_catalog.write().unwrap();
                 let same_base = match (&lazy.base, &snapshot.base) {
                     (Some(current), Some(selected)) => Arc::ptr_eq(&current.map, &selected.map),
@@ -3997,6 +4023,13 @@ impl PackedChunks {
                         .as_ref()
                         .and_then(|prepared| prepared.delta.as_ref())
                     {
+                        let decoded = decode_index_delta(delta)?;
+                        materialized.apply(&decoded);
+                        apply_decoded_index_delta(&mut overlay, decoded);
+                    }
+                    // Its packs are otherwise only in the index being replaced,
+                    // and a failed publication restores just their changes.
+                    if let Some(delta) = in_flight.as_deref() {
                         let decoded = decode_index_delta(delta)?;
                         materialized.apply(&decoded);
                         apply_decoded_index_delta(&mut overlay, decoded);
@@ -4017,6 +4050,19 @@ impl PackedChunks {
             // before retrying, and remain cancellable even when reads hit caches.
             tokio::task::yield_now().await;
         }
+    }
+
+    /// Materialize the deferred runs of a catalog loaded but not installed.
+    /// Its index holds the root deltas the materialized overlay replays.
+    async fn materialize_loaded_runs(&self, loaded: &mut LoadedIndexCatalog) -> io::Result<()> {
+        if loaded.index.is_none() || loaded.lazy.run_refs.is_empty() {
+            return Ok(());
+        }
+        let (index, lazy, runs) = self.reader().materialize_runs(&loaded.lazy).await?;
+        loaded.index = Some(index);
+        loaded.lazy = lazy;
+        loaded.witness.runs.extend(runs);
+        Ok(())
     }
 
     /// Capture a reader result only when the paired index contains all run
@@ -4171,6 +4217,7 @@ impl PackedChunks {
     async fn rebuild_inner(&self, force_inventory: bool) -> io::Result<()> {
         let _rebuild = self.rebuild_lock.lock().await;
         if !force_inventory {
+            let installed = self.index_catalog.lock().unwrap().pointer_digest;
             let Some(loaded) = self.load_authoritative_index_catalog(true).await? else {
                 self.read_counters
                     .index_hits
@@ -4182,30 +4229,63 @@ impl PackedChunks {
                 self.read_counters
                     .index_hits
                     .fetch_add(1, Ordering::Relaxed);
-                let dirty = self.index_dirty.load(Ordering::Acquire);
+                #[cfg(test)]
+                {
+                    let hook = self.rebuild_dirty_hook.lock().unwrap().take();
+                    if let Some(hook) = hook {
+                        let _ = hook.reached.send(());
+                        let _ = hook.resume.await;
+                    }
+                }
                 {
                     let mut current = self.index.write().unwrap();
-                    if dirty {
-                        let local = current.clone();
-                        index.merge(local.clone());
-                        let pending = self.pending_catalog.lock().unwrap();
-                        if !pending.is_empty() {
-                            let delta = encode_index_mutations(&local, &pending)?;
-                            let decoded = decode_index_delta(&delta)?;
-                            lazy.apply(&decoded);
-                            apply_decoded_index_delta(&mut index, decoded);
-                        }
-                    } else {
-                        self.pending_catalog.lock().unwrap().mutations = IndexMutations::default();
+                    // A publication installs its catalog under this lock, so
+                    // one may have finished during the load. Each pointer
+                    // update is a compare-and-swap that advances the
+                    // generation by one, so the higher generation descends
+                    // from the other and incorporates all of its changes.
+                    // Keep an installed catalog at the same or a later
+                    // position. Repairing an undecodable catalog restarts
+                    // the count, so a load from before a repair can win
+                    // until the next refresh.
+                    let witness = self.index_catalog.lock().unwrap();
+                    if witness.pointer_digest != installed
+                        && witness.generation >= loaded.witness.generation
+                    {
+                        return Ok(());
+                    }
+                    drop(witness);
+                    // A flush indexes its pack and marks the index dirty under
+                    // this lock, so a flag sampled earlier can miss the pack.
+                    if self.index_dirty.load(Ordering::Acquire) {
+                        index.merge(current.clone());
+                    }
+                    let pending = self.pending_catalog.lock().unwrap();
+                    // A publication in flight has taken earlier changes but not
+                    // installed them. Replay them as its contended retry does,
+                    // so its packs stay readable and, if it fails, the restored
+                    // changes still apply to an index and overlay holding them.
+                    if let Some(delta) = self.publication_in_flight.lock().unwrap().as_deref() {
+                        let decoded = decode_index_delta(delta)?;
+                        lazy.apply(&decoded);
+                        apply_decoded_index_delta(&mut index, decoded);
+                    }
+                    // Pending mutations are authoritative even when clean: a
+                    // publication clears the flag before taking them, and it
+                    // will publish them, so the flag stays clear.
+                    if !pending.is_empty() {
+                        let delta = encode_index_mutations(&current, &pending)?;
+                        let decoded = decode_index_delta(&delta)?;
+                        lazy.apply(&decoded);
+                        apply_decoded_index_delta(&mut index, decoded);
                     }
                     *current = index;
-                }
-                *self.lazy_catalog.write().unwrap() = lazy;
-                // Only a successfully installed index may satisfy the next
-                // unchanged-pointer check; overlay decoding can still fail.
-                *self.index_catalog.lock().unwrap() = loaded.witness;
-                if !dirty {
-                    self.index_dirty.store(false, Ordering::Release);
+                    // A flush records its pack in the lazy overlay under the
+                    // same lock, so install the overlay before releasing it.
+                    *self.lazy_catalog.write().unwrap() = lazy;
+                    // Only a successfully installed index may satisfy the next
+                    // unchanged-pointer check; overlay decoding can still fail.
+                    *self.index_catalog.lock().unwrap() = loaded.witness;
                 }
                 return Ok(());
             }
@@ -4548,25 +4628,56 @@ impl PackedChunks {
             Some(local) => Some(local.lock_catalog().await?),
             None => None,
         };
-        let dirty = self.index_dirty.swap(false, Ordering::AcqRel);
-        if !force && !dirty {
-            return Ok(());
-        }
-        if let Err(error) = self.ensure_catalog_runs_loaded().await {
-            self.index_dirty.store(dirty, Ordering::Release);
-            return Err(error);
-        }
-        // Every mutation takes the index lock before the mutation lock. Taking
-        // both here makes the snapshot and its exact change set indivisible.
-        let (mut candidate, mutations, mut lazy) = {
+        let (mut candidate, mutations, mut lazy, delta, mut witness) = loop {
+            if !force && !self.index_dirty.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            // The flag stays set until the snapshot below takes the changes,
+            // so failing or being cancelled here leaves them to the next flush.
+            self.ensure_catalog_runs_loaded().await?;
+            // Every mutation takes the index lock before the mutation lock.
+            // Taking both here makes the snapshot and its exact change set
+            // indivisible. A rebuild installs a catalog and its witness under
+            // the index lock, so the witness is captured here too: one read
+            // later could pair this snapshot with a newer catalog's version
+            // and overwrite its packs.
             let index = self.index.read().unwrap();
             let mut pending = self.pending_catalog.lock().unwrap();
-            let lazy = self.lazy_catalog.read().unwrap().clone();
-            (
-                self.publication_snapshot(&index),
+            // A refresh may have installed deferred runs since they loaded.
+            if !self.lazy_catalog.read().unwrap().run_refs.is_empty() {
+                continue;
+            }
+            // Flushes mark the index dirty under the index lock, so clearing
+            // the flag here cannot miss a change this snapshot lacks.
+            let dirty = self.index_dirty.swap(false, Ordering::AcqRel);
+            if !force && !dirty {
+                return Ok(());
+            }
+            let candidate = self.publication_snapshot(&index);
+            let delta = if pending.is_empty() {
+                None
+            } else {
+                match encode_index_mutations(&candidate, &pending) {
+                    Ok(delta) => Some(delta),
+                    Err(error) => {
+                        // A forced publication may fail clean while a flush
+                        // marks the index dirty, so restore without clearing.
+                        self.index_dirty.fetch_or(dirty, Ordering::AcqRel);
+                        return Err(error);
+                    }
+                }
+            };
+            self.publication_in_flight
+                .lock()
+                .unwrap()
+                .clone_from(&delta);
+            break (
+                candidate,
                 std::mem::take(&mut *pending),
-                lazy,
-            )
+                self.lazy_catalog.read().unwrap().clone(),
+                delta,
+                self.index_catalog.lock().unwrap().clone(),
+            );
         };
         let mut preparation = CatalogPreparation {
             packed: self,
@@ -4574,13 +4685,14 @@ impl PackedChunks {
             background_start: None,
             replay_cleanup: ReplayCleanup::LeaveUntouched,
         };
-        let mutations = preparation.changes.as_ref().unwrap();
-        let delta = if mutations.is_empty() {
-            None
-        } else {
-            Some(encode_index_mutations(&candidate, mutations)?)
-        };
-        let mut witness = self.index_catalog.lock().unwrap().clone();
+        #[cfg(test)]
+        {
+            let hook = self.publish_window_hook.lock().unwrap().take();
+            if let Some(hook) = hook {
+                let _ = hook.reached.send(());
+                let _ = hook.resume.await;
+            }
+        }
         for _ in 0..MAX_INDEX_PUBLISH_ATTEMPTS {
             match self
                 .publish_index_catalog(
@@ -4597,8 +4709,15 @@ impl PackedChunks {
                     let rebased = next.prepared_rebase.take();
                     let published_map = next.prepared_map.take();
                     if let Some(base) = rebased {
-                        self.install_rebased_base(base)?;
-                        *self.index_catalog.lock().unwrap() = next;
+                        // Install the base and its witness together, so a
+                        // rebuild either replays the in-flight changes before
+                        // them or keeps this catalog after them.
+                        {
+                            let mut current = self.index.write().unwrap();
+                            self.install_rebased_base_locked(&mut current, base)?;
+                            *self.index_catalog.lock().unwrap() = next;
+                            self.publication_in_flight.lock().unwrap().take();
+                        }
                         self.published_retirements
                             .lock()
                             .unwrap()
@@ -4618,6 +4737,7 @@ impl PackedChunks {
                     if let (Some(current), Some(base)) = (&mut lazy.base, published_map) {
                         *current = base;
                     }
+                    self.publication_in_flight.lock().unwrap().take();
                     *current = candidate;
                     *self.lazy_catalog.write().unwrap() = lazy;
                     *self.index_catalog.lock().unwrap() = next;
@@ -4628,10 +4748,18 @@ impl PackedChunks {
                     return Ok(());
                 }
                 Err(error) if index_publish_contended(&error) => {
-                    let loaded = self
+                    let mut loaded = self
                         .load_authoritative_index_catalog(false)
                         .await?
                         .expect("catalog reuse is disabled during CAS retry");
+                    if self.rebase_needs_deferred_runs(
+                        force,
+                        &loaded.witness,
+                        &loaded.lazy,
+                        delta.as_deref(),
+                    ) {
+                        self.materialize_loaded_runs(&mut loaded).await?;
+                    }
                     witness = loaded.witness;
                     lazy = loaded.lazy;
                     if let Some(mut latest) = loaded.index {
@@ -4740,6 +4868,25 @@ impl PackedChunks {
         next.version = Some(result.into());
         next.pointer_digest = Some(blake3::hash(&catalog).into());
         Ok(next)
+    }
+
+    /// Whether publishing `delta` over `witness` rebases while `lazy` still
+    /// defers runs. A rebase rebuilds the base from the index and overlay
+    /// alone, so it would drop the entries only those runs hold.
+    fn rebase_needs_deferred_runs(
+        &self,
+        force: bool,
+        witness: &IndexCatalogWitness,
+        lazy: &LazyCatalogOverlay,
+        delta: Option<&[u8]>,
+    ) -> bool {
+        !force
+            && !lazy.run_refs.is_empty()
+            && witness.root.as_ref().is_some_and(|root| {
+                // Without mutations a publication appends an empty delta,
+                // which can also make a rebase due.
+                delta.is_none_or(|delta| self.catalog_rebase_due(root, delta))
+            })
     }
 
     fn catalog_rebase_due(&self, previous: &DeltaCatalog, next: &[u8]) -> bool {
@@ -7330,6 +7477,680 @@ mod tests {
         for (meta, bytes) in &chunks {
             assert_eq!(writer.get(&meta.digest).await.unwrap(), Some(bytes.clone()));
         }
+    }
+
+    #[tokio::test]
+    async fn rebuild_preserves_a_pack_indexed_after_catalog_load() {
+        let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let base = Path::from("rebuild-concurrent-flush");
+        let writer = PackedChunks::open(objects.clone(), base.clone(), 1)
+            .await
+            .unwrap();
+        // Another writer moves the pointer, so the refresh decodes a new index.
+        let other = PackedChunks::open(objects.clone(), base.clone(), u64::MAX)
+            .await
+            .unwrap();
+        let (remote, remote_bytes) = chunk(b"published by another writer");
+        other
+            .put(remote.clone(), remote_bytes.clone())
+            .await
+            .unwrap();
+        other.flush().await.unwrap();
+
+        let (reached_tx, reached) = tokio::sync::oneshot::channel();
+        let (resume, resume_rx) = tokio::sync::oneshot::channel();
+        *writer.rebuild_dirty_hook.lock().unwrap() = Some(FlushHandoffHook {
+            reached: reached_tx,
+            resume: resume_rx,
+        });
+        let refresh = tokio::spawn({
+            let writer = writer.clone();
+            async move { writer.refresh().await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(10), reached)
+            .await
+            .unwrap()
+            .unwrap();
+        // A one-byte target seals and indexes during put, without publishing.
+        let (local, local_bytes) = chunk(b"indexed while the refresh decodes");
+        writer
+            .put(local.clone(), local_bytes.clone())
+            .await
+            .unwrap();
+        resume.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), refresh)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        writer.flush().await.unwrap();
+
+        let reopened = PackedChunks::open(objects, base, u64::MAX).await.unwrap();
+        for (meta, bytes) in [(local, local_bytes), (remote, remote_bytes)] {
+            assert_eq!(writer.get(&meta.digest).await.unwrap(), Some(bytes.clone()));
+            assert_eq!(reopened.get(&meta.digest).await.unwrap(), Some(bytes));
+        }
+    }
+
+    #[tokio::test]
+    async fn rebuild_keeps_a_catalog_published_while_it_loads() {
+        for rebase in [false, true] {
+            let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let base = Path::from("rebuild-during-completed-publication");
+            let writer = PackedChunks::open(objects.clone(), base.clone(), 1)
+                .await
+                .unwrap();
+            // Another writer moves the pointer, so the refresh decodes a new index.
+            let other = PackedChunks::open(objects.clone(), base.clone(), u64::MAX)
+                .await
+                .unwrap();
+            if rebase {
+                // The publication then installs a rebased sharded base.
+                writer.set_catalog_rebase_run_bytes_for_test(1);
+                other.set_catalog_rebase_run_bytes_for_test(1);
+            }
+            let (remote, remote_bytes) = chunk(b"published by another writer");
+            other
+                .put(remote.clone(), remote_bytes.clone())
+                .await
+                .unwrap();
+            other.flush().await.unwrap();
+
+            let (reached_tx, reached) = tokio::sync::oneshot::channel();
+            let (resume, resume_rx) = tokio::sync::oneshot::channel();
+            *writer.rebuild_dirty_hook.lock().unwrap() = Some(FlushHandoffHook {
+                reached: reached_tx,
+                resume: resume_rx,
+            });
+            let refresh = tokio::spawn({
+                let writer = writer.clone();
+                async move { writer.refresh().await }
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(10), reached)
+                .await
+                .unwrap()
+                .unwrap();
+            // The whole publication finishes while the refresh holds the older
+            // catalog, so it leaves neither a dirty flag nor in-flight changes.
+            let (local, local_bytes) = chunk(b"published while the refresh decodes");
+            writer
+                .put(local.clone(), local_bytes.clone())
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
+            resume.send(()).unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(10), refresh)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+
+            // A stale install would drop the pack from the installed catalog
+            // until a reload; this lookup does not reload on a miss.
+            assert!(
+                writer.location(&local.digest).await.unwrap().is_some(),
+                "rebase: {rebase}"
+            );
+            assert_eq!(writer.lazy_catalog.read().unwrap().base.is_some(), rebase);
+            let reopened = PackedChunks::open(objects, base, u64::MAX).await.unwrap();
+            for (meta, bytes) in [(local, local_bytes), (remote, remote_bytes)] {
+                assert_eq!(writer.get(&meta.digest).await.unwrap(), Some(bytes.clone()));
+                assert_eq!(reopened.get(&meta.digest).await.unwrap(), Some(bytes));
+            }
+        }
+    }
+
+    /// Pauses the first catalog pointer write after it lands, before the
+    /// publishing writer installs the catalog it points to.
+    struct PointerWriteGate {
+        inner: Arc<InMemory>,
+        hook: StdMutex<Option<FlushHandoffHook>>,
+    }
+
+    impl fmt::Debug for PointerWriteGate {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("PointerWriteGate")
+        }
+    }
+
+    impl fmt::Display for PointerWriteGate {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("PointerWriteGate")
+        }
+    }
+
+    #[async_trait]
+    impl ObjectStore for PointerWriteGate {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            options: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            let result = self.inner.put_opts(location, payload, options).await;
+            if location.as_ref().ends_with(INDEX_POINTER_NAME) {
+                let hook = self.hook.lock().unwrap().take();
+                if let Some(hook) = hook {
+                    let _ = hook.reached.send(());
+                    let _ = hook.resume.await;
+                }
+            }
+            result
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            options: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.inner.put_multipart_opts(location, options).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            self.inner.get_opts(location, options).await
+        }
+
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            self.inner.delete_stream(locations)
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.inner.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: CopyOptions,
+        ) -> object_store::Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+    }
+
+    #[tokio::test]
+    async fn rebuild_installs_a_newer_load_over_an_older_publication() {
+        let gated = Arc::new(PointerWriteGate {
+            inner: Arc::new(InMemory::new()),
+            hook: StdMutex::new(None),
+        });
+        let objects: Arc<dyn ObjectStore> = gated.clone();
+        let base = Path::from("rebuild-during-older-install");
+        let writer = PackedChunks::open(objects.clone(), base.clone(), 1)
+            .await
+            .unwrap();
+        let other = PackedChunks::open(objects.clone(), base.clone(), u64::MAX)
+            .await
+            .unwrap();
+        let (local, local_bytes) = chunk(b"published before the remote chunk");
+        writer
+            .put(local.clone(), local_bytes.clone())
+            .await
+            .unwrap();
+
+        // The writer's pointer lands, then it pauses before installing.
+        let (reached_tx, reached) = tokio::sync::oneshot::channel();
+        let (resume_publication, resume_rx) = tokio::sync::oneshot::channel();
+        *gated.hook.lock().unwrap() = Some(FlushHandoffHook {
+            reached: reached_tx,
+            resume: resume_rx,
+        });
+        let publication = tokio::spawn({
+            let writer = writer.clone();
+            async move { writer.flush().await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(10), reached)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Another writer publishes on top of that pointer.
+        let (remote, remote_bytes) = chunk(b"published before the read began");
+        other
+            .put(remote.clone(), remote_bytes.clone())
+            .await
+            .unwrap();
+        other.flush().await.unwrap();
+
+        // A read misses and loads the newer catalog, then the paused
+        // publication installs its older one before the load is installed.
+        let (reached_tx, reached) = tokio::sync::oneshot::channel();
+        let (resume_rebuild, resume_rx) = tokio::sync::oneshot::channel();
+        *writer.rebuild_dirty_hook.lock().unwrap() = Some(FlushHandoffHook {
+            reached: reached_tx,
+            resume: resume_rx,
+        });
+        let pointer_reads = writer
+            .read_counters
+            .index_pointer_requests
+            .load(Ordering::Relaxed);
+        let read = tokio::spawn({
+            let writer = writer.clone();
+            let digest = remote.digest;
+            async move { writer.get(&digest).await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(10), reached)
+            .await
+            .unwrap()
+            .unwrap();
+        resume_publication.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), publication)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        resume_rebuild.send(()).unwrap();
+        let read = tokio::time::timeout(std::time::Duration::from_secs(10), read)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            read,
+            Some(remote_bytes),
+            "a chunk published before the read was missed"
+        );
+        // Generations order the two catalogs, so the rebuild needs no reload.
+        assert_eq!(
+            writer
+                .read_counters
+                .index_pointer_requests
+                .load(Ordering::Relaxed),
+            pointer_reads + 1
+        );
+        assert_eq!(writer.get(&local.digest).await.unwrap(), Some(local_bytes));
+    }
+
+    #[tokio::test]
+    async fn rebuild_preserves_packs_of_an_in_flight_publication() {
+        for publishes in [true, false] {
+            let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let base = Path::from("rebuild-during-publication");
+            let writer = PackedChunks::open(objects.clone(), base.clone(), 1)
+                .await
+                .unwrap();
+            // Another writer moves the pointer, so the refresh decodes a new index.
+            let other = PackedChunks::open(objects.clone(), base.clone(), u64::MAX)
+                .await
+                .unwrap();
+            let (remote, remote_bytes) = chunk(b"published by another writer");
+            other
+                .put(remote.clone(), remote_bytes.clone())
+                .await
+                .unwrap();
+            other.flush().await.unwrap();
+            // A one-byte target seals and indexes during put, without publishing.
+            let (local, local_bytes) = chunk(b"flushed before the publication");
+            writer
+                .put(local.clone(), local_bytes.clone())
+                .await
+                .unwrap();
+
+            let (reached_tx, reached) = tokio::sync::oneshot::channel();
+            let (resume, resume_rx) = tokio::sync::oneshot::channel();
+            *writer.publish_window_hook.lock().unwrap() = Some(FlushHandoffHook {
+                reached: reached_tx,
+                resume: resume_rx,
+            });
+            let publish = tokio::spawn({
+                let writer = writer.clone();
+                async move { writer.flush().await }
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(10), reached)
+                .await
+                .unwrap()
+                .unwrap();
+            // The publication has taken the pack's changes but not installed
+            // its result, and the index is clean.
+            writer.refresh().await.unwrap();
+            assert_eq!(
+                writer.get(&local.digest).await.unwrap(),
+                Some(local_bytes.clone())
+            );
+            if publishes {
+                resume.send(()).unwrap();
+                tokio::time::timeout(std::time::Duration::from_secs(10), publish)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+            } else {
+                // Like a failed publication, a cancelled one restores its changes.
+                publish.abort();
+                assert!(publish.await.unwrap_err().is_cancelled());
+            }
+            writer.flush().await.unwrap();
+
+            let reopened = PackedChunks::open(objects, base, u64::MAX).await.unwrap();
+            for (meta, bytes) in [(local, local_bytes), (remote, remote_bytes)] {
+                assert_eq!(writer.get(&meta.digest).await.unwrap(), Some(bytes.clone()));
+                assert_eq!(reopened.get(&meta.digest).await.unwrap(), Some(bytes));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn rebased_catalog_keeps_packs_of_a_cancelled_publication() {
+        let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let base = Path::from("rebuild-during-sharded-publication");
+        let writer = PackedChunks::open(objects.clone(), base.clone(), 1)
+            .await
+            .unwrap();
+        let other = PackedChunks::open(objects.clone(), base.clone(), u64::MAX)
+            .await
+            .unwrap();
+        // Every publication rebases into a sharded base, which the next
+        // publication rebuilds from the packs its lazy overlay changed.
+        writer.set_catalog_rebase_run_bytes_for_test(1);
+        other.set_catalog_rebase_run_bytes_for_test(1);
+        let (seed, seed_bytes) = chunk(b"sharded base seed");
+        other.put(seed.clone(), seed_bytes.clone()).await.unwrap();
+        other.flush().await.unwrap();
+        writer.refresh().await.unwrap();
+        assert!(writer.lazy_catalog.read().unwrap().base.is_some());
+        let (local, local_bytes) = chunk(b"flushed before the cancelled publication");
+        writer
+            .put(local.clone(), local_bytes.clone())
+            .await
+            .unwrap();
+
+        let (reached_tx, reached) = tokio::sync::oneshot::channel();
+        let (_resume, resume_rx) = tokio::sync::oneshot::channel::<()>();
+        *writer.publish_window_hook.lock().unwrap() = Some(FlushHandoffHook {
+            reached: reached_tx,
+            resume: resume_rx,
+        });
+        let publish = tokio::spawn({
+            let writer = writer.clone();
+            async move { writer.flush().await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(10), reached)
+            .await
+            .unwrap()
+            .unwrap();
+        let (remote, remote_bytes) = chunk(b"published during the publication");
+        other
+            .put(remote.clone(), remote_bytes.clone())
+            .await
+            .unwrap();
+        other.flush().await.unwrap();
+        writer.refresh().await.unwrap();
+        publish.abort();
+        assert!(publish.await.unwrap_err().is_cancelled());
+        writer.flush().await.unwrap();
+
+        let reopened = PackedChunks::open(objects, base, u64::MAX).await.unwrap();
+        for (meta, bytes) in [
+            (seed, seed_bytes),
+            (local, local_bytes),
+            (remote, remote_bytes),
+        ] {
+            assert_eq!(writer.get(&meta.digest).await.unwrap(), Some(bytes.clone()));
+            assert_eq!(reopened.get(&meta.digest).await.unwrap(), Some(bytes));
+        }
+    }
+
+    #[tokio::test]
+    async fn publication_keeps_packs_of_a_catalog_installed_after_its_snapshot() {
+        for rebase in [false, true] {
+            let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let base = Path::from("publication-after-snapshot-refresh");
+            let writer = PackedChunks::open(objects.clone(), base.clone(), 1)
+                .await
+                .unwrap();
+            let other = PackedChunks::open(objects.clone(), base.clone(), u64::MAX)
+                .await
+                .unwrap();
+            if rebase {
+                // The publication then rebuilds a sharded base from its snapshot.
+                writer.set_catalog_rebase_run_bytes_for_test(1);
+                other.set_catalog_rebase_run_bytes_for_test(1);
+            }
+            let (local, local_bytes) = chunk(b"published after the snapshot");
+            writer
+                .put(local.clone(), local_bytes.clone())
+                .await
+                .unwrap();
+
+            let (reached_tx, reached) = tokio::sync::oneshot::channel();
+            let (resume, resume_rx) = tokio::sync::oneshot::channel();
+            *writer.publish_window_hook.lock().unwrap() = Some(FlushHandoffHook {
+                reached: reached_tx,
+                resume: resume_rx,
+            });
+            let publish = tokio::spawn({
+                let writer = writer.clone();
+                async move { writer.flush().await }
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(10), reached)
+                .await
+                .unwrap()
+                .unwrap();
+            // A refresh installs another writer's catalog after the snapshot,
+            // so the publication must still write against the catalog it read.
+            let (remote, remote_bytes) = chunk(b"installed after the snapshot");
+            other
+                .put(remote.clone(), remote_bytes.clone())
+                .await
+                .unwrap();
+            other.flush().await.unwrap();
+            writer.refresh().await.unwrap();
+            resume.send(()).unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(10), publish)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+
+            // This lookup does not reload on a miss.
+            assert!(
+                writer.location(&remote.digest).await.unwrap().is_some(),
+                "rebase: {rebase}"
+            );
+            let reopened = PackedChunks::open(objects, base, u64::MAX).await.unwrap();
+            for (meta, bytes) in [(local, local_bytes), (remote, remote_bytes)] {
+                assert_eq!(writer.get(&meta.digest).await.unwrap(), Some(bytes.clone()));
+                assert_eq!(reopened.get(&meta.digest).await.unwrap(), Some(bytes));
+            }
+        }
+    }
+
+    /// Publishes `seed` in a sharded base through a rebase, then `run` with
+    /// manifests past the inline delta limit, which seal into a run that
+    /// opening the base defers. Returns the run's manifests.
+    async fn publish_deferred_run(
+        other: &PackedChunks,
+        seed: &(ChunkMeta, Bytes),
+        run: Option<&(ChunkMeta, Bytes)>,
+    ) -> Vec<BlobId> {
+        other.set_catalog_rebase_run_bytes_for_test(1);
+        other.put(seed.0.clone(), seed.1.clone()).await.unwrap();
+        other.flush().await.unwrap();
+        other.set_catalog_rebase_run_bytes_for_test(CATALOG_REBASE_RUN_BYTES);
+        if let Some((meta, bytes)) = run {
+            other.put(meta.clone(), bytes.clone()).await.unwrap();
+        }
+        let manifests = (0..=(delta::MAX_INLINE_DELTA_BYTES / DIGEST_LEN) as u64)
+            .map(|ordinal| {
+                let mut key = Vec::from(b"deferred run manifest ".as_slice());
+                key.extend_from_slice(&ordinal.to_le_bytes());
+                BlobId::new(blake3::hash(&key).into())
+            })
+            .collect::<Vec<_>>();
+        for manifest in &manifests {
+            other.register_manifest(*manifest);
+        }
+        other.flush().await.unwrap();
+        let root = other.index_catalog.lock().unwrap().root.clone().unwrap();
+        assert!(matches!(root.base, CatalogBase::Sharded { .. }));
+        assert!(!root.runs.is_empty());
+        manifests
+    }
+
+    #[tokio::test]
+    async fn deferred_runs_keep_packs_of_a_cancelled_publication() {
+        let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let base = Path::from("deferred-runs-during-publication");
+        let writer = PackedChunks::open(objects.clone(), base.clone(), 1)
+            .await
+            .unwrap();
+        let other = PackedChunks::open(objects.clone(), base.clone(), u64::MAX)
+            .await
+            .unwrap();
+        let (seed, seed_bytes) = chunk(b"sharded base seed");
+        publish_deferred_run(&other, &(seed.clone(), seed_bytes.clone()), None).await;
+        let (local, local_bytes) = chunk(b"flushed before the cancelled publication");
+        writer
+            .put(local.clone(), local_bytes.clone())
+            .await
+            .unwrap();
+
+        let (reached_tx, reached) = tokio::sync::oneshot::channel();
+        let (_resume, resume_rx) = tokio::sync::oneshot::channel::<()>();
+        *writer.publish_window_hook.lock().unwrap() = Some(FlushHandoffHook {
+            reached: reached_tx,
+            resume: resume_rx,
+        });
+        let publish = tokio::spawn({
+            let writer = writer.clone();
+            async move { writer.flush().await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(10), reached)
+            .await
+            .unwrap()
+            .unwrap();
+        // The refresh replays the publication's changes over the other
+        // writer's catalog, then a membership read materializes its run.
+        writer.refresh().await.unwrap();
+        assert!(!writer.lazy_catalog.read().unwrap().run_refs.is_empty());
+        writer
+            .list_manifests()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert!(writer.lazy_catalog.read().unwrap().run_refs.is_empty());
+        // This lookup does not reload on a miss.
+        assert!(writer.location(&local.digest).await.unwrap().is_some());
+        // The cancelled publication restores only its changes, which the next
+        // publication encodes against the materialized index.
+        publish.abort();
+        assert!(publish.await.unwrap_err().is_cancelled());
+        writer.flush().await.unwrap();
+
+        let reopened = PackedChunks::open(objects, base, u64::MAX).await.unwrap();
+        for (meta, bytes) in [(seed, seed_bytes), (local, local_bytes)] {
+            assert_eq!(writer.get(&meta.digest).await.unwrap(), Some(bytes.clone()));
+            assert_eq!(reopened.get(&meta.digest).await.unwrap(), Some(bytes));
+        }
+    }
+
+    #[tokio::test]
+    async fn contended_rebase_keeps_entries_of_deferred_runs() {
+        for rebase in [true, false] {
+            let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let base = Path::from("contended-rebase-over-deferred-runs");
+            let writer = PackedChunks::open(objects.clone(), base.clone(), 1)
+                .await
+                .unwrap();
+            let other = PackedChunks::open(objects.clone(), base.clone(), u64::MAX)
+                .await
+                .unwrap();
+            let seed = chunk(b"sharded base seed");
+            let remote = chunk(b"held only by a deferred run");
+            let manifests = publish_deferred_run(&other, &seed, Some(&remote)).await;
+            // The writer has not loaded that catalog, so its publication
+            // contends and retries over a catalog whose runs are deferred.
+            if rebase {
+                writer.set_catalog_rebase_run_bytes_for_test(1);
+            }
+            let local = chunk(b"published over deferred runs");
+            writer.put(local.0.clone(), local.1.clone()).await.unwrap();
+            writer.flush().await.unwrap();
+            // Only a rebase needs the runs; an appended delta keeps them deferred.
+            let root = writer.index_catalog.lock().unwrap().root.clone().unwrap();
+            assert_eq!(root.runs.is_empty(), rebase);
+            assert_eq!(
+                writer.lazy_catalog.read().unwrap().run_refs.is_empty(),
+                rebase
+            );
+
+            let reopened = PackedChunks::open(objects, base, u64::MAX).await.unwrap();
+            for (meta, bytes) in [seed, remote, local] {
+                assert_eq!(
+                    writer.get(&meta.digest).await.unwrap(),
+                    Some(bytes.clone()),
+                    "rebase: {rebase}"
+                );
+                assert_eq!(reopened.get(&meta.digest).await.unwrap(), Some(bytes));
+            }
+            for manifest in [manifests[0], *manifests.last().unwrap()] {
+                assert!(!reopened.manifest_definitely_absent(&manifest));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_run_load_leaves_changes_to_the_next_flush() {
+        let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let base = Path::from("cancelled-publication-run-load");
+        let writer = PackedChunks::open(objects.clone(), base.clone(), 1)
+            .await
+            .unwrap();
+        let other = PackedChunks::open(objects.clone(), base.clone(), u64::MAX)
+            .await
+            .unwrap();
+        publish_deferred_run(&other, &chunk(b"sharded base seed"), None).await;
+        let (local, local_bytes) = chunk(b"flushed before the cancelled run load");
+        writer
+            .put(local.clone(), local_bytes.clone())
+            .await
+            .unwrap();
+        writer.refresh().await.unwrap();
+        assert!(!writer.lazy_catalog.read().unwrap().run_refs.is_empty());
+
+        // Cancel the publication while it loads the deferred runs.
+        let (reached_tx, reached) = tokio::sync::oneshot::channel();
+        let (_resume, resume_rx) = tokio::sync::oneshot::channel::<()>();
+        *writer.catalog_read_hook.lock().unwrap() = Some(FlushHandoffHook {
+            reached: reached_tx,
+            resume: resume_rx,
+        });
+        let publish = tokio::spawn({
+            let writer = writer.clone();
+            async move { writer.flush().await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(10), reached)
+            .await
+            .unwrap()
+            .unwrap();
+        publish.abort();
+        assert!(publish.await.unwrap_err().is_cancelled());
+        // Nothing marks the index dirty again, so this flush must still
+        // publish the changes the cancelled one left pending.
+        writer.flush().await.unwrap();
+
+        let reopened = PackedChunks::open(objects, base, u64::MAX).await.unwrap();
+        assert_eq!(
+            reopened.get(&local.digest).await.unwrap(),
+            Some(local_bytes)
+        );
     }
 
     #[tokio::test]
