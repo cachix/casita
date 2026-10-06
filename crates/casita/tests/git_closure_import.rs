@@ -841,3 +841,204 @@ async fn failed_import_checkpoints_never_claim_an_incomplete_tree_is_validated()
         ClosureStatus::Complete { objects: 2 }
     );
 }
+
+#[tokio::test]
+async fn cancelled_closure_imports_do_not_publish_completeness_and_can_resume() {
+    use casita::experimental::{FormatLimits, FormatRegistry};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Single-object batches publish each record as soon as it is staged, so a
+    // cancellation can follow a published parent.
+    let repository = || {
+        Repository::with_formats(
+            MemoryBlobStore::new(),
+            MemoryMetadataStore::new().unwrap(),
+            FormatRegistry::builtin(),
+            FormatLimits {
+                max_batch_objects: 1,
+                ..Default::default()
+            },
+        )
+    };
+    // The last child is in a second discovery frontier only for 257 children.
+    for count in [255usize, 256, 257] {
+        let source = Source::new("sha1");
+        let mut entries = String::new();
+        for index in 0..count {
+            let blob = source.blob(&(index as u64).to_le_bytes());
+            entries.push_str(&format!("100644 blob {blob}\tf{index:04}\n"));
+        }
+        let root = tree(&source.tree(&entries));
+        let checks = Arc::new(AtomicUsize::new(0));
+        let observed = checks.clone();
+        repository()
+            .import(
+                source
+                    .request(vec![root.clone()])
+                    .with_cancellation_check(move || {
+                        observed.fetch_add(1, Ordering::SeqCst);
+                        false
+                    }),
+            )
+            .await
+            .unwrap();
+        let total = checks.load(Ordering::SeqCst);
+        // Cancel before opening the source, while decoding the root, after
+        // publishing it and two children, before publishing the last child,
+        // before proving closures, and between proving and marking them.
+        for (cancel_after, published) in [
+            (0, 0),
+            (4, 0),
+            (16, 3),
+            (total - 4, count),
+            (total - 2, count + 1),
+            (total - 1, count + 1),
+        ] {
+            let repository = repository();
+            let checks = Arc::new(AtomicUsize::new(0));
+            let observed = checks.clone();
+            let request = if cancel_after == 0 {
+                // Pre-cancellation must be observable before opening a source.
+                GitClosureImport::new(source.0.path().join("absent"), [root.clone()])
+            } else {
+                source.request(vec![root.clone()])
+            };
+            let result = repository
+                .import(request.with_cancellation_check(move || {
+                    observed.fetch_add(1, Ordering::SeqCst) >= cancel_after
+                }))
+                .await;
+            assert!(
+                matches!(result, Err(GitClosureImportError::Cancelled)),
+                "{result:?}"
+            );
+            assert_eq!(checks.load(Ordering::SeqCst), cancel_after + 1);
+            let hold = repository.owned_retention_hold().await.unwrap();
+            assert_eq!(
+                hold.snapshot()
+                    .validated_closures(std::slice::from_ref(&root))
+                    .await
+                    .unwrap(),
+                [false],
+                "an interrupted traversal must not leave a reusable completeness mark",
+            );
+            let resumed = repository
+                .import(source.request(vec![root.clone()]))
+                .await
+                .unwrap();
+            assert_eq!(
+                resumed.report.imported_objects,
+                count + 1 - published,
+                "cancelled after {cancel_after} of {total} checks"
+            );
+            assert_eq!(
+                repository.verify_closure(&root).await.unwrap(),
+                ClosureStatus::Complete { objects: count + 1 }
+            );
+            repository
+                .mutation_session()
+                .await
+                .unwrap()
+                .publish_rooted(Vec::new(), "resumed".try_into().unwrap(), root.clone())
+                .await
+                .unwrap();
+            assert!(repository.fsck().await.unwrap().is_clean());
+        }
+    }
+}
+
+#[tokio::test]
+async fn cancelling_inside_a_decode_batch_leaves_only_collectible_residue() {
+    use casita::experimental::{FormatLimits, FormatRegistry};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Default limits stage every child for one publication batch, so a
+    // cancellation in the decode worker leaves staged payloads unpublished.
+    let repository = || {
+        Repository::with_formats(
+            MemoryBlobStore::new(),
+            MemoryMetadataStore::new().unwrap(),
+            FormatRegistry::builtin(),
+            FormatLimits::default(),
+        )
+    };
+    let count = 300;
+    let source = Source::new("sha1");
+    let mut entries = String::new();
+    for index in 0..count {
+        let blob = source.blob(&(index as u64).to_le_bytes());
+        entries.push_str(&format!("100644 blob {blob}\tf{index:04}\n"));
+    }
+    let root = tree(&source.tree(&entries));
+    let import = |repository: &Repository<_, _>, cancel_after: usize| {
+        let checks = Arc::new(AtomicUsize::new(0));
+        let observed = checks.clone();
+        let request = source
+            .request(vec![root.clone()])
+            .with_cancellation_check(move || {
+                observed.fetch_add(1, Ordering::SeqCst) >= cancel_after
+            });
+        let repository = repository.clone();
+        async move {
+            (
+                repository.import(request).await,
+                checks.load(Ordering::SeqCst),
+            )
+        }
+    };
+    let (complete, total) = import(&repository(), usize::MAX).await;
+    complete.unwrap();
+
+    // A cancellation requested after the last check cannot stop the import.
+    let finished = repository();
+    let (result, checks) = import(&finished, total).await;
+    assert_eq!(result.unwrap().report.imported_objects, count + 1);
+    assert_eq!(checks, total);
+
+    // The decode worker checks between objects, so most checks fall inside
+    // the batch and the midpoint cancels while children are still decoding.
+    assert!(total > count && total < 2 * count, "{total} checks");
+    let cancelled = repository();
+    let (result, checks) = import(&cancelled, total / 2).await;
+    assert!(
+        matches!(result, Err(GitClosureImportError::Cancelled)),
+        "{result:?}"
+    );
+    assert_eq!(checks, total / 2 + 1);
+    // The session and its staging pins are released, so collection removes
+    // the staged residue and the repository stays healthy.
+    assert!(cancelled.collect().await.unwrap().removed.payload_blobs > 0);
+    assert!(cancelled.fsck().await.unwrap().is_clean());
+    let resumed = cancelled
+        .import(source.request(vec![root.clone()]))
+        .await
+        .unwrap();
+    assert_eq!(resumed.report.imported_objects, count + 1);
+    assert_eq!(
+        cancelled.verify_closure(&root).await.unwrap(),
+        ClosureStatus::Complete { objects: count + 1 }
+    );
+}
+
+#[test]
+fn cancellable_requests_remain_unwind_safe() {
+    fn unwind_safe<T: std::panic::UnwindSafe + std::panic::RefUnwindSafe>(_: &T) {}
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    unwind_safe(
+        &GitClosureImport::new("objects", [])
+            .with_cancellation_check(move || cancelled.load(std::sync::atomic::Ordering::Relaxed)),
+    );
+}
+
+#[tokio::test]
+async fn application_import_reports_cancellation_without_retrying() {
+    let repository = casita::Repository::memory().unwrap();
+    let error = repository
+        .import(GitClosureImport::new("not-opened", []).with_cancellation_check(|| true))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), casita::ErrorKind::Cancelled);
+    assert_eq!(error.retry_disposition(), casita::RetryDisposition::Never);
+}

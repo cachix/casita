@@ -26,6 +26,7 @@ CLI.
 | `Corrupt` | `corrupt` | Committed state violates a repository invariant |
 | `CollectedDuringRead` | `collected_during_read` | An unheld best-effort read raced collection of unrooted data |
 | `Backend` | `backend` | I/O, storage, state-engine, or other operational infrastructure failed |
+| `Cancelled` | `cancelled` | The caller cancelled the operation before it completed |
 
 The enum is non-exhaustive. Include a fallback arm when matching it.
 
@@ -44,7 +45,8 @@ return a non-exhaustive `RetryDisposition`:
 `Busy`, stale revisions, typed payload or state-backend transient failures,
 throttling, selected network I/O errors, and storage-full state may be
 retryable. Invalid identities, immutable conflicts, malformed input, and
-missing data normally are not.
+missing data normally are not. Cancellation is the caller's own decision and
+is never retried automatically.
 
 A retry disposition does not make a non-idempotent application operation safe
 to repeat blindly. Observe the operation's commit result, root expectation, or
@@ -132,6 +134,7 @@ reports `Collectible` or `Unchecked` findings. It fails when at least one
 | Finding | First response |
 |---|---|
 | `busy` | Let the active mutation/read/collector finish, then retry with bounds |
+| `cancelled` | Nothing to repair; repeat the operation without cancelling when its result is still wanted |
 | `stale_revision` | Read a fresh snapshot and recompute the conditional mutation |
 | `collected_during_read` | Repeat under a `RetentionHold`, or root the data before relying on it |
 | `unsupported` / `Unchecked` | Open with a registry or build that contains the required verifier |

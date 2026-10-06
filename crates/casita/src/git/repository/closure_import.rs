@@ -13,7 +13,9 @@ use gix::odb::HeaderExt;
 use crate::ObjectKey;
 use crate::blob::BlobStore;
 use crate::git::{GitError, GitObjectFormat, GitObjectKind, git_key_parts};
-use crate::importers::{GitClosureImport, GitClosureImportError, GitClosureImportReport};
+use crate::importers::{
+    CancellationCheck, GitClosureImport, GitClosureImportError, GitClosureImportReport,
+};
 use crate::metadata::MetadataStore;
 use crate::repository::{MutationSession, PendingGitWitnesses, RepositoryError};
 use crate::spill::{SpillSet, TraversalQueue};
@@ -63,6 +65,7 @@ struct Source {
     objects: gix::odb::Handle,
     /// Canonically ordered selected roots, for classifying type mismatches.
     roots: Arc<[ObjectKey]>,
+    cancellation: CancellationCheck,
     decoded_bytes: u64,
 }
 
@@ -72,6 +75,7 @@ impl Source {
         format: GitObjectFormat,
         limit: u64,
         roots: Arc<[ObjectKey]>,
+        cancellation: CancellationCheck,
     ) -> Result<Self> {
         let options = gix::odb::store::init::Options {
             object_hash: match format {
@@ -91,6 +95,7 @@ impl Source {
         Ok(Self {
             objects,
             roots,
+            cancellation,
             decoded_bytes: 0,
         })
     }
@@ -106,6 +111,7 @@ impl Source {
         let mut decoded = Vec::new();
         let mut bytes = 0u64;
         while decoded.len() < count {
+            self.cancellation.check()?;
             let Some(key) = pending.front() else { break };
             let (_, kind, oid) = git_key_parts(key)?;
             let oid = gix::ObjectId::from_bytes_or_panic(oid);
@@ -157,6 +163,7 @@ pub(crate) async fn import<PS: BlobStore, SS: MetadataStore>(
     session: &MutationSession<'_, PS, SS>,
     request: &GitClosureImport,
 ) -> Result<GitClosureImportReport> {
+    request.cancellation.check()?;
     let repository = session.repository();
     let limits = repository.limits();
     if limits.max_batch_objects == 0 {
@@ -212,6 +219,7 @@ pub(crate) async fn import<PS: BlobStore, SS: MetadataStore>(
     let mut staged = Vec::new();
     let mut staged_links = 0usize;
     loop {
+        request.cancellation.check()?;
         let mut keys = Vec::new();
         while keys.len() < FRONTIER {
             let Some((_, key)) = queue.pop().await.map_err(RepositoryError::from)? else {
@@ -317,12 +325,14 @@ pub(crate) async fn import<PS: BlobStore, SS: MetadataStore>(
             .await
             .map_err(RepositoryError::from)?;
         while !missing.is_empty() {
+            request.cancellation.check()?;
             let path = request.objects_dir.clone();
             let concurrency = request.concurrency.get().min(limits.max_batch_objects);
             let budget = request.max_buffered_bytes.get();
             let payload_limit = limits.max_payload_bytes;
             let metadata_limit = limits.max_metadata_bytes;
             let roots = roots.clone();
+            let cancellation = request.cancellation.clone();
             let (next_source, next_missing, decoded) = tokio::task::spawn_blocking(move || {
                 let mut source = match source {
                     Some(source)
@@ -330,7 +340,7 @@ pub(crate) async fn import<PS: BlobStore, SS: MetadataStore>(
                     {
                         source
                     }
-                    _ => Source::open(path, format, payload_limit, roots)?,
+                    _ => Source::open(path, format, payload_limit, roots, cancellation)?,
                 };
                 let decoded = source.decode(
                     &mut missing,
@@ -343,6 +353,7 @@ pub(crate) async fn import<PS: BlobStore, SS: MetadataStore>(
             })
             .await
             .map_err(source_error)??;
+            request.cancellation.check()?;
             source = Some(next_source);
             missing = next_missing;
             report.imported_objects += decoded.len();
@@ -371,6 +382,7 @@ pub(crate) async fn import<PS: BlobStore, SS: MetadataStore>(
                 if staged.len() == limits.max_batch_objects
                     || staged_links >= super::MAX_GIT_IMPORT_BATCH_LINKS
                 {
+                    request.cancellation.check()?;
                     session
                         .publish_unrooted(std::mem::take(&mut staged))
                         .await?;
@@ -380,6 +392,7 @@ pub(crate) async fn import<PS: BlobStore, SS: MetadataStore>(
         }
     }
     if !staged.is_empty() {
+        request.cancellation.check()?;
         session.publish_unrooted(staged).await?;
     }
     // Only now does every discovered native record have all its canonical
@@ -387,11 +400,10 @@ pub(crate) async fn import<PS: BlobStore, SS: MetadataStore>(
     // custom registry audits its own before any mark becomes visible.
     // Mark in bounded batches without rereading payloads or retaining an O(N)
     // in-memory inventory. A failed discovery cannot publish any false marks.
-    session
-        .prove_git_closures(&request.roots, pending)
-        .await?
-        .publish()
-        .await?;
+    request.cancellation.check()?;
+    let proof = session.prove_git_closures(&request.roots, pending).await?;
+    request.cancellation.check()?;
+    proof.publish().await?;
     Ok(report)
 }
 
@@ -441,6 +453,7 @@ mod tests {
             GitObjectFormat::Sha1,
             limit,
             roots.into(),
+            CancellationCheck::default(),
         )
         .unwrap()
     }

@@ -20,6 +20,13 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
   input before decoding. Closure witnesses are committed in batches of at most
   `max_batch_objects`, and only once the whole selection is proven complete.
   Repeating an interrupted import completes them.
+- `GitClosureImport::with_cancellation_check` stops an import cooperatively
+  between discovery, decoding and object publication batches, between decoded
+  objects, and before completeness marking, which then runs to completion. It
+  fails with `GitClosureImportError::Cancelled`, classified as the new
+  non-retryable `ErrorKind::Cancelled` (`RepositoryErrorCategory::Cancelled`).
+  Partially imported records stay unrooted without completeness marks, and
+  repeating the import resumes them.
 
 - `MutationSession::stage_object_reader_with_size` verifies an exact-length
   source while writing it, avoiding a verification reread of the stored payload.
