@@ -4,8 +4,7 @@ use crate::metadata::{MetadataStore, RootChange, flush_repository_leases};
 use crate::sync::{TransferSelection, TransferSource};
 use tokio::io::AsyncReadExt;
 
-#[path = "../../../benches/bench_util/gc_timing.rs"]
-mod gc_timing;
+use crate::benchmark_timing as gc_timing;
 
 fn payload(seed: usize) -> Vec<u8> {
     (0..128)

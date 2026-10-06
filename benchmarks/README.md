@@ -3047,3 +3047,32 @@ upload concurrency, memory admission, and the inline-hashing boundary. It runs
 in `benchmark all`. See the
 [cases, correctness gates, and measurement notes](chunk-hash-batch.md)
 for reproducible commands and retained paired reports.
+
+## Shared import sessions
+
+`benchmark run output-import --profile smoke --repetitions 1 --output /tmp/output-import.json`
+compares per-output sessions, a shared session with one publication per output,
+the public `ImportSequence` and atomic `BlobImport::batch` requests, and a shared session with one publication for all
+outputs. The shared-session mode isolates pin lifetime from metadata commit
+batching; the batch-api and atomic-api modes verify the public caller paths and report
+combined import time because their individual phase times are not exposed. All
+modes check exact roots, byte-for-byte payload reads, and clean fsck. The permanent matrix
+includes one, eight, 15, 16, 17, and 48 outputs and sizes below, at, and above 128 KiB.
+The 15/16/17 cases bracket the atomic API's 16-reader concurrency bound. Its
+concurrent staging allows resource protection requests to share a durable ledger
+sync before payload upload; the batched control stages sequentially.
+The 48-output case matches the application workflow's streaming batch fixture.
+`benchmark all --suites output-import --output /tmp/output-import-all` runs it.
+
+Applications use `repository.import(ImportSequence::new(inputs))` for a sequence
+of blob or filesystem requests,
+or `Repository::import_session` to mix those request types. Keep batches bounded
+because the session retains staged resources until it is dropped. Each request
+publishes independently; an error stops a batch after any earlier publications.
+
+Use `repository.import(BlobImport::batch(inputs)).await` to publish a vector
+of `BlobImport` requests in one atomic commit. Reports preserve input order.
+Distinct root names and the configured mutation batch limit are checked before
+staging begins. A reader failure leaves every root unchanged; staged payload
+residue can be collected. `ImportSequence` keeps per-request
+publication and its earlier successes on failure.
