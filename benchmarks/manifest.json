@@ -1361,6 +1361,8 @@
         "--features",
         "experimental,git-fetch",
         "--bench",
+        "artifact_batches",
+        "--bench",
         "write_path",
         "--bench",
         "hash_inputs",

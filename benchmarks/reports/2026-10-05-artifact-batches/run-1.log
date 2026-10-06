@@ -1,0 +1,293 @@
+   Compiling libc v0.2.190
+   Compiling syn v2.0.119
+   Compiling yoke-derive v0.8.4
+   Compiling lazy_static v1.5.1
+   Compiling turso_ext v0.8.0 (https://github.com/cachix/turso.git?rev=9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549#9065e04c)
+   Compiling turso_core v0.8.0 (https://github.com/cachix/turso.git?rev=9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549#9065e04c)
+   Compiling powerfmt v0.2.1
+   Compiling compression-codecs v0.4.45
+   Compiling sharded-slab v0.1.7
+   Compiling casita v0.1.0 (/tmp/casita-batch-artifacts-20261005/crates/casita)
+   Compiling auto_impl v1.4.0
+   Compiling time v0.3.55
+   Compiling yoke v0.8.3
+   Compiling zerovec v0.11.8
+   Compiling zerotrie v0.2.5
+   Compiling jobserver v0.1.35
+   Compiling clang-sys v1.9.1
+   Compiling cc v1.6.0
+   Compiling getrandom v0.2.17
+   Compiling getrandom v0.3.4
+   Compiling getrandom v0.4.3
+   Compiling errno v0.3.14
+   Compiling socket2 v0.6.5
+   Compiling mio v1.2.4
+   Compiling parking_lot_core v0.9.12
+   Compiling io-uring v0.7.15
+   Compiling nix v0.31.3
+   Compiling positioned-io v0.3.5
+   Compiling dirs-sys v0.5.0
+   Compiling wait-timeout v0.2.1
+   Compiling rand_core v0.6.4
+   Compiling tinystr v0.8.4
+   Compiling potential_utf v0.1.6
+   Compiling rand_core v0.9.5
+   Compiling signal-hook-registry v1.4.8
+   Compiling tempfile v3.27.0
+   Compiling crypto-common v0.1.7
+   Compiling prettyplease v0.2.37
+   Compiling icu_locale_core v2.3.0
+   Compiling icu_collections v2.3.0
+   Compiling tokio v1.53.2
+   Compiling cipher v0.4.4
+   Compiling universal-hash v0.5.1
+   Compiling aead v0.5.2
+   Compiling parking_lot v0.12.5
+   Compiling polyval v0.6.2
+   Compiling rand v0.10.3
+   Compiling ctr v0.9.2
+   Compiling aes v0.8.4
+   Compiling uuid v1.27.0
+   Compiling ghash v0.5.1
+   Compiling fastbloom v0.14.1
+   Compiling digest v0.10.7
+   Compiling rand_xoshiro v0.7.0
+   Compiling aes-gcm v0.10.3
+   Compiling bindgen v0.69.5
+   Compiling sha2 v0.10.9
+   Compiling sha1 v0.10.7
+   Compiling twox-hash v2.1.5
+   Compiling imbl v7.0.2
+   Compiling aegis v0.9.20
+   Compiling simsimd v6.5.16
+   Compiling zstd-sys v2.1.0+zstd.1.5.7
+   Compiling blake3 v1.8.7
+   Compiling nix-archive v0.6.0
+   Compiling sha1-checked v0.10.0
+   Compiling icu_provider v2.3.1
+   Compiling dirs v6.0.0
+   Compiling zerocopy-derive v0.8.59
+   Compiling tracing-attributes v0.1.31
+   Compiling icu_normalizer v2.3.0
+   Compiling icu_properties v2.3.0
+   Compiling icu_locale_fallback v2.3.0
+   Compiling strum_macros v0.26.4
+   Compiling miette-derive v7.6.0
+   Compiling turso_macros v0.8.0 (https://github.com/cachix/turso.git?rev=9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549#9065e04c)
+   Compiling aristo-macros v0.4.1
+   Compiling icu_locale v2.3.1
+   Compiling tracing v0.1.44
+   Compiling icu_collator v2.3.1
+   Compiling tracing-subscriber v0.3.23
+   Compiling aristo v0.4.1
+   Compiling prost-derive v0.14.4
+   Compiling idna_adapter v1.2.2
+   Compiling pin-project-internal v1.1.13
+   Compiling turso_sdk_kit_macros v0.8.0 (https://github.com/cachix/turso.git?rev=9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549#9065e04c)
+   Compiling idna v1.1.0
+   Compiling zerocopy v0.8.59
+   Compiling miette v7.6.0
+   Compiling strum v0.26.3
+   Compiling tokio-util v0.7.19
+   Compiling async-stream-impl v0.3.6
+   Compiling turso_parser v0.8.0 (https://github.com/cachix/turso.git?rev=9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549#9065e04c)
+   Compiling turso_sdk_kit v0.8.0 (https://github.com/cachix/turso.git?rev=9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549#9065e04c)
+   Compiling tracing-appender v0.2.5
+   Compiling tokio-stream v0.1.19
+   Compiling pin-project v1.1.13
+   Compiling url v2.5.8
+   Compiling iroh-io v0.6.2
+   Compiling async-compression v0.4.50
+   Compiling prost v0.14.4
+   Compiling astral-tokio-tar v0.6.4
+   Compiling object_store v0.14.2
+   Compiling bao-tree v0.16.1
+   Compiling async-stream v0.3.6
+   Compiling rusty-fork v0.3.1
+   Compiling fastcdc v5.0.0
+   Compiling rand_xorshift v0.4.0
+   Compiling is-terminal v0.4.17
+   Compiling ppv-lite86 v0.2.21
+   Compiling half v2.7.1
+   Compiling rand_chacha v0.9.0
+   Compiling ciborium-ll v0.2.2
+   Compiling ciborium v0.2.2
+   Compiling rand v0.9.5
+   Compiling criterion v0.5.1
+   Compiling proptest v1.11.0
+   Compiling zstd-safe v7.3.0
+   Compiling zstd v0.13.3
+   Compiling turso_sync_engine v0.8.0 (https://github.com/cachix/turso.git?rev=9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549#9065e04c)
+   Compiling turso_sync_sdk_kit v0.8.0 (https://github.com/cachix/turso.git?rev=9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549#9065e04c)
+   Compiling turso v0.8.0 (https://github.com/cachix/turso.git?rev=9065e04cb09cb21a6b586dcbe75f1fb8ef3fc549#9065e04c)
+    Finished `bench` profile [optimized] target(s) in 5m 18s
+     Running benches/artifact_batches.rs (/tmp/casita-batch-target/release/deps/artifact_batches-fc50b431afa7d881)
+Benchmarking artifact_batches/mixed-import-memory-individual/1
+Benchmarking artifact_batches/mixed-import-memory-individual/1: Warming up for 1.0000 s
+Benchmarking artifact_batches/mixed-import-memory-individual/1: Collecting 10 samples in estimated 3.0008 s (14k iterations)
+Benchmarking artifact_batches/mixed-import-memory-individual/1: Analyzing
+artifact_batches/mixed-import-memory-individual/1
+                        time:   [61.150 µs 61.577 µs 61.952 µs]
+Found 4 outliers among 10 measurements (40.00%)
+  1 (10.00%) low severe
+  1 (10.00%) low mild
+  2 (20.00%) high mild
+Benchmarking artifact_batches/checkout-memory-individual/1
+Benchmarking artifact_batches/checkout-memory-individual/1: Warming up for 1.0000 s
+Benchmarking artifact_batches/checkout-memory-individual/1: Collecting 10 samples in estimated 3.0268 s (4015 iterations)
+Benchmarking artifact_batches/checkout-memory-individual/1: Analyzing
+artifact_batches/checkout-memory-individual/1
+                        time:   [224.89 µs 232.53 µs 237.40 µs]
+Benchmarking artifact_batches/mixed-import-memory-batch/1
+Benchmarking artifact_batches/mixed-import-memory-batch/1: Warming up for 1.0000 s
+Benchmarking artifact_batches/mixed-import-memory-batch/1: Collecting 10 samples in estimated 3.0038 s (14k iterations)
+Benchmarking artifact_batches/mixed-import-memory-batch/1: Analyzing
+artifact_batches/mixed-import-memory-batch/1
+                        time:   [61.210 µs 62.311 µs 63.631 µs]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking artifact_batches/checkout-memory-batch/1
+Benchmarking artifact_batches/checkout-memory-batch/1: Warming up for 1.0000 s
+Benchmarking artifact_batches/checkout-memory-batch/1: Collecting 10 samples in estimated 3.0426 s (3795 iterations)
+Benchmarking artifact_batches/checkout-memory-batch/1: Analyzing
+artifact_batches/checkout-memory-batch/1
+                        time:   [232.38 µs 236.30 µs 239.53 µs]
+Benchmarking artifact_batches/mixed-import-local-individual/1
+Benchmarking artifact_batches/mixed-import-local-individual/1: Warming up for 1.0000 s
+Benchmarking artifact_batches/mixed-import-local-individual/1: Collecting 10 samples in estimated 3.9050 s (20 iterations)
+Benchmarking artifact_batches/mixed-import-local-individual/1: Analyzing
+artifact_batches/mixed-import-local-individual/1
+                        time:   [32.519 ms 33.054 ms 33.634 ms]
+Benchmarking artifact_batches/checkout-local-individual/1
+Benchmarking artifact_batches/checkout-local-individual/1: Warming up for 1.0000 s
+Benchmarking artifact_batches/checkout-local-individual/1: Collecting 10 samples in estimated 3.1261 s (20 iterations)
+Benchmarking artifact_batches/checkout-local-individual/1: Analyzing
+artifact_batches/checkout-local-individual/1
+                        time:   [2.4114 ms 2.5195 ms 2.6353 ms]
+Benchmarking artifact_batches/mixed-import-local-batch/1
+Benchmarking artifact_batches/mixed-import-local-batch/1: Warming up for 1.0000 s
+Benchmarking artifact_batches/mixed-import-local-batch/1: Collecting 10 samples in estimated 4.2889 s (30 iterations)
+Benchmarking artifact_batches/mixed-import-local-batch/1: Analyzing
+artifact_batches/mixed-import-local-batch/1
+                        time:   [34.368 ms 37.787 ms 41.487 ms]
+Benchmarking artifact_batches/checkout-local-batch/1
+Benchmarking artifact_batches/checkout-local-batch/1: Warming up for 1.0000 s
+Benchmarking artifact_batches/checkout-local-batch/1: Collecting 10 samples in estimated 3.0355 s (20 iterations)
+Benchmarking artifact_batches/checkout-local-batch/1: Analyzing
+artifact_batches/checkout-local-batch/1
+                        time:   [2.5018 ms 2.6030 ms 2.7074 ms]
+Benchmarking artifact_batches/mixed-import-memory-individual/8
+Benchmarking artifact_batches/mixed-import-memory-individual/8: Warming up for 1.0000 s
+Benchmarking artifact_batches/mixed-import-memory-individual/8: Collecting 10 samples in estimated 3.0463 s (990 iterations)
+Benchmarking artifact_batches/mixed-import-memory-individual/8: Analyzing
+artifact_batches/mixed-import-memory-individual/8
+                        time:   [1.2835 ms 1.3013 ms 1.3313 ms]
+Benchmarking artifact_batches/checkout-memory-individual/8
+Benchmarking artifact_batches/checkout-memory-individual/8: Warming up for 1.0000 s
+Benchmarking artifact_batches/checkout-memory-individual/8: Collecting 10 samples in estimated 3.0752 s (1045 iterations)
+Benchmarking artifact_batches/checkout-memory-individual/8: Analyzing
+artifact_batches/checkout-memory-individual/8
+                        time:   [1.8241 ms 1.8800 ms 1.9306 ms]
+Found 3 outliers among 10 measurements (30.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+Benchmarking artifact_batches/mixed-import-memory-batch/8
+Benchmarking artifact_batches/mixed-import-memory-batch/8: Warming up for 1.0000 s
+Benchmarking artifact_batches/mixed-import-memory-batch/8: Collecting 10 samples in estimated 3.0669 s (1155 iterations)
+Benchmarking artifact_batches/mixed-import-memory-batch/8: Analyzing
+artifact_batches/mixed-import-memory-batch/8
+                        time:   [914.40 µs 927.38 µs 935.21 µs]
+Benchmarking artifact_batches/checkout-memory-batch/8
+Benchmarking artifact_batches/checkout-memory-batch/8: Warming up for 1.0000 s
+Benchmarking artifact_batches/checkout-memory-batch/8: Collecting 10 samples in estimated 3.0310 s (1045 iterations)
+Benchmarking artifact_batches/checkout-memory-batch/8: Analyzing
+artifact_batches/checkout-memory-batch/8
+                        time:   [1.7422 ms 1.7634 ms 1.7811 ms]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) low mild
+Benchmarking artifact_batches/mixed-import-local-individual/8
+Benchmarking artifact_batches/mixed-import-local-individual/8: Warming up for 1.0000 s
+
+Warning: Unable to complete 10 samples in 3.0s. You may wish to increase target time to 3.7s.
+Benchmarking artifact_batches/mixed-import-local-individual/8: Collecting 10 samples in estimated 3.6831 s (10 iterations)
+Benchmarking artifact_batches/mixed-import-local-individual/8: Analyzing
+artifact_batches/mixed-import-local-individual/8
+                        time:   [153.18 ms 154.89 ms 156.72 ms]
+Benchmarking artifact_batches/checkout-local-individual/8
+Benchmarking artifact_batches/checkout-local-individual/8: Warming up for 1.0000 s
+Benchmarking artifact_batches/checkout-local-individual/8: Collecting 10 samples in estimated 3.5303 s (20 iterations)
+Benchmarking artifact_batches/checkout-local-individual/8: Analyzing
+artifact_batches/checkout-local-individual/8
+                        time:   [8.3662 ms 8.6899 ms 9.0264 ms]
+Benchmarking artifact_batches/mixed-import-local-batch/8
+Benchmarking artifact_batches/mixed-import-local-batch/8: Warming up for 1.0000 s
+Benchmarking artifact_batches/mixed-import-local-batch/8: Collecting 10 samples in estimated 3.0539 s (20 iterations)
+Benchmarking artifact_batches/mixed-import-local-batch/8: Analyzing
+artifact_batches/mixed-import-local-batch/8
+                        time:   [37.272 ms 37.967 ms 38.830 ms]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking artifact_batches/checkout-local-batch/8
+Benchmarking artifact_batches/checkout-local-batch/8: Warming up for 1.0000 s
+Benchmarking artifact_batches/checkout-local-batch/8: Collecting 10 samples in estimated 4.0318 s (20 iterations)
+Benchmarking artifact_batches/checkout-local-batch/8: Analyzing
+artifact_batches/checkout-local-batch/8
+                        time:   [5.3345 ms 5.6767 ms 6.0611 ms]
+Benchmarking artifact_batches/mixed-import-memory-individual/32
+Benchmarking artifact_batches/mixed-import-memory-individual/32: Warming up for 1.0000 s
+Benchmarking artifact_batches/mixed-import-memory-individual/32: Collecting 10 samples in estimated 3.6925 s (275 iterations)
+Benchmarking artifact_batches/mixed-import-memory-individual/32: Analyzing
+artifact_batches/mixed-import-memory-individual/32
+                        time:   [5.0871 ms 5.1554 ms 5.2361 ms]
+Benchmarking artifact_batches/checkout-memory-individual/32
+Benchmarking artifact_batches/checkout-memory-individual/32: Warming up for 1.0000 s
+Benchmarking artifact_batches/checkout-memory-individual/32: Collecting 10 samples in estimated 3.3303 s (330 iterations)
+Benchmarking artifact_batches/checkout-memory-individual/32: Analyzing
+artifact_batches/checkout-memory-individual/32
+                        time:   [7.0677 ms 7.0948 ms 7.1172 ms]
+Benchmarking artifact_batches/mixed-import-memory-batch/32
+Benchmarking artifact_batches/mixed-import-memory-batch/32: Warming up for 1.0000 s
+Benchmarking artifact_batches/mixed-import-memory-batch/32: Collecting 10 samples in estimated 3.1924 s (330 iterations)
+Benchmarking artifact_batches/mixed-import-memory-batch/32: Analyzing
+artifact_batches/mixed-import-memory-batch/32
+                        time:   [3.1795 ms 3.1978 ms 3.2353 ms]
+Benchmarking artifact_batches/checkout-memory-batch/32
+Benchmarking artifact_batches/checkout-memory-batch/32: Warming up for 1.0000 s
+Benchmarking artifact_batches/checkout-memory-batch/32: Collecting 10 samples in estimated 3.3331 s (330 iterations)
+Benchmarking artifact_batches/checkout-memory-batch/32: Analyzing
+artifact_batches/checkout-memory-batch/32
+                        time:   [8.7176 ms 9.8710 ms 10.616 ms]
+Benchmarking artifact_batches/mixed-import-local-individual/32
+Benchmarking artifact_batches/mixed-import-local-individual/32: Warming up for 1.0000 s
+
+Warning: Unable to complete 10 samples in 3.0s. You may wish to increase target time to 20.6s.
+Benchmarking artifact_batches/mixed-import-local-individual/32: Collecting 10 samples in estimated 20.600 s (10 iterations)
+Benchmarking artifact_batches/mixed-import-local-individual/32: Analyzing
+artifact_batches/mixed-import-local-individual/32
+                        time:   [2.2951 s 2.8678 s 3.3984 s]
+Benchmarking artifact_batches/checkout-local-individual/32
+Benchmarking artifact_batches/checkout-local-individual/32: Warming up for 1.0000 s
+
+Warning: Unable to complete 10 samples in 3.0s. You may wish to increase target time to 11.3s.
+Benchmarking artifact_batches/checkout-local-individual/32: Collecting 10 samples in estimated 11.254 s (10 iterations)
+Benchmarking artifact_batches/checkout-local-individual/32: Analyzing
+artifact_batches/checkout-local-individual/32
+                        time:   [253.28 ms 329.49 ms 418.08 ms]
+Benchmarking artifact_batches/mixed-import-local-batch/32
+Benchmarking artifact_batches/mixed-import-local-batch/32: Warming up for 1.0000 s
+
+Warning: Unable to complete 10 samples in 3.0s. You may wish to increase target time to 27.8s.
+Benchmarking artifact_batches/mixed-import-local-batch/32: Collecting 10 samples in estimated 27.769 s (10 iterations)
+Benchmarking artifact_batches/mixed-import-local-batch/32: Analyzing
+artifact_batches/mixed-import-local-batch/32
+                        time:   [199.16 ms 223.60 ms 250.63 ms]
+Benchmarking artifact_batches/checkout-local-batch/32
+Benchmarking artifact_batches/checkout-local-batch/32: Warming up for 1.0000 s
+
+Warning: Unable to complete 10 samples in 3.0s. You may wish to increase target time to 11.1s.
+Benchmarking artifact_batches/checkout-local-batch/32: Collecting 10 samples in estimated 11.071 s (10 iterations)
+Benchmarking artifact_batches/checkout-local-batch/32: Analyzing
+artifact_batches/checkout-local-batch/32
+                        time:   [116.75 ms 134.72 ms 152.55 ms]
+

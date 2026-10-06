@@ -149,6 +149,44 @@ impl FilesystemImport {
     }
 }
 
+impl FilesystemImport {
+    /// Stage a filesystem graph and root change without publishing any checkpoints.
+    #[cfg(feature = "experimental")]
+    pub async fn stage<'hold, PS: BlobStore, SS: MetadataStore>(
+        self,
+        session: &'hold crate::MutationSession<'_, PS, SS>,
+    ) -> Result<super::StagedImport<'hold, ObjectKey>, RepositoryError> {
+        let mut objects = Vec::new();
+        let (mut keys, _) = session
+            .import_paths_with_staging(
+                vec![(self.path, Some(self.root.clone()), self.excluded)],
+                !self.reread,
+                self.file_concurrency,
+                false,
+                super::ImportPublication {
+                    retention: self.retention,
+                    staging: Some(&mut objects),
+                },
+            )
+            .await?;
+        let key = keys.remove(0);
+        let metadata_changes = self
+            .retention
+            .map(|retention| crate::repository::root_policy::policy_change(&self.root, retention))
+            .into_iter()
+            .collect();
+        Ok(super::StagedImport {
+            report: key.clone(),
+            objects,
+            root_change: crate::RootChange::Set {
+                name: self.root,
+                target: key,
+            },
+            metadata_changes,
+        })
+    }
+}
+
 #[async_trait]
 impl Importer for FilesystemImport {
     type Report = ObjectKey;

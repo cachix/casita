@@ -1,0 +1,50 @@
+{
+  "base_commit": "40e9d43e5570a5d6e2f34a285da4642c8d7e179e",
+  "branch": "task-batch-artifacts-20261005",
+  "worktree": "/tmp/casita-batch-artifacts-20261005",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+  "platform": "Linux-7.2.6-x86_64-with-glibc2.42",
+  "cpu": "AMD Ryzen 7 7840S with Radeon 780M Graphics",
+  "logical_cpus": 16,
+  "filesystem": "btrfs",
+  "benchmark_sha256": "0d9736cc3054e82640da4b0800f086e841e684e5efcea7489be87d39e66ffbdd",
+  "cargo_lock_sha256": "0d9a521c328ef955e11c207167f41e978c4443d01b6636e65107923faeb95112",
+  "corpus": {
+    "requests": [
+      1,
+      8,
+      32
+    ],
+    "payload_bytes": 8,
+    "files_per_directory": 1,
+    "backends": [
+      "memory",
+      "local"
+    ],
+    "runtime": "Tokio current-thread",
+    "samples_per_case": 10,
+    "warmup_seconds": 1,
+    "measurement_seconds": 3
+  },
+  "exclusions": [
+    "repository setup",
+    "correctness checks",
+    "JSON-RPC framing and dispatch"
+  ],
+  "correctness_gates": [
+    "exact import commit count",
+    "all imported root targets",
+    "all payload bytes",
+    "all checkout file bytes"
+  ],
+  "runs_completed": 3,
+  "cases_per_run": 24,
+  "loadavg_after_runs": "5.87 9.75 7.95 25/3018 4",
+  "run_order": {
+    "1": "original, one process",
+    "2": "original, one process",
+    "3": "reverse, one fresh process per case"
+  },
+  "tracked_diff_sha256": "126aefbe3102c6810d8a495fa3132b3b2da494e2e84a81ad0e449b4298b0a26e"
+}

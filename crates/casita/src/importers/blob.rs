@@ -23,6 +23,27 @@ impl<R> BlobImport<R> {
     }
 }
 
+impl<R: AsyncRead + Unpin + Send> BlobImport<R> {
+    /// Stage bytes and a root change without publishing into the repository.
+    #[cfg(feature = "experimental")]
+    pub async fn stage<'hold, PS: BlobStore, SS: MetadataStore>(
+        mut self,
+        session: &'hold crate::MutationSession<'_, PS, SS>,
+    ) -> Result<super::StagedImport<'hold, ObjectKey>, RepositoryError> {
+        let object = session.stage_blob_reader(&mut self.reader).await?;
+        let key = object.record().key().clone();
+        Ok(super::StagedImport {
+            report: key.clone(),
+            objects: vec![object],
+            root_change: crate::RootChange::Set {
+                name: self.root,
+                target: key,
+            },
+            metadata_changes: Vec::new(),
+        })
+    }
+}
+
 impl<PS, SS, R> BackendImporter<Repository<PS, SS>> for BlobImport<R>
 where
     PS: BlobStore,
@@ -52,10 +73,11 @@ where
     type Error = RepositoryError;
 
     async fn import_into(
-        mut self,
+        self,
         session: &crate::MutationSession<'session, PS, SS>,
     ) -> Result<ObjectKey, RepositoryError> {
-        let staged = session.stage_blob_reader(&mut self.reader).await?;
+        let mut reader = self.reader;
+        let staged = session.stage_blob_reader(&mut reader).await?;
         let key = staged.record().key().clone();
         session
             .publish_rooted(vec![staged], self.root, key.clone())

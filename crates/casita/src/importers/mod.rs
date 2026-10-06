@@ -95,3 +95,23 @@ pub use nar::{FilesystemNarImport, NarImport};
 #[cfg(feature = "oci")]
 pub use oci::OciImport;
 pub use tar::TarImport;
+
+/// A verified import protected by its caller's mutation session, awaiting publication.
+/// Dropping this result publishes neither objects nor roots.
+#[cfg(feature = "experimental")]
+pub struct StagedImport<'hold, R> {
+    /// Importer-specific result describing the staged graph.
+    pub report: R,
+    /// Verified objects to include in the caller's commit.
+    pub objects: Vec<crate::StagedObject<'hold>>,
+    /// Named root update to include in the caller's commit.
+    pub root_change: crate::RootChange,
+    /// Optional retention update to publish alongside the root.
+    pub metadata_changes: Vec<crate::MetadataChange>,
+}
+
+// Shared ingestion policy: checkpointed imports or caller-owned staged objects.
+pub(crate) struct ImportPublication<'sink, 'hold> {
+    pub retention: Option<crate::RootRetention>,
+    pub staging: Option<&'sink mut Vec<crate::StagedObject<'hold>>>,
+}

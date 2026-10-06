@@ -3047,3 +3047,19 @@ upload concurrency, memory admission, and the inline-hashing boundary. It runs
 in `benchmark all`. See the
 [cases, correctness gates, and measurement notes](chunk-hash-batch.md)
 for reproducible commands and retained paired reports.
+
+## Artifact batches
+
+`cargo bench -p casita --features experimental --bench artifact_batches` compares
+individual imports with one shared mutation session, and individual checkouts
+with one retained reader. It covers 1, 8, and 32 requests on memory and local
+repositories. Mixed imports cycle through blob, filesystem, and tar inputs.
+Every sample checks the exact number of commits, each root, and restored bytes
+outside timing. Setup is also outside timing. These are library lifecycle
+measurements, excluding JSON-RPC framing and dispatch. The cases are registered
+under `core-primitives` and run in `benchmark all --suites core-primitives`.
+For a correctness-only smoke run use
+`cargo test -p casita --features experimental --bench artifact_batches`.
+
+The [three-run artifact batch report](reports/2026-10-05-artifact-batches/README.md)
+retains optimized timings, the reverse-order control, and all correctness gates.

@@ -280,6 +280,35 @@ where
     where
         R: AsyncRead + Unpin + Send,
     {
+        let mutation = self.mutation_session().await?;
+        self.import_tar_in_session(
+            &mutation,
+            reader,
+            name,
+            limits,
+            crate::importers::ImportPublication {
+                retention,
+                staging: None,
+            },
+        )
+        .await
+    }
+
+    pub(crate) async fn import_tar_in_session<'hold, R>(
+        &self,
+        mutation: &'hold crate::MutationSession<'_, PS, SS>,
+        reader: R,
+        name: RootName,
+        limits: TarImportLimits,
+        publication: crate::importers::ImportPublication<'_, 'hold>,
+    ) -> Result<TarImportReport, TarImportError>
+    where
+        R: AsyncRead + Unpin + Send,
+    {
+        let crate::importers::ImportPublication {
+            retention,
+            mut staging,
+        } = publication;
         validate_limits(limits)?;
         if retention.is_some() && !self.metadata().supports_root_retention() {
             return Err(
@@ -295,7 +324,6 @@ where
         };
         let mut archive = Archive::new(reader);
         let mut entries = archive.entries().map_err(TarImportError::Tar)?;
-        let mutation = self.mutation_session().await?;
         let batch = self.limits().max_batch_objects;
         if batch == 0 {
             return Err(RepositoryError::LimitExceeded(
@@ -493,7 +521,13 @@ where
                 let (path, node, object) = result?;
                 files.insert(path, node);
                 pending.push(object);
-                if pending.len() == batch {
+                if staging.is_some() && pending.len() > batch {
+                    return Err(RepositoryError::LimitExceeded(
+                        "staged tar exceeds mutation object limit".into(),
+                    )
+                    .into());
+                }
+                if staging.is_none() && pending.len() == batch {
                     mutation
                         .publish_unrooted(std::mem::take(&mut pending))
                         .await?;
@@ -545,14 +579,22 @@ where
                 add_to_parent(&mut directories, &path, node)?;
             }
             pending.push(object);
-            if pending.len() == batch {
+            if staging.is_some() && pending.len() > batch {
+                return Err(RepositoryError::LimitExceeded(
+                    "staged tar exceeds mutation object limit".into(),
+                )
+                .into());
+            }
+            if staging.is_none() && pending.len() == batch {
                 mutation
                     .publish_unrooted(std::mem::take(&mut pending))
                     .await?;
             }
         }
         let root = root.expect("the importer always creates a root directory");
-        if let Some(retention) = retention {
+        if let Some(objects) = staging.as_mut() {
+            objects.append(&mut pending);
+        } else if let Some(retention) = retention {
             mutation
                 .publish_with_metadata(
                     pending,

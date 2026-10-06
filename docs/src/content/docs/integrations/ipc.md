@@ -240,6 +240,35 @@ This retains directories, files, and symlinks alike. `artifact.restore` with
 `nar` or `filesystem_nar` unwraps the original node; ordinary checkout
 exposes the envelope.
 
+## Request lists
+
+`artifact.import`, `artifact.restore`, and `artifact.checkout` also accept an
+ordered list of request objects. Each method returns a list of results in the
+same order. An empty list returns `[]`. A named `{"requests": [...]}` envelope
+is equivalent to a list in `params`.
+
+```json
+{"jsonrpc":"2.0","id":6,"method":"artifact.import","params":[{"importer":"blob","path":"/build/result.bin","root":"build/blob"},{"importer":"tar","path":"/build/result.tar","root":"build/tree"}]}
+```
+
+Import lists support `blob`, `filesystem`, and `tar`, including gzip tar options.
+Every item stages into one mutation session. The service publishes all staged
+objects and root changes in one commit after every item succeeds. If validation,
+reading, staging, or final publication fails, no objects or roots are published.
+Duplicate root names are rejected. Other importers remain available as single
+requests and are rejected in lists before staging begins. The whole import list
+must fit the repository's mutation object and root limits; staging does not
+publish checkpoints to bypass those limits.
+
+Restore and checkout lists share one retained reader and protected snapshot.
+They support the same inputs and cache-miss behavior as their single-request
+forms. Destinations are processed in order; an execution failure stops the list,
+and earlier completed destinations remain. They do not provide a filesystem
+transaction spanning multiple destinations.
+
+These method-level lists are separate from JSON-RPC batch frames, which execute
+independent calls and do not share an import commit.
+
 ## Restore
 
 `artifact.restore` takes `root`, destination `path`, and an optional

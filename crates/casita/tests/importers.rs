@@ -6,6 +6,9 @@ use casita::{
     import::{CasitarImport, CopyImport, FilesystemImport, Importer, TarImport},
 };
 
+#[cfg(feature = "experimental")]
+use casita::experimental::MetadataStore;
+
 fn name(value: &str) -> RootName {
     value.try_into().unwrap()
 }
@@ -668,4 +671,133 @@ async fn multi_root_import_contract_and_validation() {
         snapshot.root(&name("b")).await.unwrap(),
         Some(keys[1].clone())
     );
+}
+
+#[cfg(feature = "experimental")]
+#[tokio::test]
+async fn staging_importers_leave_objects_and_roots_unpublished() {
+    use casita::import::BlobImport;
+    let repository = casita::experimental::Repository::memory().unwrap();
+    let session = repository.mutation_session().await.unwrap();
+    let work = tempfile::tempdir().unwrap();
+    std::fs::write(work.path().join("file"), b"filesystem").unwrap();
+    let mut builder = tokio_tar::Builder::new(Vec::new());
+    let mut header = tokio_tar::Header::new_ustar();
+    header.set_size(3);
+    header.set_mode(0o644);
+    builder
+        .append_data(&mut header, "tar-file", &b"tar"[..])
+        .await
+        .unwrap();
+    let tar = builder.into_inner().await.unwrap();
+    let blob = BlobImport::new(&b"blob"[..], name("staged/blob"))
+        .stage(&session)
+        .await
+        .unwrap();
+    let filesystem = FilesystemImport::new(work.path(), name("staged/filesystem"))
+        .stage(&session)
+        .await
+        .unwrap();
+    let tar = TarImport::new(tar.as_slice(), name("staged/tar"))
+        .stage(&session)
+        .await
+        .unwrap();
+    let snapshot = repository.metadata().snapshot().await.unwrap();
+    let before = snapshot.generation().unwrap();
+    for (root, key) in [
+        ("staged/blob", &blob.report),
+        ("staged/filesystem", &filesystem.report),
+        ("staged/tar", &tar.report.root),
+    ] {
+        assert!(snapshot.root(&name(root)).await.unwrap().is_none());
+        assert!(snapshot.object(key).await.unwrap().is_none());
+    }
+    drop(snapshot);
+    let mut objects = blob.objects;
+    objects.extend(filesystem.objects);
+    objects.extend(tar.objects);
+    session
+        .publish(
+            objects,
+            vec![blob.root_change, filesystem.root_change, tar.root_change],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        repository
+            .metadata()
+            .snapshot()
+            .await
+            .unwrap()
+            .generation()
+            .unwrap(),
+        before + 1
+    );
+    let reader = repository.retained_reader().await.unwrap();
+    let output = tempfile::tempdir().unwrap();
+    reader
+        .checkout(&tar.report.root, output.path().join("tar"))
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read(output.path().join("tar/tar-file")).unwrap(),
+        b"tar"
+    );
+}
+
+#[cfg(feature = "experimental")]
+#[tokio::test]
+async fn staged_filesystem_and_tar_respect_single_commit_object_limits() {
+    use casita::experimental::{
+        FormatLimits, FormatRegistry, MemoryBlobStore, MemoryMetadataStore,
+    };
+    let source = tempfile::tempdir().unwrap();
+    std::fs::write(source.path().join("file"), b"file").unwrap();
+    let mut builder = tokio_tar::Builder::new(Vec::new());
+    let mut header = tokio_tar::Header::new_ustar();
+    header.set_size(4);
+    header.set_mode(0o644);
+    builder
+        .append_data(&mut header, "file", &b"file"[..])
+        .await
+        .unwrap();
+    let tar = builder.into_inner().await.unwrap();
+    // One file plus its directory: below, at, and above the object count.
+    for limit in [1, 2, 3] {
+        for is_tar in [false, true] {
+            let repository = casita::experimental::Repository::with_formats(
+                MemoryBlobStore::new(),
+                MemoryMetadataStore::new().unwrap(),
+                FormatRegistry::builtin(),
+                FormatLimits {
+                    max_batch_objects: limit,
+                    ..FormatLimits::default()
+                },
+            );
+            let session = repository.mutation_session().await.unwrap();
+            let before = repository.metadata().snapshot().await.unwrap().revision();
+            let staged = if is_tar {
+                TarImport::new(tar.as_slice(), name("stage"))
+                    .stage(&session)
+                    .await
+                    .map(|result| (result.objects, result.root_change))
+                    .map_err(|e| e.to_string())
+            } else {
+                FilesystemImport::new(source.path(), name("stage"))
+                    .stage(&session)
+                    .await
+                    .map(|result| (result.objects, result.root_change))
+                    .map_err(|e| e.to_string())
+            };
+            assert_eq!(staged.is_ok(), limit >= 2);
+            assert_eq!(
+                repository.metadata().snapshot().await.unwrap().revision(),
+                before
+            );
+            if let Ok((objects, change)) = staged {
+                assert_eq!(objects.len(), 2);
+                session.publish(objects, vec![change]).await.unwrap();
+            }
+        }
+    }
 }

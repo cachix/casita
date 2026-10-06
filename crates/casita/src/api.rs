@@ -182,6 +182,16 @@ impl RetainedReader {
             ),
         }))
     }
+    /// Materialize a directory from this reader's protected snapshot.
+    pub async fn checkout(&self, root: &ObjectKey, target: impl AsRef<Path>) -> Result<(), Error> {
+        let status = self.hold.verify_closure_incremental(root).await.app()?;
+        self.hold
+            .repository()
+            .checkout_snapshot(self.hold.snapshot(), status, root, target)
+            .await
+            .app()
+    }
+
     pub(crate) fn new(hold: BuiltinRetentionHold) -> Self {
         Self {
             hold: Arc::new(hold),

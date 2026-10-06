@@ -358,9 +358,34 @@ mod server {
             let repository = checkout_repository.clone();
             let session = Arc::clone(&checkout_session);
             async move {
-                let params: ArtifactParams = params.parse()?;
                 require_initialized(&session).await?;
-                checkout(repository, params).await.map(value)
+                match super::request_items(params)? {
+                    super::RequestItems::Single(params) => {
+                        checkout(repository, params.parse()?).await.map(value)
+                    }
+                    super::RequestItems::Batch(items) => {
+                        let params = items
+                            .into_iter()
+                            .map(|item| item.parse::<ArtifactParams>())
+                            .collect::<Result<Vec<_>, _>>()?;
+                        for params in &params {
+                            RootName::try_from(params.root.as_str())
+                                .map_err(|_| RpcError::invalid_params("invalid root"))?;
+                        }
+                        if params.is_empty() {
+                            return Ok(Value::Array(Vec::new()));
+                        }
+                        let hold = repository
+                            .retained_reader()
+                            .await
+                            .map_err(|_| server_error(-32008, "could not read repository state"))?;
+                        let mut results = Vec::with_capacity(params.len());
+                        for params in params {
+                            results.push(value(checkout_held(&repository, &hold, params).await?));
+                        }
+                        Ok(Value::Array(results))
+                    }
+                }
             }
         });
         dispatcher.add_method("artifact.restore", move |params: Params| {
@@ -375,9 +400,9 @@ mod server {
             let repository = repository.clone();
             let session = Arc::clone(&import_session);
             async move {
-                let params = super::import::parse(params)?;
+                let params = super::import::parse_request(params)?;
                 require_initialized(&session).await?;
-                super::import::run(repository, params).await
+                super::import::run_request(repository, params).await
             }
         });
         dispatcher.add_method("rpc.shutdown", move |params: Params| {
@@ -410,14 +435,21 @@ mod server {
         PS: BlobGc + 'static,
         SS: MetadataStore + 'static,
     {
-        let root = RootName::try_from(params.root.as_str())
-            .map_err(|_| RpcError::invalid_params("invalid root"))?;
         let hold = repository
-            .retention_hold()
+            .retained_reader()
             .await
             .map_err(|_| server_error(-32008, "could not read repository state"))?;
+        checkout_held(&repository, &hold, params).await
+    }
+
+    async fn checkout_held<PS: BlobGc + 'static, SS: MetadataStore + 'static>(
+        repository: &Repository<PS, SS>,
+        hold: &casita::RetainedReader,
+        params: ArtifactParams,
+    ) -> Result<CheckoutResult, RpcError> {
+        let root = RootName::try_from(params.root.as_str())
+            .map_err(|_| RpcError::invalid_params("invalid root"))?;
         let Some(object) = hold
-            .snapshot()
             .root(&root)
             .await
             .map_err(|_| server_error(-32008, "could not read repository root"))?
@@ -426,8 +458,7 @@ mod server {
                 .map_err(|_| server_error(-32008, "could not create checkout directory"))?;
             return Ok(CheckoutResult { present: false });
         };
-        repository
-            .checkout(&object, &params.path)
+        hold.checkout(&object, &params.path)
             .await
             .map_err(|_| server_error(-32008, "could not check out artifact root"))?;
         if let Err(error) = repository.touch_root(&root, &object).await {
@@ -447,6 +478,40 @@ mod server {
             data: None,
         }
     }
+}
+
+/// Lists are ordered method-level requests, distinct from JSON-RPC batch frames.
+enum RequestItems {
+    Single(jsonrpc_core::Params),
+    Batch(Vec<jsonrpc_core::Params>),
+}
+
+fn request_items(params: jsonrpc_core::Params) -> Result<RequestItems, jsonrpc_core::Error> {
+    use jsonrpc_core::{Error, Params, Value};
+    let items = match params {
+        Params::Array(items) => items,
+        Params::Map(mut fields) if fields.contains_key("requests") => {
+            let requests = fields.remove("requests").unwrap();
+            if !fields.is_empty() {
+                return Err(Error::invalid_params("unknown batch parameter"));
+            }
+            let Value::Array(items) = requests else {
+                return Err(Error::invalid_params("requests must be a list"));
+            };
+            items
+        }
+        params => return Ok(RequestItems::Single(params)),
+    };
+    let items = items
+        .into_iter()
+        .map(|item| {
+            let Value::Object(fields) = item else {
+                return Err(Error::invalid_params("each request must be an object"));
+            };
+            Ok(Params::Map(fields))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(RequestItems::Batch(items))
 }
 
 #[cfg(unix)]

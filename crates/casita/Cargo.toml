@@ -368,3 +368,8 @@ required-features = ["native", "experimental"]
 name = "sliced_transfer"
 harness = false
 required-features = ["ssh", "experimental"]
+
+[[bench]]
+name = "artifact_batches"
+harness = false
+required-features = ["native", "experimental"]

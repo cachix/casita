@@ -73,6 +73,44 @@ impl<R> TarImport<R> {
     }
 }
 
+impl<R: AsyncRead + Unpin + Send> TarImport<R> {
+    /// Stage a complete tar graph and root change without publishing checkpoints.
+    #[cfg(feature = "experimental")]
+    pub async fn stage<'hold, PS: BlobStore, SS: MetadataStore>(
+        self,
+        session: &'hold crate::MutationSession<'_, PS, SS>,
+    ) -> Result<super::StagedImport<'hold, TarImportReport>, TarImportError> {
+        let mut objects = Vec::new();
+        let report = session
+            .repository()
+            .import_tar_in_session(
+                session,
+                self.reader,
+                self.root.clone(),
+                self.limits,
+                super::ImportPublication {
+                    retention: self.retention,
+                    staging: Some(&mut objects),
+                },
+            )
+            .await?;
+        let metadata_changes = self
+            .retention
+            .map(|retention| crate::repository::root_policy::policy_change(&self.root, retention))
+            .into_iter()
+            .collect();
+        Ok(super::StagedImport {
+            root_change: crate::RootChange::Set {
+                name: self.root,
+                target: report.root.clone(),
+            },
+            report,
+            objects,
+            metadata_changes,
+        })
+    }
+}
+
 #[async_trait]
 impl<R: AsyncRead + Unpin + Send> Importer for TarImport<R> {
     type Report = TarImportReport;

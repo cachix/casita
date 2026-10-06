@@ -91,6 +91,31 @@ where
         forest: bool,
         retention: Option<crate::RootRetention>,
     ) -> Result<(Vec<ObjectKey>, FilesystemImportStats), RepositoryError> {
+        self.import_paths_with_staging(
+            paths,
+            recognize,
+            file_concurrency,
+            forest,
+            crate::importers::ImportPublication {
+                retention,
+                staging: None,
+            },
+        )
+        .await
+    }
+
+    pub(crate) async fn import_paths_with_staging<'hold>(
+        &'hold self,
+        paths: Vec<(PathBuf, Option<RootName>, Option<PathBuf>)>,
+        recognize: bool,
+        file_concurrency: std::num::NonZeroUsize,
+        forest: bool,
+        publication: crate::importers::ImportPublication<'_, 'hold>,
+    ) -> Result<(Vec<ObjectKey>, FilesystemImportStats), RepositoryError> {
+        let crate::importers::ImportPublication {
+            retention,
+            mut staging,
+        } = publication;
         self.write_scope().run(async {
 
         if retention.is_some() {
@@ -258,7 +283,10 @@ where
             }
 
             stats.stage_nanos += phase.elapsed().as_nanos() as u64;
-            while pending.len() >= batch_size {
+            if staging.is_some() && pending.len() > batch_size {
+                return Err(RepositoryError::LimitExceeded("staged filesystem exceeds mutation object limit".into()));
+            }
+            while staging.is_none() && pending.len() >= batch_size {
                 let phase = std::time::Instant::now();
                 let remainder = pending.split_off(batch_size);
                 self.publish_filesystem_checkpoint(pending, Vec::new(), recognize)
@@ -287,8 +315,12 @@ where
             };
             crate::repository::root_policy::policy_change(name, retention)
         });
-        self.publish_filesystem_checkpoint_with_policy(pending, changes, recognize, policy)
-            .await?;
+        if let Some(objects) = staging.as_mut() {
+            objects.extend(pending.into_iter().map(|(object, _)| object));
+        } else {
+            self.publish_filesystem_checkpoint_with_policy(pending, changes, recognize, policy)
+                .await?;
+        }
         stats.publications += 1;
         stats.publish_nanos += phase.elapsed().as_nanos() as u64;
         // A filesystem tree is deliberately published in bounded commits so
@@ -298,7 +330,7 @@ where
         // maintenance: the named tree is already committed and remains the
         // successful outcome if another process temporarily prevents it.
         let phase = std::time::Instant::now();
-        let _ = self.repository.state.compact_transient_state().await;
+        if staging.is_none() { let _ = self.repository.state.compact_transient_state().await; }
         stats.maintenance_nanos += phase.elapsed().as_nanos() as u64;
         tracing::info!(roots = root_keys.len(), "filesystem import completed");
         stats.traversal_nanos = traversal_nanos.load(std::sync::atomic::Ordering::Relaxed);

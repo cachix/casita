@@ -14,3 +14,6 @@ pub use crate::importers::{
 pub use crate::importers::{GitClosureImport, GitImport};
 #[cfg(feature = "experimental")]
 pub use crate::importers::{MultiRootFilesystemImport, UnrootedFilesystemImport};
+
+#[cfg(feature = "experimental")]
+pub use crate::importers::StagedImport;
