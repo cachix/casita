@@ -256,6 +256,18 @@ for results and limits.
 It gates active catalog bytes and complete release, covering both sides of the
 former cumulative 64 MiB history limit. It is included in `benchmark all`.
 
+`benchmark run mutation-rotation --output results.json` publishes 7, 8, 9, 16
+and 17 batches of 64 blobs, four times, through one long session, a new session
+every eight publications, or `MutationSession::rotate` every eight
+publications. `--profile smoke`, which `benchmark all` uses, publishes 7, 8 and
+9 batches once; `--counts` and `--repetitions` override either profile. A
+mutation-start hook counts admissions and, in its eligible state, runs real
+collection. Each process checks the peak objects pinned by one
+writer, the admission count, exact bytes after collection and an empty pin
+inventory once released; timing excludes these audits. Pass
+`--probe-binary LIB_TEST --no-build` to reuse a release library test executable.
+It is included in `benchmark all` and revision comparisons.
+
 `benchmark run output-import --profile smoke --output results.json` measures the
 same raw output staging path used by Obrador. It compares a mutation session and
 metadata publication for every output with one session and one atomic publication

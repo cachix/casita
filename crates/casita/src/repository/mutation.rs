@@ -233,6 +233,13 @@ where
             Some(start) => start.before_mutation(self.profile.spill_limits()).await?,
             None => false,
         };
+        self.prepare_mutation_session(discovery_refreshed).await
+    }
+
+    async fn prepare_mutation_session(
+        &self,
+        discovery_refreshed: bool,
+    ) -> Result<MutationSession<'_, PS, SS>, RepositoryError> {
         let pin = crate::metadata::DataPinLease::acquire(
             self.state.pin_store().await?,
             crate::metadata::DataPin {
@@ -292,6 +299,36 @@ where
     PS: BlobStore,
     SS: MetadataStore,
 {
+    /// Replace this operation's staging pin and payload batch, releasing the
+    /// resources accumulated by earlier publications. Acquire independent
+    /// retention for any committed objects you still need **before** rotating:
+    /// their protection is not transferred to the replacement pin.
+    ///
+    /// This continues the same logical mutation, so it does not repeat its
+    /// advisory start maintenance or discovery refresh. Catalog protection and
+    /// synchronization still run. Start an independent operation with
+    /// [`Repository::mutation_session`] instead.
+    ///
+    /// Failure or cancellation leaves the original session intact. Staged
+    /// objects borrow their session and must be published or dropped first:
+    ///
+    /// ```compile_fail,E0502
+    /// # use casita::experimental::{BlobStore, MetadataStore, MutationSession, RepositoryError};
+    /// async fn rotate_with_staged<PS: BlobStore, SS: MetadataStore>(
+    ///     session: &mut MutationSession<'_, PS, SS>,
+    /// ) -> Result<(), RepositoryError> {
+    ///     let staged = session.stage_blob(b"pending").await?;
+    ///     session.rotate().await?;
+    ///     session.publish_unrooted(vec![staged]).await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn rotate(&mut self) -> Result<(), RepositoryError> {
+        let replacement = self.repository.prepare_mutation_session(true).await?;
+        *self = replacement;
+        Ok(())
+    }
+
     pub(crate) fn write_scope(&self) -> crate::metadata::BackendWriteScope {
         self.repository
             .payloads

@@ -621,6 +621,16 @@
       ]
     },
     {
+      "id": "mutation-rotation",
+      "suite_id": "state-and-publication",
+      "title": "Writer rotation, pin bounds and maintenance admission at eight-publication boundaries",
+      "kind": "module",
+      "target": "benchmarks.suites.mutation_rotation",
+      "profiles": ["smoke", "standard"],
+      "publication_counts": [7, 8, 9, 16, 17],
+      "correctness": ["exact bytes after collection", "per-writer pin bounds", "admission counts", "final pin release"]
+    },
+    {
       "id": "filesystem-outputs",
       "suite_id": "state-and-publication",
       "title": "Separate filesystem roots through shared traversal and publication",

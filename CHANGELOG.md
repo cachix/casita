@@ -27,6 +27,11 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
   non-retryable `ErrorKind::Cancelled` (`RepositoryErrorCategory::Cancelled`).
   Partially imported records stay unrooted without completeness marks, and
   repeating the import resumes them.
+- `MutationSession::rotate` replaces a session's staging pin and payload batch
+  within the same admitted operation, releasing what earlier publications
+  pinned without repeating mutation-start maintenance or discovery. Callers
+  retain published objects independently first; a failed or cancelled
+  rotation keeps the original session.
 
 - `MutationSession::stage_object_reader_with_size` verifies an exact-length
   source while writing it, avoiding a verification reread of the stored payload.

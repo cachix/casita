@@ -207,6 +207,7 @@ SUITE_BUILD_SPECS["held-catalog-gc"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["catalog-marking"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["cleanup-batches"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["mutation-catalog"] = SUITE_BUILD_SPECS["metadata-collection"]
+SUITE_BUILD_SPECS["mutation-rotation"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["filesystem-outputs"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["filesystem-reuse"] = dataclasses.replace(SUITE_BUILD_SPECS["repository"], records_revision=False)
 SUITE_BUILD_SPECS["output-import"] = SUITE_BUILD_SPECS["metadata-collection"]

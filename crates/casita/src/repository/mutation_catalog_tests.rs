@@ -82,6 +82,40 @@ async fn repeated_publication_does_not_accumulate_catalogs() {
     }
 }
 
+#[tokio::test]
+async fn rotation_retains_real_packed_payloads_through_collection() {
+    let directory = tempfile::tempdir().unwrap();
+    let repository = Repository::local(directory.path()).await.unwrap();
+    let mut session = repository.mutation_session().await.unwrap();
+    let mut keys = Vec::new();
+    let mut held = None;
+    for index in 0..4 {
+        let object = session
+            .stage_blob(format!("rotated-{index}").as_bytes())
+            .await
+            .unwrap();
+        keys.push(object.record().key().clone());
+        session.publish_unrooted(vec![object]).await.unwrap();
+        held = Some(repository.retention_hold().await.unwrap());
+        session.rotate().await.unwrap();
+        crate::metadata::flush_repository_leases().await.unwrap();
+        repository.collect().await.unwrap();
+        for (index, key) in keys.iter().enumerate() {
+            let (_, mut reader) = repository.open_payload(key).await.unwrap().unwrap();
+            let mut bytes = Vec::new();
+            reader.read_to_end(&mut bytes).await.unwrap();
+            assert_eq!(bytes, format!("rotated-{index}").as_bytes());
+        }
+    }
+    drop(session);
+    drop(held);
+    crate::metadata::flush_repository_leases().await.unwrap();
+    repository.collect().await.unwrap();
+    for key in keys {
+        assert!(repository.open_payload(&key).await.unwrap().is_none());
+    }
+}
+
 // The catalog is an opaque metadata witness here. This isolates its pin lifetime
 // from pack encoding and exercises the real bounded file ledger.
 struct CatalogState {
