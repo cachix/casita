@@ -13,7 +13,7 @@ from benchmarks import cli
 from benchmarks import storage
 from benchmarks.suites import repository as common
 
-CORE_BENCHES = ("write_path", "hash_inputs", "tar_import", "filesystem_import", "dedup", "repairing", "optimization", "compression_handoff", "git_fetch_fairness", "verified_io", "overwrite_pages", "manifest_reads", "nar_associations", "nar_import", "bao_packing", "cdcs", "sliced_transfer")
+CORE_BENCHES = ("write_path", "hash_inputs", "tar_import", "filesystem_import", "dedup", "repairing", "optimization", "retained_wal", "compression_handoff", "git_fetch_fairness", "verified_io", "overwrite_pages", "manifest_reads", "nar_associations", "nar_import", "bao_packing", "cdcs", "sliced_transfer")
 
 # Bounded defaults. Frontier sizes remain explicit opt-in suite arguments.
 SMOKE = {
@@ -276,6 +276,25 @@ def pin_protocol_s3_matrix(path):
     }
 
 
+def retained_wal_samples(path):
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.startswith("{")]
+    expected = {(mode, count) for mode in ("snapshot", "objects") for count in (32, 256, 1024)}
+    actual = [(row.get("retention"), row.get("writes")) for row in rows]
+    if len(actual) != len(expected) or set(actual) != expected:
+        raise common.BenchmarkError("retained WAL must report each configured case exactly once")
+    samples = []
+    for row in rows:
+        detached = row["retention"] == "objects"
+        if (row.get("correctness") != "passed" or
+                row.get("checkpoint_busy") is not (not detached) or
+                (detached and row.get("wal_after_checkpoint_bytes") != 0)):
+            raise common.BenchmarkError("retained WAL correctness evidence is missing or inconsistent")
+        samples.append({**row, "status": "ok", "implementation": "casita",
+                        "operation": f"retained-wal/{row['retention']}/{row['writes']}",
+                        "wall_seconds": row["write_seconds"]})
+    return samples
+
+
 def collect_criterion(output, criterion_home):
     # Match executed IDs so an imported Criterion directory cannot silently
     # contribute stale cases from an older benchmark binary.
@@ -296,9 +315,10 @@ def collect_criterion(output, criterion_home):
             "raw_directory": str(path.parent)})
     if not samples or {sample["operation"] for sample in samples} != identifiers:
         raise common.BenchmarkError("Criterion estimates are missing for executed cases")
+    samples.extend(retained_wal_samples(output / "retained_wal.log"))
     save(output / "core-primitives.json", {"schema_version": 1, "result_schema": "casita.core-primitives.v1",
         "suite_id": "core-primitives", "environment": json.loads((output / "environment.json").read_text()),
-        "configuration": {"profile": "criterion", "statistic": "per-process Criterion median"}, "samples": samples})
+        "configuration": {"profile": "criterion-and-retained-wal", "statistic": "Criterion medians; retained-WAL elapsed write time"}, "samples": samples})
 
 
 def main(argv=None):
@@ -491,6 +511,7 @@ def main(argv=None):
                 environment.pop("CASITA_HASH_REPOSITORY", None)
                 environment.pop("CASITA_TAR_REVERSE", None)
                 environment.pop("CASITA_CHUNK_DECODE_REVERSE", None)
+                environment["CASITA_BENCH_RETAINED_WRITES"] = "32,256,1024"
                 environment.pop("CASITA_BENCH_PERF_CONTROL", None)
                 environment.pop("CASITA_BENCH_PERF_ACK", None)
                 environment["CASITA_HASH_REPORT"] = str(output / "hash-inputs.json")

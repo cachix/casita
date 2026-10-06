@@ -1375,6 +1375,8 @@
         "--bench",
         "optimization",
         "--bench",
+        "retained_wal",
+        "--bench",
         "compression_handoff",
         "--bench",
         "git_fetch_fairness",
@@ -2281,6 +2283,15 @@
             "EOF observed",
             "configured buffer cap"
           ]
+        },
+        "retained-wal": {
+          "runner": "cargo bench --no-default-features --features native,experimental --bench retained_wal",
+          "included_in": "benchmark all --suites core-primitives",
+          "writes": [32, 256, 1024],
+          "override": "CASITA_BENCH_RETAINED_WRITES=32,256,1024",
+          "retention": ["stable snapshot", "detached object guard"],
+          "metrics": ["write latency", "peak and final WAL bytes", "checkpoint blocked by readers"],
+          "correctness": ["imported blob identities", "retained payload readable after collection", "retained object collected after guard release", "fsck clean", "detached guard permits WAL truncation"]
         },
         "sliced-transfer": {
           "runner": "cargo bench --features ssh,experimental --bench sliced_transfer",
