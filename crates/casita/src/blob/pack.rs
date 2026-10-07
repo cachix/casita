@@ -1364,6 +1364,78 @@ struct CatalogPreparation<'a> {
     replay_cleanup: ReplayCleanup,
 }
 
+/// The immutable records an inventory scan decoded. Replacement and tombstone
+/// records are named by their digests, so a later scan reads only new ones.
+#[derive(Default)]
+struct InventoryScan {
+    replacements: HashMap<Digest, (PackId, Option<PackId>)>,
+    tombstones: HashMap<Digest, Vec<Tombstone>>,
+}
+
+/// The publications this writer installed while an inventory repair listed
+/// the store.
+struct InventoryLogState {
+    // The pointer the next publication must replace to extend `deltas`.
+    head: Option<Digest>,
+    // The deltas that replaced `head` in turn, or `None` once a publication
+    // installed changes its delta does not carry.
+    deltas: Option<Vec<Bytes>>,
+}
+
+/// Records the deltas publications install while an inventory repair lists
+/// the store, until dropped.
+struct InventoryLog<'a> {
+    packed: &'a PackedChunks,
+}
+
+impl<'a> InventoryLog<'a> {
+    fn start(packed: &'a PackedChunks) -> Self {
+        // Publications install their witness under the index lock.
+        let _index = packed.index.read().unwrap();
+        let head = packed.index_catalog.lock().unwrap().pointer_digest;
+        *packed.inventory_log.lock().unwrap() = Some(InventoryLogState {
+            head,
+            deltas: Some(Vec::new()),
+        });
+        Self { packed }
+    }
+
+    /// The deltas that, replayed over the listing, account for every change
+    /// installed since it began, or `None` if they do not. The caller holds
+    /// the checkpoint lock, so no publication changes the answer.
+    fn replay(&self) -> Option<Vec<Bytes>> {
+        let installed = self.packed.index_catalog.lock().unwrap().pointer_digest;
+        let log = self.packed.inventory_log.lock().unwrap();
+        let log = log.as_ref().expect("the inventory log is active");
+        if log.head == installed {
+            log.deltas.clone()
+        } else {
+            None
+        }
+    }
+}
+
+impl Drop for InventoryLog<'_> {
+    fn drop(&mut self) {
+        self.packed.inventory_log.lock().unwrap().take();
+    }
+}
+
+/// An owed inventory checkpoint, held by the publication publishing it and
+/// returned unless that publication succeeds.
+struct InventoryCheckpoint<'a> {
+    packed: &'a PackedChunks,
+    scan: Option<InventoryScan>,
+}
+
+impl Drop for InventoryCheckpoint<'_> {
+    fn drop(&mut self) {
+        if let Some(scan) = self.scan.take() {
+            *self.packed.inventory_checkpoint.lock().unwrap() = Some(scan);
+        }
+    }
+}
+
 impl Drop for CatalogPreparation<'_> {
     fn drop(&mut self) {
         let Some(mutations) = self.changes.take() else {
@@ -1528,6 +1600,8 @@ pub(crate) struct PackedChunks {
     // Catalog installation/resolution -> index -> pending ->
     // publication_in_flight -> lazy, with the witness taken last. Writers
     // start at index; none acquire this lock while holding an index guard.
+    // The inventory log and checkpoint are leaves, never held while taking
+    // another lock.
     // Never hold synchronous locks across I/O. Preparation holds checkpoint
     // until this replay state is installed; resolution needs no async lock.
     catalog_transition: StdMutex<Option<PreparedCatalogReplay>>,
@@ -1552,6 +1626,8 @@ pub(crate) struct PackedChunks {
     catalog_materialize_hook: StdMutex<Option<FlushHandoffHook>>,
     #[cfg(test)]
     sync_install_hook: StdMutex<Option<CatalogStateHook>>,
+    #[cfg(test)]
+    inventory_scan_hook: StdMutex<Option<FlushHandoffHook>>,
     index_dirty: AtomicBool,
     // The encoded changes a standalone publication has taken from pending but
     // not installed. It is set under the pending lock and cleared with the
@@ -1559,6 +1635,13 @@ pub(crate) struct PackedChunks {
     // the changes return to pending. A rebuild therefore finds each change
     // here, in pending, or in the catalog that witness names.
     publication_in_flight: StdMutex<Option<Bytes>>,
+    // While an inventory repair lists the store, publications record here the
+    // deltas they install, which the listing can predate. Written under the
+    // index lock and read by the repair under the checkpoint lock.
+    inventory_log: StdMutex<Option<InventoryLogState>>,
+    // A repaired inventory whose checkpoint is not yet published. Every
+    // publication publishes it, forced, until one succeeds.
+    inventory_checkpoint: StdMutex<Option<InventoryScan>>,
     state_catalog_mode: AtomicBool,
     dirty_packs: Mutex<HashSet<PackId>>,
     deleted: Mutex<HashSet<ChunkId>>,
@@ -1740,8 +1823,12 @@ impl PackedChunks {
             catalog_materialize_hook: StdMutex::new(None),
             #[cfg(test)]
             sync_install_hook: StdMutex::new(None),
+            #[cfg(test)]
+            inventory_scan_hook: StdMutex::new(None),
             index_dirty: AtomicBool::new(false),
             publication_in_flight: StdMutex::new(None),
+            inventory_log: StdMutex::new(None),
+            inventory_checkpoint: StdMutex::new(None),
             state_catalog_mode: AtomicBool::new(state_catalog_mode),
             dirty_packs: Mutex::new(HashSet::new()),
             deleted: Mutex::new(HashSet::new()),
@@ -2091,7 +2178,7 @@ impl PackedChunks {
         if self.state_catalog_mode.load(Ordering::Acquire) {
             return Ok(());
         }
-        self.publish_current_index(false).await
+        self.publish_current_index().await
     }
 
     pub(crate) fn enable_state_catalog(&self) {
@@ -3568,7 +3655,7 @@ impl PackedChunks {
             if self.state_catalog_mode.load(Ordering::Acquire) {
                 return Ok(());
             }
-            self.publish_current_index(false).await?;
+            self.publish_current_index().await?;
             return self.finish_collection(false).await;
         }
         let deleted = self.deleted.lock().await.clone();
@@ -3611,7 +3698,7 @@ impl PackedChunks {
             if self.state_catalog_mode.load(Ordering::Acquire) {
                 return Ok(());
             }
-            self.publish_current_index(false).await?;
+            self.publish_current_index().await?;
             return self.finish_collection(false).await;
         }
 
@@ -3695,7 +3782,7 @@ impl PackedChunks {
         if self.state_catalog_mode.load(Ordering::Acquire) {
             return Ok(());
         }
-        self.publish_current_index(false).await?;
+        self.publish_current_index().await?;
         self.finish_collection(false).await
     }
 
@@ -4299,7 +4386,88 @@ impl PackedChunks {
         self.read_counters
             .index_fallbacks
             .fetch_add(1, Ordering::Relaxed);
+        self.repair_from_inventory().await
+    }
 
+    /// Rebuild the index from the store's immutable inventory and publish it
+    /// as a checkpoint. The caller holds the rebuild lock.
+    async fn repair_from_inventory(&self) -> io::Result<()> {
+        // Publications can finish while the store is listed, with packs the
+        // listing missed, so their deltas are replayed over it.
+        let log = InventoryLog::start(self);
+        let mut scan = InventoryScan::default();
+        let mut rebuilt = self.scan_inventory(&mut scan, &[]).await?;
+        #[cfg(test)]
+        {
+            let hook = self.inventory_scan_hook.lock().unwrap().take();
+            if let Some(hook) = hook {
+                let _ = hook.reached.send(());
+                let _ = hook.resume.await;
+            }
+        }
+        // A publication in flight would install its older snapshot over the
+        // repair, so wait for it, and start none before the checkpoint.
+        let _checkpoint = self.checkpoint_lock.lock().await;
+        let replay = log.replay();
+        drop(log);
+        let replay = match replay {
+            Some(replay) => replay,
+            None => {
+                // A publication installed changes its delta does not carry,
+                // such as another writer's catalog absorbed after contention,
+                // whose packs the listing can predate. This writer starts no
+                // publication while the checkpoint lock is held, so a second
+                // listing includes every change it installed and replays
+                // none. Its publications wait for that one listing; a catalog
+                // another writer publishes meanwhile makes the checkpoint
+                // contend and scan again.
+                let listed = rebuilt;
+                let installed = self.index.read().unwrap().clone();
+                rebuilt = self
+                    .scan_inventory(&mut scan, &[&listed, &installed])
+                    .await?;
+                Vec::new()
+            }
+        };
+        let standalone = !self.state_catalog_mode.load(Ordering::Acquire);
+        {
+            let mut current = self.index.write().unwrap();
+            let pending = self.pending_catalog.lock().unwrap();
+            let mut index = rebuilt;
+            for delta in &replay {
+                apply_decoded_index_delta(&mut index, decode_index_delta(delta)?);
+            }
+            // Unpublished changes are replayed, not dropped: the listing can
+            // predate their packs.
+            if !pending.is_empty() {
+                let delta = encode_index_mutations(&current, &pending)?;
+                apply_decoded_index_delta(&mut index, decode_index_delta(&delta)?);
+            }
+            *current = index;
+            *self.lazy_catalog.write().unwrap() = LazyCatalogOverlay::default();
+            self.catalog_run_indexes.lock().unwrap().clear();
+            // Inventory reconstruction is authoritative even if checkpoint
+            // publication fails. A later open can repeat the fallback.
+            self.index_dirty.store(true, Ordering::Release);
+            if standalone {
+                *self.inventory_checkpoint.lock().unwrap() = Some(scan);
+            }
+        }
+        if standalone {
+            // A failed checkpoint stays owed to the next publication.
+            let _ = self.publish_current_index_locked(true).await;
+        }
+        Ok(())
+    }
+
+    /// Build an index from the immutable objects in the store. Packs are named
+    /// by the digest of their bytes, so the entries a `known` index holds for
+    /// a pack of the listed length are its footer and are not read again.
+    async fn scan_inventory(
+        &self,
+        scan: &mut InventoryScan,
+        known: &[&Index],
+    ) -> io::Result<Index> {
         let pack_prefix = kind_prefix(&self.base, PACKS_KIND);
         let replacement_prefix = kind_prefix(&self.base, REPLACEMENTS_KIND);
         let tombstone_prefix = kind_prefix(&self.base, TOMBSTONES_KIND);
@@ -4339,18 +4507,25 @@ impl PackedChunks {
         let mut superseded = HashSet::new();
         for meta in replacements {
             let expected = digest_from_location(&meta.location)?;
-            let bytes = self
-                .object_store
-                .get(&meta.location)
-                .await
-                .map_err(io::Error::other)?
-                .bytes()
-                .await
-                .map_err(io::Error::other)?;
-            if Digest::from(blake3::hash(&bytes)) != expected {
-                return Err(io::Error::other("pack replacement record hash mismatch"));
-            }
-            let (old, new) = decode_replacement(&bytes)?;
+            let (old, new) = match scan.replacements.get(&expected) {
+                Some(record) => *record,
+                None => {
+                    let bytes = self
+                        .object_store
+                        .get(&meta.location)
+                        .await
+                        .map_err(io::Error::other)?
+                        .bytes()
+                        .await
+                        .map_err(io::Error::other)?;
+                    if Digest::from(blake3::hash(&bytes)) != expected {
+                        return Err(io::Error::other("pack replacement record hash mismatch"));
+                    }
+                    let record = decode_replacement(&bytes)?;
+                    scan.replacements.insert(expected, record);
+                    record
+                }
+            };
             if new.is_none_or(|id| available.contains(&id)) {
                 superseded.insert(old);
             }
@@ -4359,18 +4534,24 @@ impl PackedChunks {
         let mut tombstones_by_pack: HashMap<PackId, Vec<(Digest, Tombstone)>> = HashMap::new();
         for meta in tombstones {
             let expected = digest_from_location(&meta.location)?;
-            let bytes = self
-                .object_store
-                .get(&meta.location)
-                .await
-                .map_err(io::Error::other)?
-                .bytes()
-                .await
-                .map_err(io::Error::other)?;
-            if Digest::from(blake3::hash(&bytes)) != expected {
-                return Err(io::Error::other("pack tombstone record hash mismatch"));
-            }
-            for tombstone in decode_tombstone_record(&bytes)? {
+            let records = match scan.tombstones.entry(expected) {
+                std::collections::hash_map::Entry::Occupied(records) => records.into_mut(),
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    let bytes = self
+                        .object_store
+                        .get(&meta.location)
+                        .await
+                        .map_err(io::Error::other)?
+                        .bytes()
+                        .await
+                        .map_err(io::Error::other)?;
+                    if Digest::from(blake3::hash(&bytes)) != expected {
+                        return Err(io::Error::other("pack tombstone record hash mismatch"));
+                    }
+                    slot.insert(decode_tombstone_record(&bytes)?)
+                }
+            };
+            for tombstone in records.iter().cloned() {
                 tombstones_by_pack
                     .entry(tombstone.pack)
                     .or_default()
@@ -4398,7 +4579,20 @@ impl PackedChunks {
             .collect::<io::Result<Vec<_>>>()?
             .into_iter()
             .filter(|(pack, _)| !rebuilt.superseded.contains(pack));
-        let mut footers = futures::stream::iter(live_packs)
+        let mut footers = Vec::new();
+        let mut unread = Vec::new();
+        for (pack, meta) in live_packs {
+            match known
+                .iter()
+                .find_map(|known| Some((known.pack_lengths.get(&pack)?, known.packs.get(&pack)?)))
+            {
+                Some((&pack_len, entries)) if pack_len == meta.size => {
+                    footers.push((pack, pack_len, entries.clone()));
+                }
+                _ => unread.push((pack, meta)),
+            }
+        }
+        let read = futures::stream::iter(unread)
             .map(|(pack, meta)| async move {
                 let entries = read_footer(
                     &self.object_store,
@@ -4412,6 +4606,7 @@ impl PackedChunks {
             .buffer_unordered(MAX_CONCURRENT_FOOTER_READS)
             .try_collect::<Vec<_>>()
             .await?;
+        footers.extend(read);
         footers.sort_unstable_by_key(|(pack, _, _)| *pack);
         for (pack, pack_len, entries) in footers {
             if let Some(tombstones) = tombstones_by_pack.remove(&pack) {
@@ -4440,20 +4635,26 @@ impl PackedChunks {
             rebuilt.add_pack_metadata(pack, pack_len, entries);
         }
         rebuilt.rebuild_chunks();
-        {
-            let mut current = self.index.write().unwrap();
-            *current = rebuilt;
-            self.pending_catalog.lock().unwrap().mutations = IndexMutations::default();
+        Ok(rebuilt)
+    }
+
+    /// The candidate an inventory checkpoint publishes: a fresh scan with this
+    /// publication's own changes. Changes published before the scan need no
+    /// replay, since their packs and retirement records were stored first,
+    /// and replaying an older addition would undo a later retirement. A
+    /// manifest whose published removal leaves its object for a deferred
+    /// retirement is listed again, as by every inventory scan.
+    async fn inventory_candidate(
+        &self,
+        scan: &mut InventoryScan,
+        known: &Index,
+        delta: Option<&[u8]>,
+    ) -> io::Result<Index> {
+        let mut candidate = self.scan_inventory(scan, &[known]).await?;
+        if let Some(delta) = delta {
+            apply_decoded_index_delta(&mut candidate, decode_index_delta(delta)?);
         }
-        *self.lazy_catalog.write().unwrap() = LazyCatalogOverlay::default();
-        self.catalog_run_indexes.lock().unwrap().clear();
-        // Inventory reconstruction is authoritative even if checkpoint
-        // publication fails. A later open can repeat the fallback.
-        self.index_dirty.store(true, Ordering::Release);
-        if !self.state_catalog_mode.load(Ordering::Acquire) {
-            let _ = self.publish_current_index(true).await;
-        }
-        Ok(())
+        Ok(candidate)
     }
 
     async fn load_authoritative_index_catalog(
@@ -4611,13 +4812,28 @@ impl PackedChunks {
         snapshot
     }
 
+    async fn publish_current_index(&self) -> io::Result<()> {
+        let _checkpoint = self.checkpoint_lock.lock().await;
+        self.publish_current_index_locked(false).await
+    }
+
+    /// Publish local changes, or an owed inventory checkpoint as a forced full
+    /// catalog. The caller holds the checkpoint lock. Only the repair that just
+    /// installed the checkpoint's inventory passes `repaired`: any later
+    /// publication, including one after the repair's was interrupted, may find
+    /// another catalog installed by a refresh, and lists the store again.
     #[tracing::instrument(
         name = "blob.pack_index.publish",
         skip_all,
-        fields(force = force)
+        fields(force = tracing::field::Empty)
     )]
-    async fn publish_current_index(&self, force: bool) -> io::Result<()> {
-        let _checkpoint = self.checkpoint_lock.lock().await;
+    async fn publish_current_index_locked(&self, repaired: bool) -> io::Result<()> {
+        let mut checkpoint = InventoryCheckpoint {
+            packed: self,
+            scan: self.inventory_checkpoint.lock().unwrap().take(),
+        };
+        let force = checkpoint.scan.is_some();
+        tracing::Span::current().record("force", force);
         if !force && !self.index_dirty.load(Ordering::Acquire) {
             return Ok(());
         }
@@ -4685,6 +4901,14 @@ impl PackedChunks {
             background_start: None,
             replay_cleanup: ReplayCleanup::LeaveUntouched,
         };
+        // The snapshot is the repaired inventory only while the repair's own
+        // install stands. Otherwise scan again, as after contention.
+        if !repaired && let Some(scan) = checkpoint.scan.as_mut() {
+            candidate = self
+                .inventory_candidate(scan, &candidate, delta.as_deref())
+                .await?;
+            lazy = LazyCatalogOverlay::default();
+        }
         #[cfg(test)]
         {
             let hook = self.publish_window_hook.lock().unwrap().take();
@@ -4715,9 +4939,11 @@ impl PackedChunks {
                         {
                             let mut current = self.index.write().unwrap();
                             self.install_rebased_base_locked(&mut current, base)?;
+                            self.log_inventory_delta(&witness, &next, delta.as_ref(), force);
                             *self.index_catalog.lock().unwrap() = next;
                             self.publication_in_flight.lock().unwrap().take();
                         }
+                        checkpoint.scan = None;
                         self.published_retirements
                             .lock()
                             .unwrap()
@@ -4738,9 +4964,11 @@ impl PackedChunks {
                         *current = base;
                     }
                     self.publication_in_flight.lock().unwrap().take();
+                    self.log_inventory_delta(&witness, &next, delta.as_ref(), force);
                     *current = candidate;
                     *self.lazy_catalog.write().unwrap() = lazy;
                     *self.index_catalog.lock().unwrap() = next;
+                    checkpoint.scan = None;
                     self.published_retirements
                         .lock()
                         .unwrap()
@@ -4748,6 +4976,19 @@ impl PackedChunks {
                     return Ok(());
                 }
                 Err(error) if index_publish_contended(&error) => {
+                    if let Some(scan) = checkpoint.scan.as_mut() {
+                        // Another writer's catalog can lack packs the repair
+                        // recovered, so scan again and write over it.
+                        witness = self
+                            .load_authoritative_index_catalog(false)
+                            .await?
+                            .expect("catalog reuse is disabled during CAS retry")
+                            .witness;
+                        candidate = self
+                            .inventory_candidate(scan, &candidate, delta.as_deref())
+                            .await?;
+                        continue;
+                    }
                     let mut loaded = self
                         .load_authoritative_index_catalog(false)
                         .await?
@@ -4868,6 +5109,32 @@ impl PackedChunks {
         next.version = Some(result.into());
         next.pointer_digest = Some(blake3::hash(&catalog).into());
         Ok(next)
+    }
+
+    /// Record a publication installed while an inventory repair lists the
+    /// store, which replaced `base` with `next`. The caller holds the index
+    /// lock.
+    fn log_inventory_delta(
+        &self,
+        base: &IndexCatalogWitness,
+        next: &IndexCatalogWitness,
+        delta: Option<&Bytes>,
+        force: bool,
+    ) {
+        let mut log = self.inventory_log.lock().unwrap();
+        let Some(log) = log.as_mut() else {
+            return;
+        };
+        // A delta accounts for the catalog only if it replaced the last
+        // logged pointer. A contended publication also installs the catalog
+        // it absorbed, and a forced or delta-less one its whole snapshot.
+        match (&mut log.deltas, delta) {
+            (Some(deltas), Some(delta)) if !force && log.head == base.pointer_digest => {
+                deltas.push(delta.clone());
+                log.head = next.pointer_digest;
+            }
+            _ => log.deltas = None,
+        }
     }
 
     /// Whether publishing `delta` over `witness` rebases while `lazy` still
@@ -8151,6 +8418,680 @@ mod tests {
             reopened.get(&local.digest).await.unwrap(),
             Some(local_bytes)
         );
+    }
+
+    /// Uploads a pack no catalog references, which only an inventory repair
+    /// recovers.
+    async fn upload_orphan_pack(
+        objects: &Arc<dyn ObjectStore>,
+        base: &Path,
+        data: &[u8],
+    ) -> (ChunkMeta, Bytes) {
+        let orphan = PackedChunks::open(objects.clone(), base.clone(), 1)
+            .await
+            .unwrap();
+        let (meta, bytes) = chunk(data);
+        orphan.put(meta.clone(), bytes.clone()).await.unwrap();
+        (meta, bytes)
+    }
+
+    /// Pauses `writer`'s next inventory repair after it lists the store.
+    fn pause_inventory_scan(
+        writer: &PackedChunks,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (reached_tx, reached) = tokio::sync::oneshot::channel();
+        let (resume, resume_rx) = tokio::sync::oneshot::channel();
+        *writer.inventory_scan_hook.lock().unwrap() = Some(FlushHandoffHook {
+            reached: reached_tx,
+            resume: resume_rx,
+        });
+        (reached, resume)
+    }
+
+    #[tokio::test]
+    async fn inventory_repair_keeps_changes_made_during_its_scan() {
+        for publish in [false, true] {
+            let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let base = Path::from("inventory-repair-during-flush");
+            let writer = PackedChunks::open(objects.clone(), base.clone(), 1)
+                .await
+                .unwrap();
+            let (first, first_bytes) = chunk(b"published before the repair");
+            writer
+                .put(first.clone(), first_bytes.clone())
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
+
+            let (reached, resume) = pause_inventory_scan(&writer);
+            let repair = tokio::spawn({
+                let writer = writer.clone();
+                async move { writer.rebuild_from_inventory().await }
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(10), reached)
+                .await
+                .unwrap()
+                .unwrap();
+            // The listing missed this pack, which stays pending or, published,
+            // leaves only the publication's delta.
+            let (later, later_bytes) = chunk(b"sealed after the repair listed");
+            writer
+                .put(later.clone(), later_bytes.clone())
+                .await
+                .unwrap();
+            if publish {
+                writer.flush().await.unwrap();
+            }
+            resume.send(()).unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(10), repair)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+
+            // This lookup does not reload on a miss.
+            assert!(
+                writer.location(&later.digest).await.unwrap().is_some(),
+                "publish: {publish}"
+            );
+            writer.flush().await.unwrap();
+            let reopened = PackedChunks::open(objects, base, u64::MAX).await.unwrap();
+            for (meta, bytes) in [(first, first_bytes), (later, later_bytes)] {
+                assert_eq!(reopened.get(&meta.digest).await.unwrap(), Some(bytes));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn inventory_repair_waits_for_an_in_flight_publication() {
+        let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let base = Path::from("inventory-repair-during-publication");
+        let writer = PackedChunks::open(objects.clone(), base.clone(), 1)
+            .await
+            .unwrap();
+        let recovered = upload_orphan_pack(&objects, &base, b"recovered by the repair").await;
+        let (first, first_bytes) = chunk(b"taken by the paused publication");
+        writer
+            .put(first.clone(), first_bytes.clone())
+            .await
+            .unwrap();
+
+        let (reached_tx, reached) = tokio::sync::oneshot::channel();
+        let (resume_publication, resume_rx) = tokio::sync::oneshot::channel();
+        *writer.publish_window_hook.lock().unwrap() = Some(FlushHandoffHook {
+            reached: reached_tx,
+            resume: resume_rx,
+        });
+        // Publish without flush, whose lock would hold back the next seal.
+        let publish = tokio::spawn({
+            let writer = writer.clone();
+            async move { writer.publish_current_index().await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(10), reached)
+            .await
+            .unwrap()
+            .unwrap();
+        let (later, later_bytes) = chunk(b"sealed after the publication's snapshot");
+        writer
+            .put(later.clone(), later_bytes.clone())
+            .await
+            .unwrap();
+
+        // The repair lists both packs while the publication holds an older
+        // snapshot, which its success must not install over the repair.
+        let lists = writer.read_counters.list_requests.load(Ordering::Relaxed);
+        let (reached, resume_repair) = pause_inventory_scan(&writer);
+        let repair = tokio::spawn({
+            let writer = writer.clone();
+            async move { writer.rebuild_from_inventory().await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(10), reached)
+            .await
+            .unwrap()
+            .unwrap();
+        resume_repair.send(()).unwrap();
+        // Let the repair run until it waits for the publication.
+        for _ in 0..16 {
+            tokio::task::yield_now().await;
+        }
+        resume_publication.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), publish)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), repair)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+
+        // An uncontended checkpoint publishes the installed repair without
+        // listing the store again.
+        assert_eq!(
+            writer.read_counters.list_requests.load(Ordering::Relaxed) - lists,
+            4
+        );
+        // These lookups do not reload on a miss.
+        for meta in [&recovered.0, &first, &later] {
+            assert!(writer.location(&meta.digest).await.unwrap().is_some());
+        }
+        let reopened = PackedChunks::open(objects, base, u64::MAX).await.unwrap();
+        for (meta, bytes) in [recovered, (first, first_bytes), (later, later_bytes)] {
+            assert_eq!(reopened.get(&meta.digest).await.unwrap(), Some(bytes));
+        }
+    }
+
+    #[tokio::test]
+    async fn contended_inventory_checkpoint_keeps_the_repair() {
+        for (durable, retirement_only) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let directory = tempfile::tempdir().unwrap();
+            let (objects, base, durability, peer_durability): (Arc<dyn ObjectStore>, _, _, _) =
+                if durable {
+                    let fs =
+                        object_store::local::LocalFileSystem::new_with_prefix(directory.path())
+                            .unwrap()
+                            .with_fsync(true);
+                    let durability = LocalDurability::new(fs.clone(), directory.path()).unwrap();
+                    let peer = LocalDurability::new(fs.clone(), directory.path()).unwrap();
+                    (Arc::new(fs), Path::default(), Some(durability), Some(peer))
+                } else {
+                    (
+                        Arc::new(InMemory::new()),
+                        Path::from("contended-inventory-checkpoint"),
+                        None,
+                        None,
+                    )
+                };
+            let writer = PackedChunks::open_with_cache_and_durability(
+                objects.clone(),
+                base.clone(),
+                1,
+                0,
+                durability,
+            )
+            .await
+            .unwrap();
+            let other = PackedChunks::open_with_cache_and_durability(
+                objects.clone(),
+                base.clone(),
+                u64::MAX,
+                0,
+                peer_durability,
+            )
+            .await
+            .unwrap();
+            let (first, first_bytes) = chunk(b"published before the repair");
+            writer
+                .put(first.clone(), first_bytes.clone())
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
+            let recovered = upload_orphan_pack(&objects, &base, b"recovered by the repair").await;
+
+            let lists = writer.read_counters.list_requests.load(Ordering::Relaxed);
+            let footers = writer
+                .read_counters
+                .footer_range_requests
+                .load(Ordering::Relaxed);
+            let (reached, resume) = pause_inventory_scan(&writer);
+            let repair = tokio::spawn({
+                let writer = writer.clone();
+                async move { writer.rebuild_from_inventory().await }
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(10), reached)
+                .await
+                .unwrap()
+                .unwrap();
+            // The checkpoint carries either a local change or only a
+            // retirement, and another writer moves the pointer under it.
+            let mut expected = vec![(first, first_bytes), recovered];
+            if retirement_only {
+                writer
+                    .pending_catalog
+                    .lock()
+                    .unwrap()
+                    .retirements
+                    .insert(Path::from("retired-without-mutation"));
+            } else {
+                let (local, local_bytes) = chunk(b"sealed during the repair");
+                writer
+                    .put(local.clone(), local_bytes.clone())
+                    .await
+                    .unwrap();
+                expected.push((local, local_bytes));
+            }
+            let (remote, remote_bytes) = chunk(b"published under the checkpoint");
+            other
+                .put(remote.clone(), remote_bytes.clone())
+                .await
+                .unwrap();
+            other.flush().await.unwrap();
+            expected.push((remote, remote_bytes));
+            resume.send(()).unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(10), repair)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+
+            // The contended checkpoint lists the store once more and reads
+            // only the other writer's new footer: two range requests each for
+            // the two listed packs and the new one.
+            assert_eq!(
+                writer.read_counters.list_requests.load(Ordering::Relaxed) - lists,
+                8
+            );
+            assert_eq!(
+                writer
+                    .read_counters
+                    .footer_range_requests
+                    .load(Ordering::Relaxed)
+                    - footers,
+                6
+            );
+            let reopened = PackedChunks::open(objects, base, u64::MAX).await.unwrap();
+            for (meta, bytes) in expected {
+                assert_eq!(
+                    reopened.get(&meta.digest).await.unwrap(),
+                    Some(bytes),
+                    "durable: {durable}, retirement only: {retirement_only}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_inventory_checkpoint_is_published_by_the_next_flush() {
+        let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let base = Path::from("cancelled-inventory-checkpoint");
+        let writer = PackedChunks::open(objects.clone(), base.clone(), 1)
+            .await
+            .unwrap();
+        let (first, first_bytes) = chunk(b"published before the repair");
+        writer
+            .put(first.clone(), first_bytes.clone())
+            .await
+            .unwrap();
+        writer.flush().await.unwrap();
+        let recovered = upload_orphan_pack(&objects, &base, b"recovered by the repair").await;
+
+        // Cancel the repair once it installed and began its checkpoint.
+        let (reached_tx, reached) = tokio::sync::oneshot::channel();
+        let (_resume, resume_rx) = tokio::sync::oneshot::channel::<()>();
+        *writer.publish_window_hook.lock().unwrap() = Some(FlushHandoffHook {
+            reached: reached_tx,
+            resume: resume_rx,
+        });
+        let repair = tokio::spawn({
+            let writer = writer.clone();
+            async move { writer.rebuild_from_inventory().await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(10), reached)
+            .await
+            .unwrap()
+            .unwrap();
+        repair.abort();
+        assert!(repair.await.unwrap_err().is_cancelled());
+        // The next flush also carries a new change, which must not stand in
+        // for the checkpoint it still owes.
+        let (later, later_bytes) = chunk(b"flushed after the cancelled checkpoint");
+        writer
+            .put(later.clone(), later_bytes.clone())
+            .await
+            .unwrap();
+        writer.flush().await.unwrap();
+
+        let reopened = PackedChunks::open(objects, base, u64::MAX).await.unwrap();
+        for (meta, bytes) in [(first, first_bytes), recovered, (later, later_bytes)] {
+            assert_eq!(reopened.get(&meta.digest).await.unwrap(), Some(bytes));
+        }
+    }
+
+    /// A store several writers share, through local durable compare-and-swap
+    /// or object store conditional writes.
+    struct SharedStore {
+        directory: tempfile::TempDir,
+        objects: Arc<dyn ObjectStore>,
+        base: Path,
+        filesystem: Option<object_store::local::LocalFileSystem>,
+    }
+
+    impl SharedStore {
+        fn new(durable: bool, name: &str) -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            if durable {
+                let filesystem =
+                    object_store::local::LocalFileSystem::new_with_prefix(directory.path())
+                        .unwrap()
+                        .with_fsync(true);
+                Self {
+                    objects: Arc::new(filesystem.clone()),
+                    base: Path::default(),
+                    filesystem: Some(filesystem),
+                    directory,
+                }
+            } else {
+                Self {
+                    objects: Arc::new(InMemory::new()),
+                    base: Path::from(name),
+                    filesystem: None,
+                    directory,
+                }
+            }
+        }
+
+        fn durability(&self) -> Option<LocalDurability> {
+            self.filesystem.as_ref().map(|filesystem| {
+                LocalDurability::new(filesystem.clone(), self.directory.path()).unwrap()
+            })
+        }
+
+        async fn open(&self, target_size: u64) -> Arc<PackedChunks> {
+            PackedChunks::open_with_cache_and_durability(
+                self.objects.clone(),
+                self.base.clone(),
+                target_size,
+                0,
+                self.durability(),
+            )
+            .await
+            .unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn inventory_repair_keeps_packs_a_contended_publication_absorbed() {
+        for durable in [false, true] {
+            let store = SharedStore::new(durable, "inventory-repair-absorbed-catalog");
+            let writer = store.open(1).await;
+            let other = store.open(u64::MAX).await;
+            let (local, local_bytes) = chunk(b"sealed before the repair");
+            writer
+                .put(local.clone(), local_bytes.clone())
+                .await
+                .unwrap();
+
+            let lists = writer.read_counters.list_requests.load(Ordering::Relaxed);
+            let (reached, resume) = pause_inventory_scan(&writer);
+            let repair = tokio::spawn({
+                let writer = writer.clone();
+                async move { writer.rebuild_from_inventory().await }
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(10), reached)
+                .await
+                .unwrap()
+                .unwrap();
+            // Another writer publishes a pack the listing missed, and this
+            // writer's publication contends and absorbs that catalog, which
+            // its own delta does not carry.
+            let (remote, remote_bytes) = chunk(b"published after the listing");
+            other
+                .put(remote.clone(), remote_bytes.clone())
+                .await
+                .unwrap();
+            other.flush().await.unwrap();
+            writer.flush().await.unwrap();
+            assert!(writer.location(&remote.digest).await.unwrap().is_some());
+            let footers = writer
+                .read_counters
+                .footer_range_requests
+                .load(Ordering::Relaxed);
+            resume.send(()).unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(10), repair)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+
+            // This lookup does not reload on a miss.
+            assert!(
+                writer.location(&remote.digest).await.unwrap().is_some(),
+                "durable: {durable}"
+            );
+            // The repair lists the store again before installing, and reads
+            // no footer the first listing or the absorbed catalog holds.
+            assert_eq!(
+                writer.read_counters.list_requests.load(Ordering::Relaxed) - lists,
+                8
+            );
+            assert_eq!(
+                writer
+                    .read_counters
+                    .footer_range_requests
+                    .load(Ordering::Relaxed),
+                footers
+            );
+            let reopened = PackedChunks::open(store.objects.clone(), store.base.clone(), u64::MAX)
+                .await
+                .unwrap();
+            for (meta, bytes) in [(local, local_bytes), (remote, remote_bytes)] {
+                assert_eq!(
+                    reopened.get(&meta.digest).await.unwrap(),
+                    Some(bytes),
+                    "durable: {durable}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn inventory_checkpoint_keeps_a_retirement_published_after_its_scan() {
+        for (durable, absorb) in [(false, false), (false, true), (true, false), (true, true)] {
+            let store = SharedStore::new(durable, "inventory-checkpoint-later-retirement");
+            let writer = store.open(1).await;
+            let (first, first_bytes) = chunk(b"published before the repair");
+            writer
+                .put(first.clone(), first_bytes.clone())
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
+
+            let (reached, resume) = pause_inventory_scan(&writer);
+            let repair = tokio::spawn({
+                let writer = writer.clone();
+                async move { writer.rebuild_from_inventory().await }
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(10), reached)
+                .await
+                .unwrap()
+                .unwrap();
+            // This writer publishes a pack the listing missed, which another
+            // writer then collects.
+            let (retired, retired_bytes) = chunk(b"published, then collected");
+            writer.put(retired.clone(), retired_bytes).await.unwrap();
+            writer.flush().await.unwrap();
+            let collector = store.open(u64::MAX).await;
+            collector.delete_many(&[retired.digest]).await.unwrap();
+            collector.finish_deletions(true).await.unwrap();
+            let mut expected = vec![(first, first_bytes)];
+            // Either the checkpoint contends with the collector's catalog, or
+            // a publication absorbs it first.
+            if absorb {
+                let (later, later_bytes) = chunk(b"published over the collection");
+                writer
+                    .put(later.clone(), later_bytes.clone())
+                    .await
+                    .unwrap();
+                writer.flush().await.unwrap();
+                expected.push((later, later_bytes));
+            }
+            resume.send(()).unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(10), repair)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+
+            // These lookups do not reload on a miss.
+            let context = format!("durable: {durable}, absorb: {absorb}");
+            assert!(
+                writer.location(&retired.digest).await.unwrap().is_none(),
+                "{context}"
+            );
+            let reopened = PackedChunks::open(store.objects.clone(), store.base.clone(), u64::MAX)
+                .await
+                .unwrap();
+            assert!(
+                reopened.location(&retired.digest).await.unwrap().is_none(),
+                "{context}"
+            );
+            for (meta, bytes) in expected {
+                assert_eq!(
+                    reopened.get(&meta.digest).await.unwrap(),
+                    Some(bytes),
+                    "{context}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn interrupted_inventory_checkpoint_lists_again_after_a_refresh() {
+        for sharded in [false, true] {
+            let store = SharedStore::new(true, "");
+            let writer = store.open(1).await;
+            let (first, first_bytes) = chunk(b"published before the repair");
+            writer
+                .put(first.clone(), first_bytes.clone())
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
+            let recovered =
+                upload_orphan_pack(&store.objects, &store.base, b"recovered by the repair").await;
+
+            // The repair installs a pack this writer publishes while it lists
+            // the store.
+            let (reached, resume) = pause_inventory_scan(&writer);
+            let repair = tokio::spawn({
+                let writer = writer.clone();
+                async move { writer.rebuild_from_inventory().await }
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(10), reached)
+                .await
+                .unwrap()
+                .unwrap();
+            let (collected, collected_bytes) = chunk(b"published during the listing");
+            writer
+                .put(collected.clone(), collected_bytes)
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
+            // Cancel its checkpoint while it waits for the local catalog lock,
+            // before it takes a snapshot of the repair's install.
+            let blocker = store.durability().unwrap();
+            let held = blocker.lock_catalog().await.unwrap();
+            resume.send(()).unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                while writer
+                    .location(&recovered.0.digest)
+                    .await
+                    .unwrap()
+                    .is_none()
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+            })
+            .await
+            .unwrap();
+            repair.abort();
+            assert!(repair.await.unwrap_err().is_cancelled());
+            drop(held);
+
+            // Another writer collects that pack and publishes one of its own.
+            // A refresh installs its catalog, or a newer lazily sharded one,
+            // in place of the repair's install.
+            let other = store.open(u64::MAX).await;
+            other.delete_many(&[collected.digest]).await.unwrap();
+            other.finish_deletions(true).await.unwrap();
+            let (remote, remote_bytes) = chunk(b"published by another writer");
+            other
+                .put(remote.clone(), remote_bytes.clone())
+                .await
+                .unwrap();
+            other.flush().await.unwrap();
+            if sharded {
+                let encoded = encode_index_shards(&other.index.read().unwrap().clone(), 4).unwrap();
+                for (digest, bytes) in &encoded.objects {
+                    put_object(
+                        &store.objects,
+                        &sharded_path(&store.base, INDEXES_KIND, digest),
+                        bytes.clone(),
+                        true,
+                    )
+                    .await
+                    .unwrap();
+                }
+                put_object(
+                    &store.objects,
+                    &sharded_path(&store.base, INDEXES_KIND, &encoded.map_digest),
+                    encoded.map,
+                    true,
+                )
+                .await
+                .unwrap();
+                let catalog = encode_delta_catalog(&DeltaCatalog {
+                    sidecars: None,
+                    generation: 100,
+                    base: CatalogBase::Sharded {
+                        root: encoded.map_digest,
+                        shard_bits: 4,
+                    },
+                    runs: BTreeMap::new(),
+                    deltas: Vec::new(),
+                })
+                .unwrap();
+                store
+                    .objects
+                    .put(&store.base.clone().join(INDEX_POINTER_NAME), catalog.into())
+                    .await
+                    .unwrap();
+            }
+            writer.refresh().await.unwrap();
+            assert_eq!(writer.lazy_catalog.read().unwrap().base.is_some(), sharded);
+
+            // The next flush publishes the checkpoint it still owes from a
+            // new listing.
+            let (later, later_bytes) = chunk(b"flushed after the refresh");
+            writer
+                .put(later.clone(), later_bytes.clone())
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
+            // These lookups do not reload on a miss.
+            assert!(
+                writer.location(&collected.digest).await.unwrap().is_none(),
+                "sharded: {sharded}"
+            );
+            let reopened = PackedChunks::open(store.objects.clone(), store.base.clone(), u64::MAX)
+                .await
+                .unwrap();
+            assert!(
+                reopened
+                    .location(&collected.digest)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "sharded: {sharded}"
+            );
+            for (meta, bytes) in [
+                (first, first_bytes),
+                recovered,
+                (remote, remote_bytes),
+                (later, later_bytes),
+            ] {
+                assert_eq!(
+                    reopened.get(&meta.digest).await.unwrap(),
+                    Some(bytes),
+                    "sharded: {sharded}"
+                );
+            }
+        }
     }
 
     #[tokio::test]
