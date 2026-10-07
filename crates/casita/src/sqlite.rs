@@ -299,7 +299,52 @@ impl TursoDb {
         .await?
     }
 
+    /// Read immutable records through a query-only connection. Each statement
+    /// owns its implicit transaction; no SQL view survives the completed call.
+    /// Callers must independently retain the queried objects and bound their
+    /// visibility. Mutable metadata requiring a shared view must use `read`.
+    /// The worker owns cleanup even if its caller is cancelled.
+    pub(crate) async fn read_immutable<T, F>(self: &Arc<Self>, f: F) -> Result<T, Error>
+    where
+        F: for<'a> FnOnce(&'a Connection) -> BoxFuture<'a, Result<T, Error>> + Send + 'static,
+        T: Send + 'static,
+    {
+        let this = self.clone();
+        tokio::task::spawn_blocking(move || {
+            futures::executor::block_on(async move {
+                let mut reader = this.acquire_read_connection().await?;
+                let result = f(&reader).await;
+                let connection = reader.connection.take().expect("live read connection");
+                // f drops its statements before returning. Turso resets a
+                // dropped statement, ending its implicit transaction even if f
+                // stopped stepping early, as a single-key lookup or a failed
+                // decode does; is_autocommit cannot observe that. The
+                // application_api tests for failed decodes and idle object
+                // readers check that the WAL still truncates. Pool the
+                // connection only if f left no explicit transaction open.
+                if connection.is_autocommit()?
+                    && let Ok(mut idle) = this.idle_readers.lock()
+                    && idle.len() < IDLE_READ_CONNECTIONS
+                {
+                    idle.push(connection);
+                }
+                result
+            })
+        })
+        .await?
+    }
+
     async fn begin_read_transaction(self: &Arc<Self>) -> Result<ReadConnection, Error> {
+        // The acquired connection owns cleanup before BEGIN: a failed or
+        // cancelled BEGIN cannot return a connection with an unfinished transaction.
+        let connection = self.acquire_read_connection().await?;
+        connection
+            .execute_batch("BEGIN DEFERRED TRANSACTION;")
+            .await?;
+        Ok(connection)
+    }
+
+    async fn acquire_read_connection(self: &Arc<Self>) -> Result<ReadConnection, Error> {
         let cached = self
             .idle_readers
             .lock()
@@ -313,16 +358,10 @@ impl TursoDb {
                 connection
             }
         };
-        // Own cleanup before BEGIN: a failed/cancelled acquisition
-        // cannot return a connection with an unfinished transaction.
-        let connection = ReadConnection {
+        Ok(ReadConnection {
             connection: Some(connection),
             idle: self.idle_readers.clone(),
-        };
-        connection
-            .execute_batch("BEGIN DEFERRED TRANSACTION;")
-            .await?;
-        Ok(connection)
+        })
     }
 
     /// Borrow an exclusive query-only connection and begin a fresh transaction.

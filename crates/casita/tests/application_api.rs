@@ -1078,3 +1078,464 @@ async fn generations_order_the_states_readers_observe() {
         assert_eq!(again.generation().unwrap(), previous);
     }
 }
+
+#[tokio::test]
+async fn retained_batches_preserve_order_missing_duplicates_and_snapshot() {
+    let directory = tempfile::tempdir().unwrap();
+    for repository in [
+        Repository::memory().unwrap(),
+        Repository::local(directory.path()).await.unwrap(),
+    ] {
+        let mut keys = Vec::new();
+        let mut names = Vec::new();
+        for index in 0..3u8 {
+            let bytes = vec![index; 7];
+            let name = RootName::try_from(format!("blob-{index}")).unwrap();
+            keys.push(
+                repository
+                    .import(casita::import::BlobImport::new(
+                        bytes.as_slice(),
+                        name.clone(),
+                    ))
+                    .await
+                    .unwrap(),
+            );
+            names.push(name);
+        }
+        let held = repository.retained_reader().await.unwrap();
+        let records = futures::future::try_join_all(keys.iter().map(|key| held.object(key)))
+            .await
+            .unwrap();
+        assert!(records.iter().all(Option::is_some));
+        let missing = ObjectKey::blob(BlobId::new(Digest::hash(b"absent")));
+        let later = repository
+            .import(casita::import::BlobImport::new(
+                &b"later"[..],
+                "later".try_into().unwrap(),
+            ))
+            .await
+            .unwrap();
+        assert!(held.object_batch(&[]).await.unwrap().is_empty());
+        for count in [1, 255, 256, 257, 513] {
+            let pattern = [
+                keys[2].clone(),
+                missing.clone(),
+                keys[0].clone(),
+                keys[2].clone(),
+                later.clone(),
+            ];
+            let expected = [
+                records[2].clone(),
+                None,
+                records[0].clone(),
+                records[2].clone(),
+                None,
+            ];
+            let requested: Vec<_> = pattern.into_iter().cycle().take(count).collect();
+            let actual = held.object_batch(&requested).await.unwrap();
+            assert_eq!(
+                actual,
+                expected.into_iter().cycle().take(count).collect::<Vec<_>>()
+            );
+        }
+        assert!(repository.remove_root(&names[0], &keys[0]).await.unwrap());
+        repository.collect().await.unwrap();
+        assert_eq!(
+            held.object_batch(&[keys[0].clone()]).await.unwrap(),
+            vec![records[0].clone()]
+        );
+        let mut payload = Vec::new();
+        held.open_verified(&keys[0])
+            .await
+            .unwrap()
+            .unwrap()
+            .read_to_end(&mut payload)
+            .await
+            .unwrap();
+        assert_eq!(payload, [0; 7]);
+        drop(held);
+        repository.collect().await.unwrap();
+        assert!(repository.object(&keys[0]).await.unwrap().is_none());
+        repository.flush().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn retained_closure_completeness_keeps_the_reader_snapshot() {
+    let directory = tempfile::tempdir().unwrap();
+    let files = directory.path().join("files");
+    std::fs::create_dir(&files).unwrap();
+    std::fs::write(files.join("file"), b"unwitnessed child").unwrap();
+    for repository in [
+        Repository::memory().unwrap(),
+        Repository::local(directory.path().join("repository"))
+            .await
+            .unwrap(),
+    ] {
+        let tree = repository
+            .import(casita::import::FilesystemImport::new(&files, name("tree")))
+            .await
+            .unwrap();
+        let child = repository.object(&tree).await.unwrap().unwrap().links()[0].clone();
+        let missing = ObjectKey::blob(BlobId::new(Digest::hash(b"absent")));
+        let keys = [tree.clone(), child.clone(), missing, tree];
+        let held = repository.retained_reader().await.unwrap();
+        // A named root records its complete closure; its child has no record.
+        assert_eq!(
+            held.validated_closures(&keys).await.unwrap(),
+            [true, false, false, true]
+        );
+        repository.set_root(name("child"), child).await.unwrap();
+        let fresh = repository.retained_reader().await.unwrap();
+        assert_eq!(
+            fresh.validated_closures(&keys).await.unwrap(),
+            [true, true, false, true]
+        );
+        assert_eq!(
+            held.validated_closures(&keys).await.unwrap(),
+            [true, false, false, true]
+        );
+    }
+}
+
+#[tokio::test]
+async fn object_retention_survives_snapshot_release_and_collection() {
+    let directory = tempfile::tempdir().unwrap();
+    for repository in [
+        Repository::memory().unwrap(),
+        Repository::local(directory.path()).await.unwrap(),
+    ] {
+        let name: RootName = "sentinel".parse().unwrap();
+        let bytes = b"protected independently of a metadata snapshot";
+        let key = repository
+            .import(casita::import::BlobImport::new(&bytes[..], name.clone()))
+            .await
+            .unwrap();
+        let snapshot = repository.retained_reader().await.unwrap();
+        let retention = snapshot.retain_objects();
+        let cloned = retention.clone();
+        drop(snapshot);
+        drop(retention);
+        repository.remove_root(&name, &key).await.unwrap();
+        repository.collect().await.unwrap();
+        let fresh = repository.retained_reader().await.unwrap();
+        let mut opened = fresh.open(&key).await.unwrap().unwrap();
+        drop(fresh);
+        drop(cloned);
+        repository.collect().await.unwrap();
+        let mut actual = Vec::new();
+        opened.read_to_end(&mut actual).await.unwrap();
+        assert_eq!(actual, bytes);
+        drop(opened);
+        repository.collect().await.unwrap();
+        assert!(repository.object(&key).await.unwrap().is_none());
+        repository.flush().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn object_retention_allows_wal_truncation_while_a_snapshot_blocks_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let repository = Repository::local(directory.path()).await.unwrap();
+    let key = repository
+        .import(casita::import::BlobImport::new(
+            &b"old"[..],
+            "old".parse().unwrap(),
+        ))
+        .await
+        .unwrap();
+    repository.flush().await.unwrap();
+    let snapshot = repository.retained_reader().await.unwrap();
+    assert!(snapshot.object(&key).await.unwrap().is_some());
+    let retention = snapshot.retain_objects();
+    repository
+        .import(casita::import::BlobImport::new(
+            &b"new"[..],
+            "new".parse().unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        repository.flush().await.unwrap_err().kind(),
+        ErrorKind::Busy
+    );
+    assert!(wal_bytes(directory.path()) > 0);
+    drop(snapshot);
+    repository.flush().await.unwrap();
+    assert_eq!(wal_bytes(directory.path()), 0);
+    let fresh = repository.retained_reader().await.unwrap();
+    assert!(fresh.object(&key).await.unwrap().is_some());
+    drop(fresh);
+    drop(retention);
+    repository.flush().await.unwrap();
+}
+
+#[tokio::test]
+async fn object_readers_preserve_birth_bound_order_and_payload_protection() {
+    let directory = tempfile::tempdir().unwrap();
+    for repository in [
+        Repository::memory().unwrap(),
+        Repository::local(directory.path()).await.unwrap(),
+    ] {
+        let mut keys = Vec::new();
+        for index in 0..3u8 {
+            let name: RootName = format!("old-{index}").parse().unwrap();
+            keys.push(
+                repository
+                    .import(casita::import::BlobImport::new(&[index; 128][..], name))
+                    .await
+                    .unwrap(),
+            );
+        }
+        let snapshot = repository.retained_reader().await.unwrap();
+        let reader = snapshot.object_reader().unwrap();
+        assert_eq!(reader.generation(), snapshot.generation().unwrap());
+        let records = snapshot.object_batch(&keys).await.unwrap();
+        drop(snapshot);
+        let future = repository
+            .import(casita::import::BlobImport::new(
+                &b"future"[..],
+                "future".parse().unwrap(),
+            ))
+            .await
+            .unwrap();
+        let missing = ObjectKey::blob(BlobId::new(Digest::hash(b"missing")));
+        assert!(reader.object_batch(&[]).await.unwrap().is_empty());
+        for count in [1, 255, 256, 257, 513] {
+            let pattern = [
+                keys[2].clone(),
+                future.clone(),
+                keys[0].clone(),
+                keys[2].clone(),
+                missing.clone(),
+            ];
+            let expected = [
+                records[2].clone(),
+                None,
+                records[0].clone(),
+                records[2].clone(),
+                None,
+            ];
+            let query: Vec<_> = pattern.into_iter().cycle().take(count).collect();
+            assert_eq!(
+                reader.object_batch(&query).await.unwrap(),
+                expected.into_iter().cycle().take(count).collect::<Vec<_>>()
+            );
+        }
+        assert!(reader.open_verified(&future).await.unwrap().is_none());
+        assert!(reader.open(&missing).await.unwrap().is_none());
+        // An idle object reader alone keeps an unrooted object readable.
+        repository
+            .remove_root(&"old-2".parse().unwrap(), &keys[2])
+            .await
+            .unwrap();
+        repository.collect().await.unwrap();
+        assert_eq!(
+            reader.object_batch(&[keys[2].clone()]).await.unwrap(),
+            [records[2].clone()]
+        );
+        let mut idle = Vec::new();
+        reader
+            .open_verified(&keys[2])
+            .await
+            .unwrap()
+            .unwrap()
+            .read_to_end(&mut idle)
+            .await
+            .unwrap();
+        assert_eq!(idle, [2; 128]);
+        let mut opened = reader.open_verified(&keys[0]).await.unwrap().unwrap();
+        let mut prefix = [0; 3];
+        opened.read_exact(&mut prefix).await.unwrap();
+        repository
+            .remove_root(&"old-0".parse().unwrap(), &keys[0])
+            .await
+            .unwrap();
+        // Neither the object handle nor an opened physical stream holds SQL.
+        repository.flush().await.unwrap();
+        let clone = reader.clone();
+        let mut seekable = clone.open(&keys[1]).await.unwrap().unwrap();
+        repository
+            .remove_root(&"old-1".parse().unwrap(), &keys[1])
+            .await
+            .unwrap();
+        drop(clone);
+        drop(reader);
+        repository.collect().await.unwrap();
+        // Metadata presence checks ensure protection, even if a small payload
+        // has already been buffered by the physical reader.
+        assert!(repository.object(&keys[0]).await.unwrap().is_some());
+        assert!(repository.object(&keys[1]).await.unwrap().is_some());
+        let mut plain = Vec::new();
+        seekable.read_to_end(&mut plain).await.unwrap();
+        assert_eq!(plain, [1; 128]);
+        let mut bytes = prefix.to_vec();
+        opened.read_to_end(&mut bytes).await.unwrap();
+        assert_eq!(bytes, [0; 128]);
+        drop(opened);
+        drop(seekable);
+        repository.collect().await.unwrap();
+        for key in &keys {
+            assert!(repository.object(key).await.unwrap().is_none());
+        }
+        repository.flush().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn idle_object_readers_and_open_payloads_do_not_block_wal_truncation() {
+    let directory = tempfile::tempdir().unwrap();
+    let repository = Repository::local(directory.path()).await.unwrap();
+    let key = repository
+        .import(casita::import::BlobImport::new(
+            &b"old bytes"[..],
+            "old".parse().unwrap(),
+        ))
+        .await
+        .unwrap();
+    let snapshot = repository.retained_reader().await.unwrap();
+    let reader = snapshot.object_reader().unwrap();
+    drop(snapshot);
+    let mut payload = reader.open_verified(&key).await.unwrap().unwrap();
+    repository
+        .import(casita::import::BlobImport::new(
+            &b"new bytes"[..],
+            "new".parse().unwrap(),
+        ))
+        .await
+        .unwrap();
+    repository.flush().await.unwrap();
+    assert_eq!(
+        std::fs::metadata(directory.path().join("casita.sqlite-wal"))
+            .unwrap()
+            .len(),
+        0
+    );
+    let mut bytes = Vec::new();
+    payload.read_to_end(&mut bytes).await.unwrap();
+    assert_eq!(bytes, b"old bytes");
+    drop(payload);
+    drop(reader);
+    repository.flush().await.unwrap();
+}
+
+#[tokio::test]
+async fn failed_object_decoding_releases_the_implicit_read_transaction() {
+    let directory = tempfile::tempdir().unwrap();
+    let repository = Repository::local(directory.path()).await.unwrap();
+    let key = repository
+        .import(casita::import::BlobImport::new(
+            &b"corrupt metadata, intact payload"[..],
+            "record".parse().unwrap(),
+        ))
+        .await
+        .unwrap();
+    let snapshot = repository.retained_reader().await.unwrap();
+    let reader = snapshot.object_reader().unwrap();
+    drop(snapshot);
+    // Open a second handle the way the repository does, so both share its WAL.
+    let path = directory.path().join("casita.sqlite");
+    let builder = turso::Builder::new_local(path.to_str().unwrap());
+    #[cfg(windows)]
+    let builder = builder.with_io("experimental_win_iocp");
+    let database = builder
+        .experimental_multiprocess_wal(true)
+        .build()
+        .await
+        .unwrap();
+    let connection = database.connect().unwrap();
+    connection
+        .execute(
+            "UPDATE objects SET record = X'FF' WHERE namespace = ?1 AND native_id = ?2",
+            turso::params![key.namespace().as_str(), key.native_id()],
+        )
+        .await
+        .unwrap();
+    for count in [1, 3] {
+        assert_eq!(
+            reader
+                .object_batch(&vec![key.clone(); count])
+                .await
+                .unwrap_err()
+                .kind(),
+            casita::ErrorKind::Corrupt
+        );
+        repository
+            .flush()
+            .await
+            .expect("failed decodes must not leave pooled cursors pinning WAL");
+        assert_eq!(
+            std::fs::metadata(directory.path().join("casita.sqlite-wal"))
+                .unwrap()
+                .len(),
+            0
+        );
+    }
+    drop(reader);
+    drop(connection);
+    drop(database);
+}
+
+#[tokio::test]
+async fn batched_handles_preserve_visibility_order_and_collection_protection() {
+    let directory = tempfile::tempdir().unwrap();
+    for repository in [
+        Repository::memory().unwrap(),
+        Repository::local(directory.path()).await.unwrap(),
+    ] {
+        let key = repository
+            .import(casita::import::BlobImport::new(
+                &b"held payload"[..],
+                "old".parse().unwrap(),
+            ))
+            .await
+            .unwrap();
+        let snapshot = repository.retained_reader().await.unwrap();
+        let reader = snapshot.object_reader().unwrap();
+        drop(snapshot);
+        let future = repository
+            .import(casita::import::BlobImport::new(
+                &b"future payload"[..],
+                "future".parse().unwrap(),
+            ))
+            .await
+            .unwrap();
+        assert!(reader.objects(&[]).await.unwrap().is_empty());
+        for count in [1, 255, 256, 257, 513] {
+            let keys: Vec<_> = [key.clone(), future.clone(), key.clone()]
+                .into_iter()
+                .cycle()
+                .take(count)
+                .collect();
+            let handles = reader.objects(&keys).await.unwrap();
+            assert_eq!(handles.len(), count);
+            for (handle, expected) in handles.iter().zip(&keys) {
+                if *expected == future {
+                    assert!(handle.is_none());
+                } else {
+                    assert_eq!(handle.as_ref().unwrap().record().key(), expected);
+                }
+            }
+        }
+        let handles = reader.objects(&[key.clone(), key.clone()]).await.unwrap();
+        drop(reader);
+        repository
+            .remove_root(&"old".parse().unwrap(), &key)
+            .await
+            .unwrap();
+        repository.collect().await.unwrap();
+        assert!(repository.object(&key).await.unwrap().is_some());
+        repository.flush().await.unwrap();
+        let mut opened = handles[0].as_ref().unwrap().open_verified().await.unwrap();
+        drop(handles);
+        repository.collect().await.unwrap();
+        assert!(repository.object(&key).await.unwrap().is_some());
+        let mut bytes = Vec::new();
+        opened.read_to_end(&mut bytes).await.unwrap();
+        assert_eq!(bytes, b"held payload");
+        drop(opened);
+        repository.collect().await.unwrap();
+        assert!(repository.object(&key).await.unwrap().is_none());
+        repository.flush().await.unwrap();
+    }
+}

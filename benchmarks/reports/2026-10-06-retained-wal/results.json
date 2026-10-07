@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-06",
+  "build": {
+    "crates_casita_tree": "28c6d26a81dbd5e74254f980718d5a0702a7ac6e",
+    "command": "cargo bench --no-default-features --features native,experimental --bench retained_wal --no-run",
+    "profile": "Cargo bench profile defaults",
+    "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+    "lockfile": {
+      "sha256": "6d53fd6e7d4836f70c740024695f3d11a106e71f074157b442da08194e2673f3",
+      "note": "Cargo.lock is untracked; generated at cachix/casita 84ec292 and shared by every build."
+    },
+    "binary_sha256": "adbed2b31a2910bfa0e89486e610840fb7fe17dc741f976fa45eeb489c07fc31"
+  },
+  "host": {
+    "cpu": "AMD EPYC 9454P 48-Core Processor, 96 hardware threads",
+    "kernel": "Linux 6.18.42",
+    "filesystem": "ZFS",
+    "pinning": "taskset -c 32-47",
+    "note": "Shared host; other users' load was present. Runs were serial and no builds from this investigation ran during timing."
+  },
+  "command": "CASITA_BENCH_RETAINED_WRITES=32,256,1024 taskset -c 32-47 target/release/deps/retained_wal-<hash>",
+  "runs": [
+    {
+      "run": 1,
+      "started": "2026-10-06T16:42:32+00:00",
+      "load_average_1m": 2.5,
+      "samples": [
+        {
+          "checkpoint_busy": true,
+          "correctness": "passed",
+          "payload_bytes": 512,
+          "peak_wal_bytes": 819912,
+          "retention": "snapshot",
+          "wal_after_checkpoint_bytes": 819912,
+          "wal_after_writes_bytes": 819912,
+          "write_seconds": 0.195252331,
+          "writes": 32
+        },
+        {
+          "checkpoint_busy": false,
+          "correctness": "passed",
+          "payload_bytes": 512,
+          "peak_wal_bytes": 819912,
+          "retention": "objects",
+          "wal_after_checkpoint_bytes": 0,
+          "wal_after_writes_bytes": 819912,
+          "write_seconds": 0.258401013,
+          "writes": 32
+        },
+        {
+          "checkpoint_busy": true,
+          "correctness": "passed",
+          "payload_bytes": 512,
+          "peak_wal_bytes": 6583792,
+          "retention": "snapshot",
+          "wal_after_checkpoint_bytes": 6583792,
+          "wal_after_writes_bytes": 6583792,
+          "write_seconds": 2.348809818,
+          "writes": 256
+        },
+        {
+          "checkpoint_busy": false,
+          "correctness": "passed",
+          "payload_bytes": 512,
+          "peak_wal_bytes": 4128272,
+          "retention": "objects",
+          "wal_after_checkpoint_bytes": 0,
+          "wal_after_writes_bytes": 2455552,
+          "write_seconds": 2.1680845890000002,
+          "writes": 256
+        },
+        {
+          "checkpoint_busy": true,
+          "correctness": "passed",
+          "payload_bytes": 512,
+          "peak_wal_bytes": 27150832,
+          "retention": "snapshot",
+          "wal_after_checkpoint_bytes": 27150832,
+          "wal_after_writes_bytes": 27150832,
+          "write_seconds": 10.587619614,
+          "writes": 1024
+        },
+        {
+          "checkpoint_busy": false,
+          "correctness": "passed",
+          "payload_bytes": 512,
+          "peak_wal_bytes": 4140632,
+          "retention": "objects",
+          "wal_after_checkpoint_bytes": 0,
+          "wal_after_writes_bytes": 2352552,
+          "write_seconds": 10.33126373,
+          "writes": 1024
+        }
+      ]
+    },
+    {
+      "run": 2,
+      "started": "2026-10-06T16:43:00+00:00",
+      "load_average_1m": 2.76,
+      "samples": [
+        {
+          "checkpoint_busy": true,
+          "correctness": "passed",
+          "payload_bytes": 512,
+          "peak_wal_bytes": 819912,
+          "retention": "snapshot",
+          "wal_after_checkpoint_bytes": 819912,
+          "wal_after_writes_bytes": 819912,
+          "write_seconds": 0.168827298,
+          "writes": 32
+        },
+        {
+          "checkpoint_busy": false,
+          "correctness": "passed",
+          "payload_bytes": 512,
+          "peak_wal_bytes": 819912,
+          "retention": "objects",
+          "wal_after_checkpoint_bytes": 0,
+          "wal_after_writes_bytes": 819912,
+          "write_seconds": 0.274601636,
+          "writes": 32
+        },
+        {
+          "checkpoint_busy": true,
+          "correctness": "passed",
+          "payload_bytes": 512,
+          "peak_wal_bytes": 6583792,
+          "retention": "snapshot",
+          "wal_after_checkpoint_bytes": 6583792,
+          "wal_after_writes_bytes": 6583792,
+          "write_seconds": 2.356261478,
+          "writes": 256
+        },
+        {
+          "checkpoint_busy": false,
+          "correctness": "passed",
+          "payload_bytes": 512,
+          "peak_wal_bytes": 4128272,
+          "retention": "objects",
+          "wal_after_checkpoint_bytes": 0,
+          "wal_after_writes_bytes": 2455552,
+          "write_seconds": 1.915813706,
+          "writes": 256
+        },
+        {
+          "checkpoint_busy": true,
+          "correctness": "passed",
+          "payload_bytes": 512,
+          "peak_wal_bytes": 27150832,
+          "retention": "snapshot",
+          "wal_after_checkpoint_bytes": 27150832,
+          "wal_after_writes_bytes": 27150832,
+          "write_seconds": 10.332819937,
+          "writes": 1024
+        },
+        {
+          "checkpoint_busy": false,
+          "correctness": "passed",
+          "payload_bytes": 512,
+          "peak_wal_bytes": 4140632,
+          "retention": "objects",
+          "wal_after_checkpoint_bytes": 0,
+          "wal_after_writes_bytes": 2352552,
+          "write_seconds": 10.293799943,
+          "writes": 1024
+        }
+      ]
+    }
+  ]
+}

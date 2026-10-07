@@ -315,6 +315,12 @@ where
         &self.repository
     }
 
+    /// Share collection protection without retaining the logical snapshot.
+    #[cfg(feature = "native")]
+    pub(crate) fn data_protection(&self) -> Arc<dyn Send + Sync> {
+        self._protection.clone()
+    }
+
     /// Immutable logical snapshot tied to this hold.
     pub fn snapshot(&self) -> &dyn MetadataSnapshot {
         self.snapshot.as_ref()

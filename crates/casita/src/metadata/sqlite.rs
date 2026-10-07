@@ -53,6 +53,64 @@ fn object_batch_sql(width: usize) -> &'static str {
     &QUERIES[width.next_power_of_two().trailing_zeros() as usize]
 }
 
+fn object_batch_through_sql(width: usize) -> &'static str {
+    // The bound joins the LEFT JOIN's ON clause, so a newer object reads as a
+    // NULL record, exactly like a missing one.
+    static QUERIES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
+        (0..=8)
+            .map(|power| {
+                let width = 1usize << power;
+                format!(
+                    "{} AND objects.created_generation <= ?{}",
+                    object_batch_sql(width),
+                    width * 2 + 1
+                )
+            })
+            .collect()
+    });
+    &QUERIES[width.next_power_of_two().trailing_zeros() as usize]
+}
+
+async fn read_object_batch(
+    connection: &Connection,
+    keys: &[ObjectKey],
+    generation: Option<i64>,
+) -> Result<Vec<Option<ObjectRecord>>, MetadataError> {
+    // The ordinal preserves duplicates and caller order without
+    // sorting SQL output. Bound both parameters and decoded rows.
+    let mut records = vec![None; keys.len()];
+    for (chunk, output) in keys
+        .chunks(OBJECT_BATCH_SIZE)
+        .zip(records.chunks_mut(OBJECT_BATCH_SIZE))
+    {
+        let width = chunk.len().next_power_of_two();
+        let mut values = Vec::with_capacity(width * 2 + usize::from(generation.is_some()));
+        for key in chunk {
+            values.push(turso::Value::Text(key.namespace().as_str().to_owned()));
+            values.push(turso::Value::Blob(key.native_id().to_vec()));
+        }
+        values.resize(width * 2, turso::Value::Null);
+        let sql = if let Some(generation) = generation {
+            values.push(turso::Value::Integer(generation));
+            object_batch_through_sql(width)
+        } else {
+            object_batch_sql(width)
+        };
+        let mut statement = connection.prepare_cached(sql).await?;
+        let mut rows = statement.query(values).await?;
+        while let Some(row) = rows.next().await? {
+            let ordinal = row.get::<i64>(0)? as usize;
+            if ordinal < chunk.len() {
+                let encoded: Option<Vec<u8>> = row.get(1)?;
+                output[ordinal] = encoded
+                    .map(|bytes| decode_stored_record(&chunk[ordinal], &bytes))
+                    .transpose()?;
+            }
+        }
+    }
+    Ok(records)
+}
+
 /// How many objects closure validation walked.
 ///
 /// The regression this guards is a cost, not a wrong answer, and cost must not
@@ -294,35 +352,7 @@ impl MetadataSnapshot for TursoSnapshot {
         }
         let keys = keys.to_vec();
         self.read(move |connection| {
-            Box::pin(async move {
-                // The ordinal preserves duplicates and caller order without
-                // sorting SQL output. Bound both parameters and decoded rows.
-                let mut records = vec![None; keys.len()];
-                for (chunk, output) in keys
-                    .chunks(OBJECT_BATCH_SIZE)
-                    .zip(records.chunks_mut(OBJECT_BATCH_SIZE))
-                {
-                    let width = chunk.len().next_power_of_two();
-                    let mut values = Vec::with_capacity(width * 2);
-                    for key in chunk {
-                        values.push(turso::Value::Text(key.namespace().as_str().to_owned()));
-                        values.push(turso::Value::Blob(key.native_id().to_vec()));
-                    }
-                    values.resize(width * 2, turso::Value::Null);
-                    let mut statement = connection.prepare_cached(object_batch_sql(width)).await?;
-                    let mut rows = statement.query(values).await?;
-                    while let Some(row) = rows.next().await? {
-                        let ordinal = row.get::<i64>(0)? as usize;
-                        if ordinal < chunk.len() {
-                            let encoded: Option<Vec<u8>> = row.get(1)?;
-                            output[ordinal] = encoded
-                                .map(|bytes| decode_stored_record(&chunk[ordinal], &bytes))
-                                .transpose()?;
-                        }
-                    }
-                }
-                Ok(records)
-            })
+            Box::pin(async move { read_object_batch(connection, &keys, None).await })
         })
         .await
     }
@@ -789,6 +819,55 @@ impl super::VerificationFacts for TursoVerificationFacts {
 
 #[async_trait]
 impl MetadataStore for TursoMetadataStore {
+    async fn object_batch_created_through(
+        &self,
+        keys: &[ObjectKey],
+        generation: u64,
+    ) -> Result<Vec<Option<ObjectRecord>>, MetadataError> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Stored generations fit in i64, so a larger bound admits all of them.
+        let generation = i64::try_from(generation).unwrap_or(i64::MAX);
+        let keys = keys.to_vec();
+        self.db
+            .read_immutable(move |connection| {
+                Box::pin(async move {
+                    Ok(async {
+                        // The generation was already admitted by a retained reader.
+                        // Immutable records need no new revision or catalog snapshot.
+                        if keys.len() == 1 {
+                            let key = &keys[0];
+                            let mut statement = connection
+                                .prepare_cached(
+                                    "SELECT record FROM objects \
+                                     WHERE namespace = ?1 AND native_id = ?2 AND created_generation <= ?3",
+                                )
+                                .await?;
+                            let mut rows = statement
+                                .query(params![
+                                    key.namespace().as_str(),
+                                    key.native_id(),
+                                    generation
+                                ])
+                                .await?;
+                            let record = match rows.next().await? {
+                                Some(row) => {
+                                    Some(decode_stored_record(key, &row.get::<Vec<u8>>(0)?)?)
+                                }
+                                None => None,
+                            };
+                            return Ok(vec![record]);
+                        }
+                        read_object_batch(connection, &keys, Some(generation)).await
+                    }
+                    .await)
+                })
+            })
+            .await
+            .map_err(from_database_error)?
+    }
+
     // Repository::get uses a short transaction; metadata_reader retains one across
     // calls. Both paths share read_snapshot_state and read_records so state
     // validation and record semantics stay aligned despite different lifetimes.
@@ -823,6 +902,9 @@ impl MetadataStore for TursoMetadataStore {
     }
 
     fn supports_metadata_records(&self) -> bool {
+        true
+    }
+    fn supports_object_reads_created_through(&self) -> bool {
         true
     }
     fn supports_root_retention(&self) -> bool {
@@ -2028,26 +2110,31 @@ mod tests {
             .write(|connection| {
                 Box::pin(async move {
                     for width in [1, 2, 128, 256] {
-                        let sql = format!("EXPLAIN QUERY PLAN {}", object_batch_sql(width));
-                        let mut rows = connection
-                            .query(sql, vec![turso::Value::Null; width * 2])
-                            .await?;
-                        let mut details = Vec::new();
-                        while let Some(row) = rows.next().await? {
-                            details.push(row.get::<String>(3)?);
+                        for (query, parameters) in [
+                            (object_batch_sql(width), width * 2),
+                            (object_batch_through_sql(width), width * 2 + 1),
+                        ] {
+                            let sql = format!("EXPLAIN QUERY PLAN {query}");
+                            let mut rows = connection
+                                .query(sql, vec![turso::Value::Null; parameters])
+                                .await?;
+                            let mut details = Vec::new();
+                            while let Some(row) = rows.next().await? {
+                                details.push(row.get::<String>(3)?);
+                            }
+                            println!("batch plan {width}: {details:?}");
+                            assert!(
+                                details
+                                    .iter()
+                                    .any(|detail| detail.contains("SEARCH objects USING INDEX")
+                                        && detail.contains("namespace=? AND native_id=?")),
+                                "{details:?}"
+                            );
+                            assert!(
+                                !details.iter().any(|detail| detail.contains("SCAN objects")),
+                                "{details:?}"
+                            );
                         }
-                        println!("batch plan {width}: {details:?}");
-                        assert!(
-                            details
-                                .iter()
-                                .any(|detail| detail.contains("SEARCH objects USING INDEX")
-                                    && detail.contains("namespace=? AND native_id=?")),
-                            "{details:?}"
-                        );
-                        assert!(
-                            !details.iter().any(|detail| detail.contains("SCAN objects")),
-                            "{details:?}"
-                        );
                     }
                     Ok(())
                 })
@@ -2177,6 +2264,17 @@ mod tests {
                     .await,
                 Err(MetadataError::Corruption(_))
             ));
+            for keys in [
+                vec![first_key.clone()],
+                vec![second_key.clone(), first_key.clone(), first_key.clone()],
+            ] {
+                assert!(matches!(
+                    store
+                        .object_batch_created_through(&keys, snapshot.generation().unwrap())
+                        .await,
+                    Err(MetadataError::Corruption(_))
+                ));
+            }
             let good = snapshot.object(&second_key).await.unwrap().unwrap();
             // Reuse the same cached query shape after the earlier batch exited
             // during decoding, with unread rows still in its result stream.

@@ -1,0 +1,241 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-06",
+  "build": {
+    "crates_casita_tree": "046ee5e9faf6d41e60ec23a33669a0ffde223c1b",
+    "command": "cargo bench --no-default-features --features native,experimental --bench object_reads --no-run",
+    "profile": "Cargo bench profile defaults",
+    "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+    "lockfile": {
+      "sha256": "6d53fd6e7d4836f70c740024695f3d11a106e71f074157b442da08194e2673f3",
+      "note": "Cargo.lock is untracked; generated at cachix/casita 84ec292 and shared by every build."
+    },
+    "binary_sha256": "462602d90fb203e47dd0a9de02b3a925d4aa9d61793c1a184efbd6e674c95077"
+  },
+  "host": {
+    "cpu": "AMD EPYC 9454P 48-Core Processor, 96 hardware threads",
+    "kernel": "Linux 6.18.42",
+    "filesystem": "ZFS",
+    "pinning": "taskset -c 32-47",
+    "note": "Shared host; other users' load was present. Runs were serial and no builds from this investigation ran during timing."
+  },
+  "command": "taskset -c 32-47 target/release/deps/object_reads-<hash> --bench --noplot",
+  "runs": [
+    {
+      "run": 1,
+      "started": "2026-10-06T16:27:46+00:00",
+      "load_average_1m": 2.56,
+      "binary": "previous",
+      "criterion_medians": {
+        "protected_object_reads/objects/128": {
+          "median_ci95_ns": [
+            17445712.638888888,
+            17816195.51875
+          ],
+          "median_ns": 17650266.958333336
+        },
+        "protected_object_reads/objects/4096": {
+          "median_ci95_ns": [
+            19574284.2,
+            19680820.93333333
+          ],
+          "median_ns": 19591007.164285712
+        },
+        "protected_object_reads/snapshot/128": {
+          "median_ci95_ns": [
+            12184902.807142857,
+            14919523.892857142
+          ],
+          "median_ns": 14859670.601190478
+        },
+        "protected_object_reads/snapshot/4096": {
+          "median_ci95_ns": [
+            15690940.5,
+            16593607.977777777
+          ],
+          "median_ns": 16516976.44345238
+        }
+      }
+    },
+    {
+      "run": 2,
+      "started": "2026-10-06T16:29:51+00:00",
+      "load_average_1m": 2.79,
+      "binary": "previous",
+      "criterion_medians": {
+        "protected_object_reads/objects/128": {
+          "median_ci95_ns": [
+            17836676.32,
+            19135434.02222222
+          ],
+          "median_ns": 17985830.15
+        },
+        "protected_object_reads/objects/4096": {
+          "median_ci95_ns": [
+            19460509.125,
+            20192823.04
+          ],
+          "median_ns": 19626374.71
+        },
+        "protected_object_reads/snapshot/128": {
+          "median_ci95_ns": [
+            16439537.75,
+            17551372.65
+          ],
+          "median_ns": 17324653.752314813
+        },
+        "protected_object_reads/snapshot/4096": {
+          "median_ci95_ns": [
+            18232001.701388888,
+            18680000.495370373
+          ],
+          "median_ns": 18495862.6875
+        }
+      }
+    },
+    {
+      "run": 3,
+      "started": "2026-10-06T16:30:34+00:00",
+      "load_average_1m": 2.77,
+      "binary": "previous",
+      "criterion_medians": {
+        "protected_object_reads/objects/128": {
+          "median_ci95_ns": [
+            17945262.916666664,
+            18161728.458333332
+          ],
+          "median_ns": 18000432.183333334
+        },
+        "protected_object_reads/objects/4096": {
+          "median_ci95_ns": [
+            19185722.5,
+            19832939.8
+          ],
+          "median_ns": 19727058.695
+        },
+        "protected_object_reads/snapshot/128": {
+          "median_ci95_ns": [
+            14231319.42857143,
+            15126505.767857144
+          ],
+          "median_ns": 14993507.602040816
+        },
+        "protected_object_reads/snapshot/4096": {
+          "median_ci95_ns": [
+            14355180.191666666,
+            16697127.833333334
+          ],
+          "median_ns": 16310227.604166666
+        }
+      }
+    },
+    {
+      "run": 4,
+      "started": "2026-10-06T16:31:58+00:00",
+      "load_average_1m": 2.62,
+      "binary": "previous",
+      "criterion_medians": {
+        "protected_object_reads/objects/128": {
+          "median_ci95_ns": [
+            17675564.333333332,
+            18076925.743055556
+          ],
+          "median_ns": 17891852.008333333
+        },
+        "protected_object_reads/objects/4096": {
+          "median_ci95_ns": [
+            20713380.714285713,
+            23668709.133333333
+          ],
+          "median_ns": 21716081.33777778
+        },
+        "protected_object_reads/snapshot/128": {
+          "median_ci95_ns": [
+            13263670.0,
+            16320105.574074075
+          ],
+          "median_ns": 14717032.613095239
+        },
+        "protected_object_reads/snapshot/4096": {
+          "median_ci95_ns": [
+            16474514.32142857,
+            16669668.442857143
+          ],
+          "median_ns": 16566235.221428571
+        }
+      }
+    },
+    {
+      "run": 5,
+      "started": "2026-10-06T16:34:04+00:00",
+      "load_average_1m": 2.63,
+      "binary": "previous",
+      "criterion_medians": {
+        "protected_object_reads/objects/128": {
+          "median_ci95_ns": [
+            17610161.916666664,
+            17814694.283730157
+          ],
+          "median_ns": 17667984.3125
+        },
+        "protected_object_reads/objects/4096": {
+          "median_ci95_ns": [
+            19567596.71111111,
+            19735542.733333334
+          ],
+          "median_ns": 19637003.130000003
+        },
+        "protected_object_reads/snapshot/128": {
+          "median_ci95_ns": [
+            14874974.792857144,
+            15139097.594387755
+          ],
+          "median_ns": 14938766.482142858
+        },
+        "protected_object_reads/snapshot/4096": {
+          "median_ci95_ns": [
+            18690827.61904762,
+            19307249.0
+          ],
+          "median_ns": 19218660.98148148
+        }
+      }
+    },
+    {
+      "run": 6,
+      "started": "2026-10-06T16:34:47+00:00",
+      "load_average_1m": 2.8,
+      "binary": "previous",
+      "criterion_medians": {
+        "protected_object_reads/objects/128": {
+          "median_ci95_ns": [
+            17307367.85,
+            18147009.083333332
+          ],
+          "median_ns": 17981734.9375
+        },
+        "protected_object_reads/objects/4096": {
+          "median_ci95_ns": [
+            19586159.472222224,
+            19850809.049999997
+          ],
+          "median_ns": 19771840.03333333
+        },
+        "protected_object_reads/snapshot/128": {
+          "median_ci95_ns": [
+            14429803.758333333,
+            16237729.861904763
+          ],
+          "median_ns": 15165781.5
+        },
+        "protected_object_reads/snapshot/4096": {
+          "median_ci95_ns": [
+            16898068.57777778,
+            19529573.2
+          ],
+          "median_ns": 19291096.066666666
+        }
+      }
+    }
+  ]
+}

@@ -39,6 +39,26 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
   reader's position in the commit order, so an application holding several
   readers can tell which one observes the newest state without comparing
   their unordered `RepositoryRevision`s.
+- `RetainedReader::object_batch` looks up several object records in the
+  reader's protected snapshot in one call, preserving input order and
+  duplicate keys.
+- `RetainedReader::validated_closures` reports which objects have a
+  completeness record in the protected snapshot, without traversing their
+  graphs. `false` means only that no record exists.
+- `RetainedReader::retain_objects` returns an `ObjectRetention` guard that
+  keeps the snapshot's immutable objects protected from collection without
+  holding its metadata snapshot, so local WAL checkpoints can proceed while
+  the guard is alive.
+- `RetainedReader::object_reader` returns an `ObjectReader` that shares the
+  reader's collection protection but looks objects up with short metadata
+  reads instead of a held snapshot. It never returns objects published after
+  the reader's generation. Local and in-memory metadata support it; other
+  backends report `ErrorKind::Unsupported` when it is opened. Custom stores opt
+  in with `experimental::MetadataStore::object_batch_created_through` and
+  `supports_object_reads_created_through`; without them it fails with
+  `experimental::MetadataError::UnsupportedObjectReads`.
+- `ObjectReader::objects` resolves a batch of keys to `ProtectedObject`
+  handles that open verified payloads without another metadata lookup.
 - `experimental::RepositoryProfile` groups a repository's deployment policy
   (cross-process coordination, spill placement and limits, emergency
   collection, the import cache and disk-pressure maintenance) in one value.

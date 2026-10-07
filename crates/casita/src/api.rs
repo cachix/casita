@@ -25,6 +25,9 @@ use crate::{
     MetadataChange, MetadataCheck, MetadataCommitResult, MetadataCursor, MetadataKey, MetadataPage,
 };
 
+mod objects;
+pub use objects::{ObjectReader, ProtectedObject};
+
 /// A consistent view of object records, roots, and application metadata. Holding this reader
 /// keeps one metadata revision stable, but does not retain payloads.
 /// Release readers when finished so old metadata files and WAL pages can be reclaimed.
@@ -134,13 +137,45 @@ async fn scan_snapshot(
 /// session retains the snapshot's content until it and all payload readers
 /// opened from it are dropped. Local sessions share one process-owned pin;
 /// process death releases ownership safely. Remote backends use durable pins.
-/// Release it promptly after the read operation.
+/// Release it promptly after the read operation; [`Self::retain_objects`]
+/// keeps its collection protection without the snapshot.
 #[derive(Clone)]
 pub struct RetainedReader {
     pub(crate) hold: Arc<BuiltinRetentionHold>,
 }
 
 impl RetainedReader {
+    /// Detach immutable-object reads from this metadata snapshot. The returned
+    /// reader shares existing collection protection, admits no additional pin,
+    /// and never exposes objects born after this reader's generation. It uses
+    /// short metadata reads, allowing checkpoints between operations.
+    /// Supported by local and in-memory metadata backends; others fail with
+    /// [`ErrorKind::Unsupported`].
+    pub fn object_reader(&self) -> Result<ObjectReader, Error> {
+        if !self
+            .hold
+            .repository()
+            .metadata()
+            .supports_object_reads_created_through()
+        {
+            return Err(MetadataError::UnsupportedObjectReads.into_application_error());
+        }
+        Ok(ObjectReader::new(
+            self.hold.repository().clone(),
+            self.generation()?,
+            self.hold.data_protection(),
+        ))
+    }
+
+    /// Keep this snapshot's immutable objects alive independently of its
+    /// metadata view. Drop the reader and its payload readers to release their
+    /// snapshots; this guard alone does not block database checkpoints.
+    pub fn retain_objects(&self) -> ObjectRetention {
+        ObjectRetention {
+            _protection: self.hold.data_protection(),
+        }
+    }
+
     /// Open a sequential payload reader that authenticates bytes before use.
     /// Writes generate the required proof metadata before publication. Missing
     /// or corrupt proofs fail verification; reads never fall back to EOF only.
@@ -148,40 +183,11 @@ impl RetainedReader {
         let Some(record) = self.hold.object(key).await.app()? else {
             return Ok(None);
         };
-        let opened = self
-            .hold
-            .repository()
-            .payloads()
-            .open_verified(&record.payload(), record.payload_size())
-            .await;
-        let inner = match opened {
-            Ok(Some(inner)) => inner,
-            result => {
-                // Only missing or unauthenticated bytes say anything about
-                // stored content; a busy or throttled backend does not.
-                let damaged = match &result {
-                    Ok(_) => true,
-                    Err(error) => crate::blob::is_damaged_payload_error(error),
-                };
-                if damaged && let Some(store) = &self.hold.repository().nar_store {
-                    store.record_read_failure().await;
-                }
-                return Err(match result {
-                    Err(error) => RepositoryError::Payload(error),
-                    _ => RepositoryError::MissingPayload(record.payload()),
-                }
-                .into_application_error());
-            }
-        };
-        Ok(Some(VerifiedReader {
-            record,
-            inner,
-            _hold: Some(self.hold.clone()),
-            nar_health: crate::nar::store::ReadHealth::new(
-                self.hold.repository().nar_store.clone(),
-            ),
-        }))
+        open_verified_record(self.hold.repository(), record, self.hold.clone())
+            .await
+            .map(Some)
     }
+
     pub(crate) fn new(hold: BuiltinRetentionHold) -> Self {
         Self {
             hold: Arc::new(hold),
@@ -248,6 +254,24 @@ impl RetainedReader {
         self.hold.object(key).await.app()
     }
 
+    /// Look up immutable object records in this protected snapshot, preserving
+    /// input order and duplicate keys. Absent keys produce `None` entries.
+    pub async fn object_batch(
+        &self,
+        keys: &[ObjectKey],
+    ) -> Result<Vec<Option<ObjectRecord>>, Error> {
+        self.hold.object_batch(keys).await.app()
+    }
+
+    /// Whether each object has a completeness record for its closure in this
+    /// protected snapshot, preserving input order and duplicates. Missing
+    /// objects and objects without a record return `false`. This does not
+    /// traverse or validate a closure, so a complete object without a record
+    /// also returns `false`.
+    pub async fn validated_closures(&self, keys: &[ObjectKey]) -> Result<Vec<bool>, Error> {
+        self.hold.snapshot().validated_closures(keys).await.app()
+    }
+
     /// Open content from this exact snapshot. The returned reader keeps the
     /// protection alive even after the session and repository are dropped.
     /// Keys absent from the snapshot return `None`; opaque records do not
@@ -265,6 +289,19 @@ impl RetainedReader {
             ),
         }))
     }
+}
+
+/// Collection protection for the immutable objects visible to a retained reader.
+/// Like the reader, it protects every immutable object at the snapshot's
+/// generation, including other owners' data, through the same pin: shared and
+/// process-owned locally, durable on remote backends, where process death does
+/// not release it. Unlike the reader, this guard does not keep a metadata
+/// snapshot open. Open a fresh [`RetainedReader`] for later reads; historical
+/// roots and application metadata require keeping the original reader instead.
+/// Clones share protection.
+#[derive(Clone)]
+pub struct ObjectRetention {
+    _protection: Arc<dyn Send + Sync>,
 }
 
 type BuiltinRepository = CoreRepository<Arc<dyn BlobGc>, Arc<dyn MetadataStore>>;
@@ -418,6 +455,42 @@ impl IntegrityReport {
     }
 }
 
+async fn open_verified_record(
+    repository: &BuiltinRepository,
+    record: ObjectRecord,
+    protection: Arc<dyn Send + Sync>,
+) -> Result<VerifiedReader, Error> {
+    let opened = repository
+        .payloads()
+        .open_verified(&record.payload(), record.payload_size())
+        .await;
+    let inner = match opened {
+        Ok(Some(inner)) => inner,
+        result => {
+            // Only missing or unauthenticated bytes say anything about
+            // stored content; a busy or throttled backend does not.
+            let damaged = match &result {
+                Ok(_) => true,
+                Err(error) => crate::blob::is_damaged_payload_error(error),
+            };
+            if damaged && let Some(store) = &repository.nar_store {
+                store.record_read_failure().await;
+            }
+            return Err(match result {
+                Err(error) => RepositoryError::Payload(error),
+                _ => RepositoryError::MissingPayload(record.payload()),
+            }
+            .into_application_error());
+        }
+    };
+    Ok(VerifiedReader {
+        record,
+        inner,
+        _hold: Some(protection),
+        nar_health: crate::nar::store::ReadHealth::new(repository.nar_store.clone()),
+    })
+}
+
 /// A seekable payload reader with collection protection.
 ///
 /// Implements Tokio's [`AsyncRead`] and [`AsyncSeek`]. Ordinary opens retain the
@@ -427,7 +500,7 @@ pub struct Reader {
     record: ObjectRecord,
     inner: Box<dyn BlobReader>,
     // Drop the physical reader before releasing the collection hold.
-    _hold: Option<Arc<BuiltinRetentionHold>>,
+    _hold: Option<Arc<dyn Send + Sync>>,
     nar_health: crate::nar::store::ReadHealth,
 }
 
@@ -438,7 +511,7 @@ pub struct Reader {
 pub struct VerifiedReader {
     record: ObjectRecord,
     inner: Box<dyn crate::blob::BlobStreamReader>,
-    _hold: Option<Arc<BuiltinRetentionHold>>,
+    _hold: Option<Arc<dyn Send + Sync>>,
     nar_health: crate::nar::store::ReadHealth,
 }
 
@@ -1012,6 +1085,26 @@ mod tests {
             reader.generation().unwrap_err().kind(),
             ErrorKind::Unsupported
         );
+    }
+
+    #[cfg(feature = "s3")]
+    #[tokio::test]
+    async fn object_readers_require_generation_bounded_reads() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Arc::new(chroma_storage::Storage::Local(
+            chroma_storage::local::LocalStorage::new(directory.path().to_str().unwrap()),
+        ));
+        let metadata = crate::metadata::Wal3MetadataStore::open(storage, "casita/state", "reader")
+            .await
+            .unwrap();
+        let repository = Repository {
+            inner: CoreRepository::new(crate::blob::MemoryBlobStore::new(), metadata)
+                .into_builtin(),
+        };
+        let retained = repository.retained_reader().await.unwrap();
+        let error = retained.object_reader().err().unwrap();
+        assert_eq!(error.kind(), ErrorKind::Unsupported);
+        assert!(error.to_string().contains("object reads"), "{error}");
     }
 
     #[tokio::test]

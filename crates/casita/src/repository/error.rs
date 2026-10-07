@@ -200,7 +200,9 @@ impl RepositoryError {
             Self::Metadata(error) => match error {
                 MetadataError::Busy(_) | MetadataError::MaintenanceFenced => Category::Busy,
                 MetadataError::StorageFull => Category::Backend,
-                MetadataError::UnsupportedMetadata => Category::Unsupported,
+                MetadataError::UnsupportedMetadata | MetadataError::UnsupportedObjectReads => {
+                    Category::Unsupported
+                }
                 MetadataError::InvalidMetadata(_) => Category::InvalidInput,
                 MetadataError::RootVerificationRequired => Category::InvalidInput,
                 MetadataError::CheckFailed { .. } => Category::DestinationConflict,
