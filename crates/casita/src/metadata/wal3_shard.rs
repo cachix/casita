@@ -442,6 +442,38 @@ impl ObjectShardStorage {
             .map_err(|error| shard_corruption(reference, error))
     }
 
+    /// Return one result per key, in input order, reading each routed shard
+    /// once and decoding each selected block once.
+    pub(super) async fn lookup_batch(
+        &self,
+        map: &StateShardMap,
+        keys: &[ObjectKey],
+    ) -> Result<Vec<Option<(ObjectRecord, bool, u64)>>, MetadataError> {
+        let mut found = vec![None; keys.len()];
+        let mut groups = BTreeMap::new();
+        for (index, key) in keys.iter().enumerate() {
+            if let Some(reference) = map.object_shard(key) {
+                let (_, indices) = groups
+                    .entry(&reference.first)
+                    .or_insert_with(|| (reference, Vec::new()));
+                indices.push(index);
+            }
+        }
+        for (_, (reference, indices)) in groups {
+            let bytes = self.get(reference).await?;
+            let requested = indices
+                .iter()
+                .map(|index| &keys[*index])
+                .collect::<Vec<_>>();
+            let records = lookup_verified_object_shard_batch(&bytes, reference, &requested)
+                .map_err(|error| shard_corruption(reference, error))?;
+            for (index, record) in indices.into_iter().zip(records) {
+                found[index] = record;
+            }
+        }
+        Ok(found)
+    }
+
     pub(super) async fn read(
         &self,
         reference: &ObjectShardRef,
@@ -1300,6 +1332,41 @@ fn lookup_verified_object_shard(
     lookup_object_block(encoded, key)
 }
 
+fn lookup_verified_object_shard_batch(
+    bytes: &[u8],
+    reference: &ObjectShardRef,
+    keys: &[&ObjectKey],
+) -> io::Result<Vec<Option<(ObjectRecord, bool, u64)>>> {
+    let mut found = vec![None; keys.len()];
+    let blocks = decode_block_directory(bytes)?;
+    let mut groups = BTreeMap::<usize, Vec<usize>>::new();
+    for (index, key) in keys.iter().enumerate() {
+        if *key < &reference.first || *key > &reference.last {
+            continue;
+        }
+        let at = blocks.partition_point(|block| &block.last < *key);
+        if blocks.get(at).is_some_and(|block| &block.first <= *key) {
+            groups.entry(at).or_default().push(index);
+        }
+    }
+    for (at, indices) in groups {
+        let block = &blocks[at];
+        let encoded = exact_range(bytes, block.offset, block.encoded_bytes)?;
+        if Digest::from(blake3::hash(encoded)) != block.digest {
+            return Err(io::Error::other("logical object block checksum mismatch"));
+        }
+        // Decode the entire authenticated block, retaining all point-lookup
+        // validation even when only its first record was requested.
+        let records = decode_object_block(encoded)?;
+        for index in indices {
+            if let Ok(at) = records.binary_search_by(|entry| entry.0.key().cmp(keys[index])) {
+                found[index] = Some(records[at].clone());
+            }
+        }
+    }
+    Ok(found)
+}
+
 #[cfg(test)]
 pub(super) fn decode_object_shard(
     bytes: &[u8],
@@ -1815,6 +1882,66 @@ mod tests {
             decode_object_shard(&encoded.bytes, &encoded.reference).unwrap(),
             entries
         );
+    }
+
+    #[tokio::test]
+    async fn batch_lookup_preserves_order_missing_duplicates_and_block_boundaries() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Arc::new(Storage::Local(chroma_storage::local::LocalStorage::new(
+            directory.path().to_str().unwrap(),
+        )));
+        let shards = ObjectShardStorage::new(storage, "batch/state".to_owned(), 0);
+        let mut map = StateShardMap::default();
+        let entries = (1..=1_026)
+            .map(|index| (record(index * 2), index % 3 == 0, u64::from(index)))
+            .collect::<Vec<_>>();
+        for chunk in entries.chunks(513) {
+            let encoded = encode_object_shard(chunk).unwrap();
+            shards.put(&encoded).await.unwrap();
+            map.object_count += encoded.reference.entries;
+            map.validated_count += encoded.reference.validated;
+            map.objects.push(encoded.reference);
+        }
+        assert!(shards.lookup_batch(&map, &[]).await.unwrap().is_empty());
+        assert_eq!(shards.stats().get_requests, 0);
+        let keys = [
+            2053, 1024, 1022, 1026, 1025, 1027, 1028, 2048, 2050, 2052, 0, 3, 2, 1024,
+        ]
+        .map(|index| record(index).key().clone());
+        let expected = keys
+            .iter()
+            .map(|key| entries.iter().find(|entry| entry.0.key() == key).cloned())
+            .collect::<Vec<_>>();
+        assert_eq!(shards.lookup_batch(&map, &keys).await.unwrap(), expected);
+        // A disabled cache proves each routed shard is loaded only once per batch.
+        assert_eq!(shards.stats().get_requests, 2);
+    }
+
+    #[test]
+    fn batch_lookup_checks_the_entire_selected_block() {
+        let encoded =
+            encode_object_shard(&[(record(1), true, 17), (record(2), false, 19)]).unwrap();
+        let key = record(1).key().clone();
+        let keys = [&key, &key];
+        assert_eq!(
+            lookup_verified_object_shard_batch(&encoded.bytes, &encoded.reference, &keys).unwrap(),
+            vec![Some((record(1), true, 17)); 2],
+        );
+        let blocks = decode_block_directory(&encoded.bytes).unwrap();
+        let mut corrupt = encoded.bytes.to_vec();
+        // Damage the final generation, beyond the requested first record.
+        corrupt[(blocks[0].offset + blocks[0].encoded_bytes - 1) as usize] ^= 1;
+        assert!(lookup_verified_object_shard_batch(&corrupt, &encoded.reference, &keys).is_err());
+        for end in [0, 8, encoded.bytes.len() - 1] {
+            assert!(
+                lookup_verified_object_shard_batch(
+                    &encoded.bytes[..end],
+                    &encoded.reference,
+                    &keys
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]

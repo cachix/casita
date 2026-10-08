@@ -38,11 +38,38 @@ whatever the size of the checkpoint. The storage is WAL3's local transport, so
 this isolates checkpoint CPU and I/O costs rather than network latency.
 `reproducer.json` holds every metric.
 
+## Batched shard lookups
+
+Publication now prefetches the shard records of a whole mutation or delta:
+keys are grouped by shard, each shard is read once, and each selected block is
+authenticated and decoded once. Snapshot `object_batch` and
+`validated_closures` use the same path. Milliseconds after the checkpoint,
+median of five processes.
+
+| Case | Handle | Previous | Batched | Speedup | Shard cache hits |
+|---|---|---:|---:|---:|---:|
+| 511 batch | warm | 109.2 | 8.4 | 13.1 | 2 |
+| 511 batch | reopened | 109.0 | 7.9 | 13.9 | 1 |
+| 512 batch | warm | 110.0 | 12.3 | 8.9 | 2 |
+| 512 batch | reopened | 110.7 | 7.5 | 14.8 | 1 |
+| 513 batch | warm | 131.7 | 7.9 | 16.7 | 2 |
+| 513 batch | reopened | 109.8 | 8.1 | 13.6 | 1 |
+| 8,192 corpus | warm | 117.0 | 14.0 | 8.3 | 2 |
+| 8,192 corpus | reopened | 116.8 | 11.0 | 10.6 | 1 |
+| 131,072 corpus | warm | 138.4 | 53.5 | 2.6 | 14 |
+| 131,072 corpus | reopened | 144.7 | 59.0 | 2.5 | 7 |
+
+A single-batch checkpoint is one or two blocks, so batching decodes each block
+once instead of once per key. The publication into a large corpus is new keys
+spread over most blocks of the checkpoint, so it still decodes hundreds of
+whole blocks. `batched-lookups.json` holds every metric.
+
 ## Build and host
 
 Each JSON file records its build command, compiler, lockfile and executable
 digests, the host, and the load average before each run. Processes were pinned
-to 16 cores of a shared host and ran serially.
+to 16 cores of a shared host and ran serially; control and batched processes
+alternated CB BC CB BC CB.
 
 ## Reproduce
 
