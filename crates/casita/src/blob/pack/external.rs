@@ -142,7 +142,9 @@ mod tests {
         packed.register_manifest(BlobId::new(blake3::hash(b"new manifest").into()));
         let aborted = packed.prepare_state_catalog().await.unwrap().unwrap();
         assert_eq!(aborted.len(), 56);
-        packed.finish_state_catalog(false).unwrap();
+        packed
+            .finish_state_catalog(CatalogOutcome::Aborted)
+            .unwrap();
         let swept = packed.reclaim_catalog_objects(&[]).await.unwrap();
         assert_eq!(swept.deleted_objects, 1);
         assert_eq!(
@@ -156,7 +158,9 @@ mod tests {
         assert!(packed.resolve_state_catalog(&aborted).await.is_err());
         let next = packed.prepare_state_catalog().await.unwrap().unwrap();
         assert_eq!(next, aborted);
-        packed.finish_state_catalog(true).unwrap();
+        packed
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         let swept = packed
             .reclaim_catalog_objects(&[original.clone().into()])
             .await

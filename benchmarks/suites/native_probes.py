@@ -10,6 +10,7 @@ from benchmarks.suites import repository as common
 from benchmarks.suites.pack.catalog import build_probe_binary
 
 PROBES = {
+    "catalog-synchronization": "blob::pack::catalog_sync_tests::benchmark_catalog_synchronization",
     "state-publication": "metadata::benchmarks::benchmark_state_publication",
     "metadata-durability": "metadata::benchmarks::benchmark_metadata_commit_durability",
     "deletion-ordering": "repository::collection_benchmark::benchmark_collection_deletion_ordering",

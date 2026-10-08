@@ -3856,6 +3856,14 @@ async fn local_emergency_collection_uses_stale_payload_as_commit_space() {
     mutation.publish_unrooted(vec![orphan]).await.unwrap();
     drop(mutation);
 
+    // A concurrent importer has uploaded bytes but has not published its
+    // object record. Emergency deletion before the metadata retry must honor
+    // its staging pin just as the normal post-prune sweep does.
+    let active = repository.mutation_session().await.unwrap();
+    let staged = active.stage_blob(b"still being imported").await.unwrap();
+    let staged_key = staged.record().key().clone();
+    let staged_payload = staged.record().payload();
+
     fail_once.store(true, Ordering::SeqCst);
     let outcome = repository.collect().await.unwrap();
     assert_eq!(outcome.removed.logical_objects, 1);
@@ -3871,6 +3879,17 @@ async fn local_emergency_collection_uses_stale_payload_as_commit_space() {
             .is_none()
     );
     assert!(!repository.payloads().has(&payload).await.unwrap());
+    assert!(
+        !fail_once.load(Ordering::SeqCst),
+        "the prune commit must hit the injected StorageFull"
+    );
+    assert!(repository.payloads().has(&staged_payload).await.unwrap());
+    active
+        .publish_rooted(vec![staged], "kept".parse().unwrap(), staged_key)
+        .await
+        .unwrap();
+    drop(active);
+    assert!(repository.fsck().await.unwrap().is_clean());
 }
 
 #[tokio::test]

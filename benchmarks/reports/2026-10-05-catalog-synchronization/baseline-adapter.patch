@@ -1,0 +1,243 @@
+--- a/crates/casita/src/blob/pack.rs
++++ b/crates/casita/src/blob/pack.rs
+@@ -12648,3 +12648,6 @@
+         assert!(decode_tombstone_record(&trailing).is_err());
+     }
+ }
++
++#[cfg(test)]
++mod catalog_sync_tests;
+--- /dev/null
++++ b/crates/casita/src/blob/pack/catalog_sync_tests.rs
+@@ -0,0 +1,231 @@
++//! Identical candidate benchmark harness; no production fixes.
++
++use super::*;
++use object_store::memory::InMemory;
++
++#[tokio::test]
++#[ignore = "performance corpus; benchmark run catalog-synchronization"]
++async fn benchmark_catalog_synchronization() {
++    let iterations: usize = std::env::var("CASITA_STATE_BENCH_ITERATIONS")
++        .unwrap_or_else(|_| "100".into())
++        .parse()
++        .unwrap();
++    let entries: usize = std::env::var("CASITA_LOGICAL_STATE_BENCH_ENTRIES")
++        .unwrap_or_else(|_| "65536".into())
++        .parse()
++        .unwrap();
++    assert!(iterations > 0 && entries > 0);
++    for count in BTreeSet::from([16, entries]) {
++        for kind in [
++            "materialized",
++            "sharded",
++            "sharded_legacy_run",
++            "sharded_queryable_run",
++        ] {
++            let sharded = kind != "materialized";
++            let deferred = kind.ends_with("_run");
++            let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
++            let base = Path::from("catalog-synchronization-benchmark");
++            let mut index = Index {
++                manifests_complete: true,
++                ..Index::default()
++            };
++            for ordinal in 0..count {
++                index
++                    .manifests
++                    .insert(BlobId::new(blake3::hash(&ordinal.to_le_bytes()).into()));
++            }
++            let catalog_base = if sharded {
++                let encoded = encode_index_shards(&index, 4).unwrap();
++                for (digest, bytes) in encoded.objects {
++                    put_object(
++                        &objects,
++                        &sharded_path(&base, INDEXES_KIND, &digest),
++                        bytes,
++                        true,
++                    )
++                    .await
++                    .unwrap();
++                }
++                put_object(
++                    &objects,
++                    &sharded_path(&base, INDEXES_KIND, &encoded.map_digest),
++                    encoded.map,
++                    true,
++                )
++                .await
++                .unwrap();
++                CatalogBase::Sharded {
++                    root: encoded.map_digest,
++                    shard_bits: 4,
++                }
++            } else {
++                CatalogBase::Inline(
++                    encode_index_checkpoint(&index, Digest::hash(b"sync benchmark")).unwrap(),
++                )
++            };
++            let run_manifest = BlobId::new(Digest::hash(b"deferred benchmark manifest"));
++            let runs = if deferred {
++                let mut overlay = Index {
++                    manifests_complete: true,
++                    ..Index::default()
++                };
++                overlay.manifests.insert(run_manifest);
++                let mut mutations = IndexMutations::default();
++                mutations.record_manifest_add(run_manifest);
++                let bytes = encode_catalog_run(&CatalogRun {
++                    first_generation: 2,
++                    last_generation: 2,
++                    delta: encode_index_mutations(&overlay, &mutations).unwrap(),
++                })
++                .unwrap();
++                let digest = Digest::from(blake3::hash(&bytes));
++                put_object(
++                    &objects,
++                    &sharded_path(&base, INDEXES_KIND, &digest),
++                    bytes.clone(),
++                    true,
++                )
++                .await
++                .unwrap();
++                BTreeMap::from([(
++                    0,
++                    CatalogRunRef {
++                        digest,
++                        first_generation: 2,
++                        last_generation: 2,
++                        encoded_bytes: bytes.len() as u64,
++                        query: (kind == "sharded_queryable_run")
++                            .then(|| catalog_run_query_ref(&bytes).unwrap()),
++                    },
++                )])
++            } else {
++                BTreeMap::new()
++            };
++            let catalogs = [2, 3].map(|generation| {
++                encode_delta_catalog(&DeltaCatalog {
++                    sidecars: None,
++                    generation,
++                    base: catalog_base.clone(),
++                    runs: runs.clone(),
++                    deltas: if deferred && generation == 3 {
++                        vec![encode_index_mutations(&index, &IndexMutations::default()).unwrap()]
++                    } else {
++                        Vec::new()
++                    },
++                })
++                .unwrap()
++            });
++            for changes in [0, 1, 64] {
++                let writer = PackedChunks::open_with_state_catalog(
++                    objects.clone(),
++                    base.clone(),
++                    u64::MAX,
++                    0,
++                    &catalogs[0],
++                )
++                .await
++                .unwrap();
++                let added = (0..changes)
++                    .map(|ordinal| {
++                        BlobId::new(Digest::hash(format!("local manifest {ordinal}").as_bytes()))
++                    })
++                    .collect::<Vec<_>>();
++                for manifest in &added {
++                    writer.register_manifest(*manifest);
++                }
++                let mut expected = index
++                    .manifests
++                    .sorted_ids()
++                    .into_iter()
++                    .collect::<BTreeSet<_>>();
++                expected.extend(added);
++                if deferred {
++                    expected.insert(run_manifest);
++                    assert!(!writer.lazy_catalog.read().unwrap().run_refs.is_empty());
++                }
++                let mut materialize_nanos = 0_u128;
++                let mut changed_nanos = 0_u128;
++                let mut unchanged_nanos = 0_u128;
++                writer.reset_read_stats();
++                // Alternate the ordering of the no-op and changing-root samples.
++                for iteration in 0..iterations {
++                    let current = &catalogs[iteration % 2];
++                    let next = &catalogs[(iteration + 1) % 2];
++                    if iteration % 2 == 0 {
++                        let start = Instant::now();
++                        writer
++                            .synchronize_state_catalog(Some(current))
++                            .await
++                            .unwrap();
++                        unchanged_nanos += start.elapsed().as_nanos();
++                    }
++                    let start = Instant::now();
++                    writer.synchronize_state_catalog(Some(next)).await.unwrap();
++                    changed_nanos += start.elapsed().as_nanos();
++                    if deferred {
++                        assert!(!writer.lazy_catalog.read().unwrap().run_refs.is_empty());
++                        let start = Instant::now();
++                        let visible = writer
++                            .list_manifests()
++                            .try_collect::<BTreeSet<_>>()
++                            .await
++                            .unwrap();
++                        materialize_nanos += start.elapsed().as_nanos();
++                        assert_eq!(visible, expected);
++                        assert!(writer.lazy_catalog.read().unwrap().run_refs.is_empty());
++                    }
++                    if iteration % 2 != 0 {
++                        let start = Instant::now();
++                        writer.synchronize_state_catalog(Some(next)).await.unwrap();
++                        unchanged_nanos += start.elapsed().as_nanos();
++                    }
++                }
++                let stats = writer.read_stats();
++                assert_eq!(
++                    writer
++                        .list_manifests()
++                        .try_collect::<BTreeSet<_>>()
++                        .await
++                        .unwrap(),
++                    expected
++                );
++                let candidate = writer.prepare_catalog().await.unwrap();
++                if changes == 0 {
++                    assert!(candidate.catalog().is_none());
++                }
++                let catalog = candidate
++                    .catalog()
++                    .map(ToOwned::to_owned)
++                    .unwrap_or_else(|| catalogs[iterations % 2].to_vec());
++                candidate.commit().unwrap();
++                let reader = PackedChunks::open_with_state_catalog(
++                    objects.clone(),
++                    base.clone(),
++                    u64::MAX,
++                    0,
++                    &catalog,
++                )
++                .await
++                .unwrap();
++                assert_eq!(
++                    reader
++                        .list_manifests()
++                        .try_collect::<BTreeSet<_>>()
++                        .await
++                        .unwrap(),
++                    expected
++                );
++                let label = format!("{kind}_entries{count}_pending{changes}");
++                if deferred {
++                    println!("{label}_materialize_nanos {materialize_nanos}");
++                }
++                println!("{label}_changed_nanos {changed_nanos}");
++                println!("{label}_unchanged_nanos {unchanged_nanos}");
++                println!("{label}_index_requests {}", stats.index_requests);
++                println!("{label}_index_bytes {}", stats.index_bytes);
++            }
++        }
++    }
++    println!("iterations {iterations}");
++}

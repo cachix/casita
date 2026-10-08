@@ -1,0 +1,31 @@
+{
+  "baseline_revision": "84ec2920791276cd4ad8c029cd60529810e15705",
+  "candidate": "Implementation in this branch; identified by source hashes below.",
+  "rustc": "1.96.0 (ac68faa20 2026-05-25)",
+  "features": [
+    "native"
+  ],
+  "profile": {
+    "opt_level": "3",
+    "debuginfo": 0,
+    "debug_assertions": false,
+    "overflow_checks": false,
+    "test": true
+  },
+  "cargo_lock_sha256": "c616e3ded6fd4749056e0788d6ec8c87d8e1494d549041960e9055c507f39585",
+  "harness_function_sha256": "b252b4f1257e174a03028b3005d09b3c7e19e5e3b331ec125f1b196700146074",
+  "baseline_binary_sha256": "7bc48092267593ee1425f9924a3f84201a387ea26d0f7ba1018c2e5a8630cc53",
+  "candidate_binary_sha256": "1bd4527bcb2bb67939d88505b0e08beebb5746beab3a4b7420f6066c99ebb585",
+  "candidate_source_sha256": {
+    "benchmarks/all.py": "af6cdeb50a77370dbacb92d6f29bc74d1e5b1c1dee53280d93664917aeb4d916",
+    "benchmarks/manifest.json": "beaae2c32746f2dfc0afe72cc5cc31482a4444f38599aa53c45219c7e58a60cd",
+    "benchmarks/suites/native_probes.py": "dc974bf1ae7de4b89b7c1d32ead6d4c06eb9540c2051cd75e86b0bd1e00ade39",
+    "crates/casita/src/blob/pack.rs": "c8e7a03560dcec43dfe310cc18f8ab9e4397f5285aab375a56f7ec2c073d082c",
+    "crates/casita/src/blob/pack/benchmarks.rs": "20909699dc6b23fd0fd033ab7d28e8be128ca39007b47a2c57e7972e883be7f6",
+    "crates/casita/src/blob/pack/catalog_sync_tests.rs": "7ab955a4308e29c9d5a16cd35f4d8ff1d47ac32fbeefdae9ee9c798401241574",
+    "crates/casita/src/blob/pack/external.rs": "a8ed5bd0511b382353c47b062e93f4849a067ae59273f8e131374d60a1bcaa63",
+    "crates/casita/src/repository/catalog_sync_tests.rs": "52564453b5d92a1d0519c4101060c76a6832bd6d42c8ddc0984f56eaced65023",
+    "crates/casita/src/repository/closure_benchmarks.rs": "57313ed46a2b98daa0d5e9e8d38079e3e6c77436882b76206841ffbc04e49fba",
+    "crates/casita/src/repository/mod.rs": "a2a0c5ea415fc443ff23de7c8e987f595fed1f9d150c90c9b9c709b8498a8c8f"
+  }
+}
