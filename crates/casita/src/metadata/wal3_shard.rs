@@ -4,7 +4,10 @@
 //! inventories can concatenate them without a global merge. Object shards
 //! contain authenticated blocks and a compact trailing directory; a lookup
 //! routes map -> shard -> block, checks that block's framing and key order,
-//! and decodes only the record it selects.
+//! and decodes only the record it selects. Reads take a
+//! [`VerifiedObjectShard`], authenticated as a whole against its content
+//! address, so they do not re-hash the directory or blocks inside it. Full
+//! reads verify a cached shard again before trusting it.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
@@ -162,6 +165,20 @@ pub(super) struct ObjectShardStorage {
 pub(super) struct MetadataDeletionPause {
     pub(super) reached: tokio::sync::Notify,
     pub(super) resume: tokio::sync::Notify,
+}
+
+/// How an object-shard read treats a shard-cache hit.
+#[derive(Clone, Copy)]
+enum CacheHit {
+    /// Lookups trust bytes that were verified or encoded when they entered
+    /// the cache.
+    Trust,
+    /// Full reads back fsck's inventory, checkpoint compaction and
+    /// collection, and compaction re-encodes what it reads under a fresh
+    /// digest. They verify a cached shard again, so damage a cached copy took
+    /// on in memory never reaches them: a copy that fails is evicted and the
+    /// shard is fetched again.
+    Reverify,
 }
 
 struct ShardCache {
@@ -439,8 +456,8 @@ impl ObjectShardStorage {
         let Some(reference) = map.object_shard(key) else {
             return Ok(None);
         };
-        let bytes = self.get(reference).await?;
-        lookup_verified_object_shard(bytes.as_slice(), reference, key)
+        let shard = self.get(reference, CacheHit::Trust).await?;
+        lookup_verified_object_shard(&shard, reference, key)
             .map_err(|error| shard_corruption(reference, error))
     }
 
@@ -462,12 +479,12 @@ impl ObjectShardStorage {
             }
         }
         for (_, (reference, indices)) in groups {
-            let bytes = self.get(reference).await?;
+            let shard = self.get(reference, CacheHit::Trust).await?;
             let requested = indices
                 .iter()
                 .map(|index| &keys[*index])
                 .collect::<Vec<_>>();
-            let records = lookup_verified_object_shard_batch(&bytes, reference, &requested)
+            let records = lookup_verified_object_shard_batch(&shard, reference, &requested)
                 .map_err(|error| shard_corruption(reference, error))?;
             for (index, record) in indices.into_iter().zip(records) {
                 found[index] = record;
@@ -480,8 +497,8 @@ impl ObjectShardStorage {
         &self,
         reference: &ObjectShardRef,
     ) -> Result<Vec<(ObjectRecord, bool, u64)>, MetadataError> {
-        let bytes = self.get(reference).await?;
-        decode_verified_object_shard(bytes.as_slice(), reference)
+        let shard = self.get(reference, CacheHit::Reverify).await?;
+        decode_verified_object_shard(&shard, reference)
             .map_err(|error| shard_corruption(reference, error))
     }
 
@@ -553,15 +570,33 @@ impl ObjectShardStorage {
         }
     }
 
-    async fn get(&self, reference: &ObjectShardRef) -> Result<Arc<Vec<u8>>, MetadataError> {
-        if let Some(bytes) = self
+    async fn get(
+        &self,
+        reference: &ObjectShardRef,
+        hit: CacheHit,
+    ) -> Result<VerifiedObjectShard, MetadataError> {
+        let cached = self
             .cache
             .lock()
             .map_err(|_| MetadataError::Poisoned)?
-            .get(reference.digest)
-        {
+            .get(reference.digest);
+        if let Some(bytes) = cached {
             self.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
-            return Ok(bytes);
+            match hit {
+                CacheHit::Trust => {
+                    return VerifiedObjectShard::cached(bytes, reference)
+                        .map_err(|error| shard_corruption(reference, error));
+                }
+                CacheHit::Reverify => {
+                    if let Ok(shard) = VerifiedObjectShard::verify(bytes.clone(), reference) {
+                        return Ok(shard);
+                    }
+                    self.cache
+                        .lock()
+                        .map_err(|_| MetadataError::Poisoned)?
+                        .evict(reference.digest, &bytes);
+                }
+            }
         }
         let path = self.path(reference.digest);
         self.metrics.get_requests.fetch_add(1, Ordering::Relaxed);
@@ -573,13 +608,13 @@ impl ObjectShardStorage {
         self.metrics
             .get_bytes
             .fetch_add(bytes.len() as u64, Ordering::Relaxed);
-        verify_object_shard(bytes.as_slice(), reference)
+        let shard = VerifiedObjectShard::verify(bytes, reference)
             .map_err(|error| shard_corruption(reference, error))?;
         self.cache
             .lock()
             .map_err(|_| MetadataError::Poisoned)?
-            .insert(reference.digest, bytes.clone());
-        Ok(bytes)
+            .insert(reference.digest, shard.0.clone());
+        Ok(shard)
     }
 
     async fn get_root(&self, reference: &RootShardRef) -> Result<Arc<Vec<u8>>, MetadataError> {
@@ -861,6 +896,19 @@ impl ShardCache {
             if let Some(removed) = self.values.remove(&oldest) {
                 self.bytes = self.bytes.saturating_sub(removed.len());
             }
+        }
+    }
+
+    /// Drop `digest` if it still maps to `bytes`, which failed verification.
+    fn evict(&mut self, digest: Digest, bytes: &Arc<Vec<u8>>) {
+        if self
+            .values
+            .get(&digest)
+            .is_some_and(|current| Arc::ptr_eq(current, bytes))
+        {
+            self.values.remove(&digest);
+            self.bytes = self.bytes.saturating_sub(bytes.len());
+            self.recency.retain(|candidate| *candidate != digest);
         }
     }
 
@@ -1310,37 +1358,36 @@ pub(super) fn lookup_object_shard(
     reference: &ObjectShardRef,
     key: &ObjectKey,
 ) -> io::Result<Option<(ObjectRecord, bool, u64)>> {
-    verify_object_shard(bytes, reference)?;
-    lookup_verified_object_shard(bytes, reference, key)
+    let shard = VerifiedObjectShard::verify(Arc::new(bytes.to_vec()), reference)?;
+    lookup_verified_object_shard(&shard, reference, key)
 }
 
 fn lookup_verified_object_shard(
-    bytes: &[u8],
+    shard: &VerifiedObjectShard,
     reference: &ObjectShardRef,
     key: &ObjectKey,
 ) -> io::Result<Option<(ObjectRecord, bool, u64)>> {
     if key < &reference.first || key > &reference.last {
         return Ok(None);
     }
-    let blocks = decode_block_directory(bytes)?;
+    let blocks = decode_block_directory(shard)?;
     let at = blocks.partition_point(|block| block.last < *key);
     let Some(block) = blocks.get(at).filter(|block| block.first <= *key) else {
         return Ok(None);
     };
-    let encoded = exact_range(bytes, block.offset, block.encoded_bytes)?;
-    if Digest::from(blake3::hash(encoded)) != block.digest {
-        return Err(io::Error::other("logical object block checksum mismatch"));
-    }
-    lookup_object_block(encoded, key)
+    lookup_object_block(
+        exact_range(shard.bytes(), block.offset, block.encoded_bytes)?,
+        key,
+    )
 }
 
 fn lookup_verified_object_shard_batch(
-    bytes: &[u8],
+    shard: &VerifiedObjectShard,
     reference: &ObjectShardRef,
     keys: &[&ObjectKey],
 ) -> io::Result<Vec<Option<(ObjectRecord, bool, u64)>>> {
     let mut found = vec![None; keys.len()];
-    let blocks = decode_block_directory(bytes)?;
+    let blocks = decode_block_directory(shard)?;
     let mut groups = BTreeMap::<usize, Vec<usize>>::new();
     for (index, key) in keys.iter().enumerate() {
         if *key < &reference.first || *key > &reference.last {
@@ -1353,10 +1400,7 @@ fn lookup_verified_object_shard_batch(
     }
     for (at, indices) in groups {
         let block = &blocks[at];
-        let encoded = exact_range(bytes, block.offset, block.encoded_bytes)?;
-        if Digest::from(blake3::hash(encoded)) != block.digest {
-            return Err(io::Error::other("logical object block checksum mismatch"));
-        }
+        let encoded = exact_range(shard.bytes(), block.offset, block.encoded_bytes)?;
         // Publications look up mostly absent keys, each usually in its own
         // block: check the whole block, but decode only requested records.
         let block = ObjectBlockView::parse(encoded)?;
@@ -1387,24 +1431,24 @@ pub(super) fn decode_object_shard(
     bytes: &[u8],
     reference: &ObjectShardRef,
 ) -> io::Result<Vec<(ObjectRecord, bool, u64)>> {
-    verify_object_shard(bytes, reference)?;
-    decode_verified_object_shard(bytes, reference)
+    let shard = VerifiedObjectShard::verify(Arc::new(bytes.to_vec()), reference)?;
+    decode_verified_object_shard(&shard, reference)
 }
 
 fn decode_verified_object_shard(
-    bytes: &[u8],
+    shard: &VerifiedObjectShard,
     reference: &ObjectShardRef,
 ) -> io::Result<Vec<(ObjectRecord, bool, u64)>> {
-    let blocks = decode_block_directory(bytes)?;
+    let blocks = decode_block_directory(shard)?;
     let capacity = usize::try_from(reference.entries)
         .map_err(|_| io::Error::other("logical object count overflows usize"))?;
     let mut entries = Vec::with_capacity(capacity);
     for block in blocks {
-        let encoded = exact_range(bytes, block.offset, block.encoded_bytes)?;
-        if Digest::from(blake3::hash(encoded)) != block.digest {
-            return Err(io::Error::other("logical object block checksum mismatch"));
-        }
-        entries.extend(decode_object_block(encoded)?);
+        entries.extend(decode_object_block(exact_range(
+            shard.bytes(),
+            block.offset,
+            block.encoded_bytes,
+        )?)?);
     }
     if entries.len() as u64 != reference.entries
         || entries
@@ -1418,6 +1462,38 @@ fn decode_verified_object_shard(
         return Err(io::Error::other("logical object shard metadata mismatch"));
     }
     Ok(entries)
+}
+
+/// Object-shard bytes authenticated as a whole against their content
+/// address: verified when fetched, or encoded by this process. Every byte,
+/// including the directory and block digests inside, is then trusted, so
+/// reads parse them without re-hashing; the shard format keeps those digests.
+/// Lookups accept a cached copy after [`Self::cached`]; full reads verify it
+/// again.
+#[derive(Clone)]
+struct VerifiedObjectShard(Arc<Vec<u8>>);
+
+impl VerifiedObjectShard {
+    fn verify(bytes: Arc<Vec<u8>>, reference: &ObjectShardRef) -> io::Result<Self> {
+        verify_object_shard(&bytes, reference)?;
+        Ok(Self(bytes))
+    }
+
+    /// The cache holds only bytes verified, or encoded, under the BLAKE3
+    /// digest they are keyed by, but holds root shards too. Recheck what
+    /// distinguishes an object shard of this reference.
+    fn cached(bytes: Arc<Vec<u8>>, reference: &ObjectShardRef) -> io::Result<Self> {
+        if !bytes.starts_with(SHARD_MAGIC_V1) || bytes.len() as u64 != reference.encoded_bytes {
+            return Err(io::Error::other(
+                "cached logical object shard does not match its reference",
+            ));
+        }
+        Ok(Self(bytes))
+    }
+
+    fn bytes(&self) -> &[u8] {
+        &self.0
+    }
 }
 
 fn verify_object_shard(bytes: &[u8], reference: &ObjectShardRef) -> io::Result<()> {
@@ -1576,7 +1652,8 @@ fn encode_block_directory(blocks: &[ObjectBlockRef]) -> Vec<u8> {
     encoded
 }
 
-fn decode_block_directory(bytes: &[u8]) -> io::Result<Vec<ObjectBlockRef>> {
+fn decode_block_directory(shard: &VerifiedObjectShard) -> io::Result<Vec<ObjectBlockRef>> {
+    let bytes = shard.bytes();
     let trailer_start = bytes
         .len()
         .checked_sub(TRAILER_BYTES)
@@ -1587,17 +1664,15 @@ fn decode_block_directory(bytes: &[u8]) -> io::Result<Vec<ObjectBlockRef>> {
     }
     let offset = trailer.u64()?;
     let len = trailer.u64()?;
-    let expected = Digest::try_from(trailer.take(DIGEST_BYTES)?).map_err(io::Error::other)?;
+    // The directory digest is covered by the shard's verification.
+    trailer.take(DIGEST_BYTES)?;
     trailer.finish()?;
     let directory = exact_range(bytes, offset, len)?;
     if offset
         .checked_add(len)
         .is_none_or(|end| end != trailer_start as u64)
-        || Digest::from(blake3::hash(directory)) != expected
     {
-        return Err(io::Error::other(
-            "logical object directory checksum mismatch",
-        ));
+        return Err(io::Error::other("invalid logical object directory range"));
     }
     let mut input = Input::new(directory);
     if input.take(8)? != DIRECTORY_MAGIC_V1 {
@@ -1989,7 +2064,8 @@ mod tests {
         );
         let keys = [&key, &absent, &key, &first, &key];
         let found =
-            lookup_verified_object_shard_batch(&encoded.bytes, &encoded.reference, &keys).unwrap();
+            lookup_verified_object_shard_batch(&verified(&encoded), &encoded.reference, &keys)
+                .unwrap();
         assert_eq!(found[1], None);
         assert_eq!(found[3], Some((record(1), false, 3)));
         let repeated = [0, 2, 4].map(|at| found[at].clone().unwrap());
@@ -2006,31 +2082,48 @@ mod tests {
         );
     }
 
+    fn verified(encoded: &EncodedObjectShard) -> VerifiedObjectShard {
+        VerifiedObjectShard::verify(Arc::new(encoded.bytes.to_vec()), &encoded.reference).unwrap()
+    }
+
     #[test]
-    fn batch_lookup_checks_the_entire_selected_block() {
+    fn shard_reads_require_whole_shard_verification() {
         let encoded =
             encode_object_shard(&[(record(1), true, 17), (record(2), false, 19)]).unwrap();
+        let shard = verified(&encoded);
         let key = record(1).key().clone();
-        let keys = [&key, &key];
         assert_eq!(
-            lookup_verified_object_shard_batch(&encoded.bytes, &encoded.reference, &keys).unwrap(),
+            lookup_verified_object_shard_batch(&shard, &encoded.reference, &[&key, &key]).unwrap(),
             vec![Some((record(1), true, 17)); 2],
         );
-        let blocks = decode_block_directory(&encoded.bytes).unwrap();
+        // Reads do not re-hash blocks, so verification must reject damage to
+        // any byte, here the final generation beyond the requested record.
+        let blocks = decode_block_directory(&shard).unwrap();
         let mut corrupt = encoded.bytes.to_vec();
-        // Damage the final generation, beyond the requested first record.
         corrupt[(blocks[0].offset + blocks[0].encoded_bytes - 1) as usize] ^= 1;
-        assert!(lookup_verified_object_shard_batch(&corrupt, &encoded.reference, &keys).is_err());
+        let verify = |bytes: &[u8], reference: &ObjectShardRef| {
+            VerifiedObjectShard::verify(Arc::new(bytes.to_vec()), reference).is_err()
+        };
+        assert!(verify(&corrupt, &encoded.reference));
         for end in [0, 8, encoded.bytes.len() - 1] {
-            assert!(
-                lookup_verified_object_shard_batch(
-                    &encoded.bytes[..end],
-                    &encoded.reference,
-                    &keys
-                )
-                .is_err()
-            );
+            assert!(verify(&encoded.bytes[..end], &encoded.reference));
         }
+
+        // A cache hit is keyed by content digest but shared with root shards.
+        let cached = |bytes: &[u8], reference: &ObjectShardRef| {
+            VerifiedObjectShard::cached(Arc::new(bytes.to_vec()), reference).is_ok()
+        };
+        assert!(cached(&encoded.bytes, &encoded.reference));
+        let root = encode_root_shard(&[RootRecord::new(
+            RootName::try_from("probe").unwrap(),
+            key.clone(),
+        )])
+        .unwrap();
+        let mut reference = encoded.reference.clone();
+        reference.encoded_bytes = root.bytes.len() as u64;
+        assert!(!cached(&root.bytes, &reference));
+        reference.encoded_bytes = encoded.reference.encoded_bytes + 1;
+        assert!(!cached(&encoded.bytes, &reference));
     }
 
     /// A v2 object block of already encoded records, none validated.
@@ -2229,6 +2322,53 @@ mod tests {
         assert_eq!(reader.stats().get_requests, 1);
         assert_eq!(reader.stats().cache_hits, 1);
         assert_eq!(reader.stats().get_bytes, encoded.bytes.len() as u64);
+    }
+
+    #[tokio::test]
+    async fn full_reads_reverify_and_replace_a_damaged_cached_shard() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Arc::new(Storage::Local(chroma_storage::local::LocalStorage::new(
+            directory.path().to_str().unwrap(),
+        )));
+        let entries = (0..1_100)
+            .map(|index| (record(index), index % 3 == 0, u64::from(index)))
+            .collect::<Vec<_>>();
+        let encoded = encode_object_shard(&entries).unwrap();
+        let reference = &encoded.reference;
+        let map = StateShardMap {
+            objects: vec![reference.clone()],
+            object_count: entries.len() as u64,
+            validated_count: reference.validated,
+            ..StateShardMap::default()
+        };
+        let shards =
+            ObjectShardStorage::new(storage, "repo/state".to_owned(), encoded.bytes.len() * 2);
+        shards.put(&encoded).await.unwrap();
+
+        // Damage the cached copy in memory, in the last block's generations.
+        let blocks = decode_block_directory(&verified(&encoded)).unwrap();
+        let last = blocks.last().unwrap();
+        let mut damaged = encoded.bytes.to_vec();
+        damaged[(last.offset + last.encoded_bytes - 1) as usize] ^= 1;
+        shards
+            .cache
+            .lock()
+            .unwrap()
+            .insert(reference.digest, Arc::new(damaged));
+
+        // A lookup trusts the cached copy and does not reach the damage.
+        assert_eq!(
+            shards.lookup(&map, entries[3].0.key()).await.unwrap(),
+            Some(entries[3].clone())
+        );
+        assert_eq!(shards.stats().get_requests, 0);
+
+        // A full read rejects it, fetches the shard again and caches that.
+        assert_eq!(shards.read(reference).await.unwrap(), entries);
+        assert_eq!(shards.stats().get_requests, 1);
+        assert_eq!(shards.read(reference).await.unwrap(), entries);
+        assert_eq!(shards.stats().get_requests, 1);
+        assert_eq!(shards.stats().cache_hits, 3);
     }
 
     #[test]

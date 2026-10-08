@@ -92,12 +92,43 @@ only by this host's noise: individual processes of the two builds took 7.1 to
 
 `block-views.json` holds every metric.
 
+## Verified shards without re-hashing
+
+Shard reads now take a verified shard: its bytes were authenticated as a
+whole against the shard's content address when fetched, or encoded by this
+process. Lookups and full reads parse its directory and blocks without
+re-hashing them. A lookup's cache hit checks the shard's magic and length
+against its reference; a full read, as in fsck, compaction and collection,
+verifies a cached shard again and fetches it anew if that fails. Milliseconds
+after the checkpoint, median of five processes.
+
+| Case | Handle | Previous | Block views | Verified shards | Over block views | Over previous |
+|---|---|---:|---:|---:|---:|---:|
+| 511 batch | warm | 109.2 | 12.1 | 10.6 | 1.1 | 10.3 |
+| 511 batch | reopened | 109.0 | 8.3 | 7.5 | 1.1 | 14.5 |
+| 512 batch | warm | 110.0 | 7.8 | 7.8 | 1.0 | 14.1 |
+| 512 batch | reopened | 110.7 | 7.7 | 10.3 | 0.7 | 10.7 |
+| 513 batch | warm | 131.7 | 7.8 | 10.0 | 0.8 | 13.2 |
+| 513 batch | reopened | 109.8 | 12.6 | 7.2 | 1.7 | 15.2 |
+| 8,192 corpus | warm | 117.0 | 8.1 | 7.6 | 1.1 | 15.4 |
+| 8,192 corpus | reopened | 116.8 | 8.3 | 8.0 | 1.0 | 14.6 |
+| 131,072 corpus | warm | 138.4 | 16.5 | 10.3 | 1.6 | 13.5 |
+| 131,072 corpus | reopened | 144.7 | 22.6 | 16.9 | 1.3 | 8.6 |
+
+A publication into a large corpus re-hashed every block its new keys reached,
+most of the checkpoint's 265, so skipping that pays most there. A single-batch
+checkpoint re-hashed one or two blocks per batch; there, individual processes
+of the two builds took 5.6 to 13.8 ms, so their medians differ only by this
+shared host's noise.
+
+`verified-shards.json` holds every metric.
+
 ## Build and host
 
 Each JSON file records its build command, compiler, lockfile and executable
 digests, the host, and the load average before each run. Processes were pinned
-to 16 cores of a shared host and ran serially; control, batched and block-view
-processes ran in the order CBV VBC CBV VBC CBV.
+to 16 cores of a shared host and ran serially; control, batched, block-view
+and verified-shard processes ran in the order CBVS SVBC CBVS SVBC CBVS.
 
 ## Reproduce
 
