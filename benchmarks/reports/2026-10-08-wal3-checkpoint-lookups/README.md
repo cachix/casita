@@ -64,12 +64,40 @@ once instead of once per key. The publication into a large corpus is new keys
 spread over most blocks of the checkpoint, so it still decodes hundreds of
 whole blocks. `batched-lookups.json` holds every metric.
 
+## Block lookups without decoding unrequested records
+
+A lookup now checks the selected block's framing, key order and trailing
+columns from borrowed key bytes and decodes only the records it returns, each
+once however often it was requested; full shard reads still decode every
+record. Milliseconds after the checkpoint, median of five processes.
+
+| Case | Handle | Previous | Batched | Block views | Over batched | Over previous |
+|---|---|---:|---:|---:|---:|---:|
+| 511 batch | warm | 109.2 | 8.4 | 12.1 | 0.7 | 9.0 |
+| 511 batch | reopened | 109.0 | 7.9 | 8.3 | 1.0 | 13.2 |
+| 512 batch | warm | 110.0 | 12.3 | 7.8 | 1.6 | 14.0 |
+| 512 batch | reopened | 110.7 | 7.5 | 7.7 | 1.0 | 14.3 |
+| 513 batch | warm | 131.7 | 7.9 | 7.8 | 1.0 | 17.0 |
+| 513 batch | reopened | 109.8 | 8.1 | 12.6 | 0.6 | 8.7 |
+| 8,192 corpus | warm | 117.0 | 14.0 | 8.1 | 1.7 | 14.4 |
+| 8,192 corpus | reopened | 116.8 | 11.0 | 8.3 | 1.3 | 14.1 |
+| 131,072 corpus | warm | 138.4 | 53.5 | 16.5 | 3.2 | 8.4 |
+| 131,072 corpus | reopened | 144.7 | 59.0 | 22.6 | 2.6 | 6.4 |
+
+The new keys of a corpus publication reach most of the checkpoint's blocks, so
+skipping unrequested records pays most there. A single-batch checkpoint is one
+or two blocks, which both builds read once per batch, so those medians differ
+only by this host's noise: individual processes of the two builds took 7.1 to
+13.8 ms.
+
+`block-views.json` holds every metric.
+
 ## Build and host
 
 Each JSON file records its build command, compiler, lockfile and executable
 digests, the host, and the load average before each run. Processes were pinned
-to 16 cores of a shared host and ran serially; control and batched processes
-alternated CB BC CB BC CB.
+to 16 cores of a shared host and ran serially; control, batched and block-view
+processes ran in the order CBV VBC CBV VBC CBV.
 
 ## Reproduce
 

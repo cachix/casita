@@ -2,9 +2,9 @@
 //!
 //! Object and named-root shards preserve canonical order so complete
 //! inventories can concatenate them without a global merge. Object shards
-//! contain authenticated blocks and a compact trailing directory; a point
-//! lookup routes map -> shard -> block and decodes at most
-//! [`OBJECT_BLOCK_ENTRIES`] records.
+//! contain authenticated blocks and a compact trailing directory; a lookup
+//! routes map -> shard -> block, checks that block's framing and key order,
+//! and decodes only the record it selects.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
@@ -18,7 +18,9 @@ use chroma_storage::{ETag, GetOptions, PutMode, PutOptions, Storage, StorageErro
 
 use crate::Digest;
 use crate::metadata::MetadataError;
-use crate::object::{ObjectKey, ObjectRecord, RootName, RootRecord};
+use crate::object::{
+    MAX_NAMESPACE_LEN, MAX_NATIVE_ID_LEN, ObjectKey, ObjectRecord, RootName, RootRecord,
+};
 
 const MAP_MAGIC_V1: &[u8; 8] = b"casism01";
 const SHARD_MAGIC_V1: &[u8; 8] = b"casis001";
@@ -1355,13 +1357,26 @@ fn lookup_verified_object_shard_batch(
         if Digest::from(blake3::hash(encoded)) != block.digest {
             return Err(io::Error::other("logical object block checksum mismatch"));
         }
-        // Decode the entire authenticated block, retaining all point-lookup
-        // validation even when only its first record was requested.
-        let records = decode_object_block(encoded)?;
-        for index in indices {
-            if let Ok(at) = records.binary_search_by(|entry| entry.0.key().cmp(keys[index])) {
-                found[index] = Some(records[at].clone());
-            }
+        // Publications look up mostly absent keys, each usually in its own
+        // block: check the whole block, but decode only requested records.
+        let block = ObjectBlockView::parse(encoded)?;
+        let mut selected = indices
+            .into_iter()
+            .filter_map(|index| block.find(keys[index]).map(|at| (at, index)))
+            .collect::<Vec<_>>();
+        // Decode each selected record once; repeated keys share its clone.
+        selected.sort_unstable();
+        let mut decoded: Option<(usize, (ObjectRecord, bool, u64))> = None;
+        for (at, index) in selected {
+            let entry = match &decoded {
+                Some((previous, entry)) if *previous == at => entry.clone(),
+                _ => {
+                    let entry = block.entry(at)?;
+                    decoded = Some((at, entry.clone()));
+                    entry
+                }
+            };
+            found[index] = Some(entry);
         }
     }
     Ok(found)
@@ -1445,65 +1460,106 @@ fn lookup_object_block(
     bytes: &[u8],
     key: &ObjectKey,
 ) -> io::Result<Option<(ObjectRecord, bool, u64)>> {
-    for (record, validated, generation) in decode_object_block(bytes)? {
-        match record.key().cmp(key) {
-            std::cmp::Ordering::Less => {}
-            std::cmp::Ordering::Equal => return Ok(Some((record, validated, generation))),
-            std::cmp::Ordering::Greater => return Ok(None),
-        }
-    }
-    Ok(None)
+    let block = ObjectBlockView::parse(bytes)?;
+    block.find(key).map(|at| block.entry(at)).transpose()
 }
 
 fn decode_object_block(bytes: &[u8]) -> io::Result<Vec<(ObjectRecord, bool, u64)>> {
-    let mut input = Input::new(bytes);
-    let magic = input.take(8)?;
-    if magic != BLOCK_MAGIC_V1 && magic != BLOCK_MAGIC_V2 {
-        return Err(io::Error::other("invalid logical object block"));
-    }
-    let count = input.count(OBJECT_BLOCK_ENTRIES, 8)?;
-    let mut entries = Vec::with_capacity(count);
-    for _ in 0..count {
-        let record = ObjectRecord::decode(input.bytes()?).map_err(io::Error::other)?;
-        if entries
-            .last()
-            .is_some_and(|previous: &ObjectRecord| previous.key() >= record.key())
+    let block = ObjectBlockView::parse(bytes)?;
+    (0..block.records.len()).map(|at| block.entry(at)).collect()
+}
+
+/// An object block whose framing, key order and trailing columns are checked,
+/// with every record left encoded until [`Self::entry`] decodes it.
+struct ObjectBlockView<'a> {
+    /// Each record's borrowed key and complete encoding, in key order.
+    records: Vec<(EncodedKey<'a>, &'a [u8])>,
+    validated: &'a [u8],
+    /// Absent from v1 blocks, whose records all have generation zero.
+    generations: Option<&'a [u8]>,
+}
+
+/// The namespace and native identifier that begin an encoded object record.
+/// These pairs order exactly as the decoded keys do.
+type EncodedKey<'a> = (&'a [u8], &'a [u8]);
+
+impl<'a> ObjectBlockView<'a> {
+    fn parse(bytes: &'a [u8]) -> io::Result<Self> {
+        let mut input = Input::new(bytes);
+        let magic = input.take(8)?;
+        if magic != BLOCK_MAGIC_V1 && magic != BLOCK_MAGIC_V2 {
+            return Err(io::Error::other("invalid logical object block"));
+        }
+        let count = input.count(OBJECT_BLOCK_ENTRIES, 8)?;
+        let mut records = Vec::<(EncodedKey<'a>, &'a [u8])>::with_capacity(count);
+        for _ in 0..count {
+            let record = input.bytes()?;
+            let key = encoded_key(record)?;
+            if records.last().is_some_and(|(previous, _)| *previous >= key) {
+                return Err(io::Error::other(
+                    "logical object block records are not strictly ordered",
+                ));
+            }
+            records.push((key, record));
+        }
+        let validated = input.take(count.div_ceil(8))?;
+        if !count.is_multiple_of(8)
+            && validated
+                .last()
+                .is_some_and(|last| last >> (count % 8) != 0)
         {
             return Err(io::Error::other(
-                "logical object block records are not strictly ordered",
+                "logical validation bitset has nonzero padding bits",
             ));
         }
-        entries.push(record);
-    }
-    let validated = input.take(count.div_ceil(8))?;
-    if !count.is_multiple_of(8)
-        && validated
-            .last()
-            .is_some_and(|last| last >> (count % 8) != 0)
-    {
-        return Err(io::Error::other(
-            "logical validation bitset has nonzero padding bits",
-        ));
-    }
-    let generations = if magic == BLOCK_MAGIC_V2 {
-        (0..count)
-            .map(|_| input.u64())
-            .collect::<io::Result<Vec<_>>>()?
-    } else {
-        vec![0; count]
-    };
-    input.finish()?;
-    Ok(entries
-        .into_iter()
-        .enumerate()
-        .map(|(index, record)| {
-            (
-                record,
-                validated[index / 8] & (1 << (index % 8)) != 0,
-                generations[index],
-            )
+        let generations = if magic == BLOCK_MAGIC_V2 {
+            Some(input.take(count * 8)?)
+        } else {
+            None
+        };
+        input.finish()?;
+        Ok(Self {
+            records,
+            validated,
+            generations,
         })
-        .collect())
+    }
+
+    /// The index of the record whose key is `key`, without decoding records.
+    fn find(&self, key: &ObjectKey) -> Option<usize> {
+        let key = (key.namespace().as_bytes(), key.native_id());
+        self.records
+            .binary_search_by(|(candidate, _)| candidate.cmp(&key))
+            .ok()
+    }
+
+    fn entry(&self, at: usize) -> io::Result<(ObjectRecord, bool, u64)> {
+        let record = ObjectRecord::decode(self.records[at].1).map_err(io::Error::other)?;
+        let generation = self.generations.map_or(0, |generations| {
+            u64::from_le_bytes(
+                generations[at * 8..at * 8 + 8]
+                    .try_into()
+                    .expect("each generation is eight bytes"),
+            )
+        });
+        Ok((
+            record,
+            self.validated[at / 8] & (1 << (at % 8)) != 0,
+            generation,
+        ))
+    }
+}
+
+/// Borrow the key that begins an encoded object record, within the limits
+/// its decoding enforces.
+fn encoded_key(record: &[u8]) -> io::Result<EncodedKey<'_>> {
+    let mut input = Input::new(record);
+    let namespace = input.bytes()?;
+    let native_id = input.bytes()?;
+    if namespace.len() > MAX_NAMESPACE_LEN || native_id.len() > MAX_NATIVE_ID_LEN {
+        return Err(io::Error::other("logical object key exceeds its limits"));
+    }
+    Ok((namespace, native_id))
 }
 
 fn encode_block_directory(blocks: &[ObjectBlockRef]) -> Vec<u8> {
@@ -1918,6 +1974,39 @@ mod tests {
     }
 
     #[test]
+    fn batch_lookup_decodes_a_repeated_record_once() {
+        let linked = record(2);
+        let links = (100..1_100)
+            .map(|index| record(index).key().clone())
+            .collect();
+        let linked = ObjectRecord::new(linked.key().clone(), linked.payload(), 7, links).unwrap();
+        let encoded =
+            encode_object_shard(&[(record(1), false, 3), (linked.clone(), true, 5)]).unwrap();
+        let (key, absent, first) = (
+            linked.key().clone(),
+            record(4).key().clone(),
+            record(1).key().clone(),
+        );
+        let keys = [&key, &absent, &key, &first, &key];
+        let found =
+            lookup_verified_object_shard_batch(&encoded.bytes, &encoded.reference, &keys).unwrap();
+        assert_eq!(found[1], None);
+        assert_eq!(found[3], Some((record(1), false, 3)));
+        let repeated = [0, 2, 4].map(|at| found[at].clone().unwrap());
+        assert!(
+            repeated
+                .iter()
+                .all(|entry| *entry == (linked.clone(), true, 5))
+        );
+        // Every occurrence shares the one decoded link array.
+        assert!(
+            repeated
+                .iter()
+                .all(|(record, _, _)| record.links().as_ptr() == repeated[0].0.links().as_ptr())
+        );
+    }
+
+    #[test]
     fn batch_lookup_checks_the_entire_selected_block() {
         let encoded =
             encode_object_shard(&[(record(1), true, 17), (record(2), false, 19)]).unwrap();
@@ -1942,6 +2031,65 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    /// A v2 object block of already encoded records, none validated.
+    fn raw_object_block(records: &[Vec<u8>]) -> Vec<u8> {
+        let mut block = BLOCK_MAGIC_V2.to_vec();
+        block.extend_from_slice(&(records.len() as u64).to_le_bytes());
+        for record in records {
+            put_bytes(&mut block, record);
+        }
+        block.resize(block.len() + records.len().div_ceil(8), 0);
+        for generation in 0..records.len() as u64 {
+            block.extend_from_slice(&generation.to_le_bytes());
+        }
+        block
+    }
+
+    #[test]
+    fn block_lookups_decode_only_the_selected_record() {
+        // Repeated links are not canonical, so only decoding this record
+        // rejects it: its key frames, orders and fits like any other.
+        let link = record(9).key().clone();
+        let mut invalid = record(3).encode();
+        invalid.truncate(invalid.len() - 8);
+        invalid.extend_from_slice(&2_u64.to_le_bytes());
+        invalid.extend(link.encode());
+        invalid.extend(link.encode());
+        let bytes = raw_object_block(&[record(1).encode(), record(2).encode(), invalid]);
+        assert_eq!(
+            lookup_object_block(&bytes, record(2).key()).unwrap(),
+            Some((record(2), false, 1))
+        );
+        assert_eq!(lookup_object_block(&bytes, record(4).key()).unwrap(), None);
+        assert!(lookup_object_block(&bytes, record(3).key()).is_err());
+        assert!(decode_object_block(&bytes).is_err());
+    }
+
+    #[test]
+    fn block_lookups_check_every_key_without_decoding_records() {
+        let lookup = |records: &[Vec<u8>]| {
+            lookup_object_block(&raw_object_block(records), record(1).key())
+                .unwrap_err()
+                .to_string()
+        };
+        for records in [
+            [record(2).encode(), record(1).encode()],
+            [record(1).encode(), record(1).encode()],
+        ] {
+            assert_eq!(
+                lookup(&records),
+                "logical object block records are not strictly ordered"
+            );
+        }
+        let mut long_native_id = Vec::new();
+        put_bytes(&mut long_native_id, b"bench.logical.v1");
+        put_bytes(&mut long_native_id, &[0; MAX_NATIVE_ID_LEN + 1]);
+        assert_eq!(
+            lookup(&[record(1).encode(), long_native_id]),
+            "logical object key exceeds its limits"
+        );
     }
 
     #[test]
