@@ -106,6 +106,8 @@ pub enum RepositoryErrorCategory {
     CollectedDuringRead,
     /// An I/O, backend, or other operational failure occurred.
     Backend,
+    /// The caller cancelled the operation before it completed.
+    Cancelled,
 }
 
 impl RepositoryErrorCategory {
@@ -123,6 +125,7 @@ impl RepositoryErrorCategory {
             Self::Corrupt => "corrupt",
             Self::CollectedDuringRead => "collected_during_read",
             Self::Backend => "backend",
+            Self::Cancelled => "cancelled",
         }
     }
 }

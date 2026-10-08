@@ -60,7 +60,7 @@ class RevisionArgumentTests(unittest.TestCase):
             set(revisions.SUPPORTED_SUITES),
             {
                 "metadata-collection", "output-import", "filesystem-outputs", "filesystem-reuse",
-                "mutation-catalog", "catalog-wal", "cleanup-batches", "catalog-marking", "held-catalog-gc",
+                "mutation-catalog", "mutation-rotation", "catalog-wal", "cleanup-batches", "catalog-marking", "held-catalog-gc",
                 "memory-snapshots",
                 "memory-publication",
                 "memory-index-lifecycle",
@@ -76,7 +76,7 @@ class RevisionArgumentTests(unittest.TestCase):
                 "git-ingest-concurrency",
                 "git-ingest-scheduling",
                 "chunk-upload-completion", "chunk-manifest-stream", "chunk-hash-batch",
-                "git-import-profile", "git-closure-import", "git-closure-import-small-files", "git-closure-audit", "git-blob-file", "git-verified-stream", "pin-growth", "small-blob-pins",
+                "git-import-profile", "git-closure-import", "git-closure-import-small-files", "git-closure-import-rotation", "git-closure-audit", "git-blob-file", "git-verified-stream", "pin-growth", "small-blob-pins",
                 "git-fetch-s3", "git-fetch-local", "git-pack-cached",
                 "git-pack-delayed", "git-pack-boundary",
                 "nixpkgs",

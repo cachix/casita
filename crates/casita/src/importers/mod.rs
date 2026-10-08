@@ -88,6 +88,8 @@ pub use filesystem::{MultiRootFilesystemImport, UnrootedFilesystemImport};
 #[cfg(feature = "git")]
 pub use git::GitImport;
 #[cfg(feature = "git")]
+pub(crate) use git_closure::CancellationCheck;
+#[cfg(feature = "git")]
 pub use git_closure::{
     GitClosureImport, GitClosureImportError, GitClosureImportOutcome, GitClosureImportReport,
 };

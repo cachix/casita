@@ -142,6 +142,14 @@ resulting closure is complete and valid. Unrelated revision races can be
 retried; an observed root mismatch is returned as
 `ConditionalPublishResult::RootMismatch` without overwriting the changed name.
 
+A session keeps every object it published pinned until it ends. `rotate`
+replaces the session's staging pin and payload batch within the same admitted
+operation, without repeating start-of-mutation maintenance or discovery, so a
+long writer can release what earlier publications pinned. Retain published
+objects that must survive independently, for example through a retained
+reader, before rotating. Staged objects must be published or dropped first. A
+failed or cancelled rotation leaves the original session usable.
+
 `publish_closures` verifies staged or existing targets with normal format and
 link checks before atomically publishing records and requested witnesses.
 Staged-object and target counts are each limited by `max_batch_objects`.

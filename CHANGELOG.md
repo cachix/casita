@@ -20,6 +20,18 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
   input before decoding. Closure witnesses are committed in batches of at most
   `max_batch_objects`, and only once the whole selection is proven complete.
   Repeating an interrupted import completes them.
+- `GitClosureImport::with_cancellation_check` stops an import cooperatively
+  between discovery, decoding and object publication batches, between decoded
+  objects, and before completeness marking, which then runs to completion. It
+  fails with `GitClosureImportError::Cancelled`, classified as the new
+  non-retryable `ErrorKind::Cancelled` (`RepositoryErrorCategory::Cancelled`).
+  Partially imported records stay unrooted without completeness marks, and
+  repeating the import resumes them.
+- `MutationSession::rotate` replaces a session's staging pin and payload batch
+  within the same admitted operation, releasing what earlier publications
+  pinned without repeating mutation-start maintenance or discovery. Callers
+  retain published objects independently first; a failed or cancelled
+  rotation keeps the original session.
 
 - `MutationSession::stage_object_reader_with_size` verifies an exact-length
   source while writing it, avoiding a verification reread of the stored payload.
@@ -121,6 +133,12 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Changed
 
+- A `GitClosureImport` run through `Repository::import` replaces its mutation
+  writer once more objects follow every eight object publications, so objects
+  published earlier stay protected by one read hold instead of accumulating in
+  a single pin. A local 131,072-file import's peak RSS fell by a median 27%,
+  with import time unchanged; a single rotation costs about 13 MiB. Imports
+  into a caller's `MutationSession` keep that session.
 - Chunk hashing batches up to four chunks and 1 MiB per blocking job;
   larger individual chunks run alone. A lone chunk of at most 4 KiB
   is hashed inline.

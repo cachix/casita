@@ -49,6 +49,12 @@ a selected root. Completeness records are committed in bounded batches, and
 only once the whole selection is proven complete; repeating an interrupted
 import completes them. Report counters describe work performed and reuse
 boundaries, not the size of the complete reachable graph.
+`with_cancellation_check` stops an import cooperatively between discovery,
+decoding and object publication batches, between decoded objects, and before
+completeness marking, which then runs to completion. A cancelled import fails
+with `ErrorKind::Cancelled` and `RetryDisposition::Never`.
+Records published before cancellation stay unrooted and are not marked
+complete, so repeating the import resumes them.
 
 `Reader` implements Tokio `AsyncRead` and `AsyncSeek`. It keeps the selected
 object's content protected from collection until dropped. `VerifiedReader`

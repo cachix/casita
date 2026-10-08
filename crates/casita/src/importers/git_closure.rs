@@ -2,7 +2,9 @@
 
 use std::collections::BTreeSet;
 use std::num::{NonZeroU64, NonZeroUsize};
+use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
@@ -12,6 +14,40 @@ use crate::git::repository::{DEFAULT_GIT_IMPORT_BUFFERED_BYTES, DEFAULT_GIT_IMPO
 use crate::metadata::MetadataStore;
 use crate::repository::{OwnedRetentionHold, Repository};
 use crate::{ObjectKey, RetainedReader};
+
+/// A cheap cooperative check shared with the source decoding worker.
+// Polling the check cannot leave the request inconsistent, so asserting unwind
+// safety keeps `GitClosureImport` unwind safe without requiring callbacks to be.
+#[derive(Default)]
+pub(crate) struct CancellationCheck(Option<AssertUnwindSafe<Arc<dyn Fn() -> bool + Send + Sync>>>);
+
+impl Clone for CancellationCheck {
+    fn clone(&self) -> Self {
+        Self(
+            self.0
+                .as_ref()
+                .map(|cancelled| AssertUnwindSafe(Arc::clone(cancelled))),
+        )
+    }
+}
+
+impl std::fmt::Debug for CancellationCheck {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("CancellationCheck")
+            .field(&self.0.is_some())
+            .finish()
+    }
+}
+
+impl CancellationCheck {
+    pub(crate) fn check(&self) -> Result<(), GitClosureImportError> {
+        if self.0.as_ref().is_some_and(|cancelled| (cancelled.0)()) {
+            Err(GitClosureImportError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+}
 
 /// Import exact native roots from a Git object directory, following alternates
 /// and packs without creating refs, a worktree, or a Casita Git view.
@@ -25,6 +61,7 @@ pub struct GitClosureImport {
     pub(crate) roots: Vec<ObjectKey>,
     pub(crate) concurrency: NonZeroUsize,
     pub(crate) max_buffered_bytes: NonZeroU64,
+    pub(crate) cancellation: CancellationCheck,
 }
 
 impl GitClosureImport {
@@ -43,6 +80,7 @@ impl GitClosureImport {
                 .collect(),
             concurrency: DEFAULT_GIT_IMPORT_CONCURRENCY,
             max_buffered_bytes: DEFAULT_GIT_IMPORT_BUFFERED_BYTES,
+            cancellation: CancellationCheck::default(),
         }
     }
 
@@ -58,6 +96,26 @@ impl GitClosureImport {
     /// additional; repository payload limits still apply to every object.
     pub fn with_max_buffered_bytes(mut self, bytes: NonZeroU64) -> Self {
         self.max_buffered_bytes = bytes;
+        self
+    }
+
+    /// Stop cooperatively when `cancelled` returns true. The callback can run
+    /// on the async task or its blocking source worker and must return promptly
+    /// without panicking; a panic on the worker fails the import as a source error.
+    /// It is checked between discovery, decoding and object publication
+    /// batches, between decoded objects, and before completeness marking. An
+    /// individual decode or storage write already in progress is allowed to
+    /// settle, and completeness marking, once started, runs to completion.
+    /// Partial records remain unrooted and are not marked complete; a later
+    /// import can safely resume them. The import then fails with
+    /// [`GitClosureImportError::Cancelled`], which the application API reports
+    /// as `ErrorKind::Cancelled`.
+    pub fn with_cancellation_check(
+        mut self,
+        cancelled: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> Self {
+        let cancelled: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(cancelled);
+        self.cancellation = CancellationCheck(Some(AssertUnwindSafe(cancelled)));
         self
     }
 }
@@ -99,6 +157,9 @@ impl<R> std::fmt::Debug for GitClosureImportOutcome<R> {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum GitClosureImportError {
+    /// The caller withdrew interest before the import finished.
+    #[error("Git closure import cancelled")]
+    Cancelled,
     /// The selection is not a set of native keys in one Git hash format.
     #[error("invalid Git closure selection: {0}")]
     InvalidSelection(String),
@@ -126,6 +187,7 @@ impl GitClosureImportError {
     pub(crate) fn category(&self) -> crate::RepositoryErrorCategory {
         use crate::RepositoryErrorCategory as Category;
         match self {
+            Self::Cancelled => Category::Cancelled,
             Self::InvalidSelection(_) | Self::RootKind { .. } => Category::InvalidInput,
             Self::Git(_) => Category::InvalidData,
             Self::Source(_) => Category::Backend,
@@ -142,8 +204,11 @@ impl<PS: BlobStore, SS: MetadataStore> BackendImporter<Repository<PS, SS>> for G
         self,
         repository: &Repository<PS, SS>,
     ) -> Result<Self::Report, Self::Error> {
-        let session = repository.mutation_session().await?;
-        let report = crate::git::repository::closure_import::import(&session, &self).await?;
+        self.cancellation.check()?;
+        let mut writer = crate::git::repository::closure_import::ImportWriter::owned(
+            repository.mutation_session().await?,
+        );
+        let report = crate::git::repository::closure_import::import(&mut writer, &self).await?;
         let reader = repository.owned_read_hold().await?;
         Ok(GitClosureImportOutcome { report, reader })
     }
@@ -188,6 +253,7 @@ impl<'session, PS: BlobStore, SS: MetadataStore> Importer<crate::MutationSession
         self,
         session: &crate::MutationSession<'session, PS, SS>,
     ) -> Result<Self::Report, Self::Error> {
-        crate::git::repository::closure_import::import(session, &self).await
+        let mut writer = crate::git::repository::closure_import::ImportWriter::Borrowed(session);
+        crate::git::repository::closure_import::import(&mut writer, &self).await
     }
 }

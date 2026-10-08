@@ -184,6 +184,7 @@ SUITE_BUILD_SPECS["git-ingest-scheduling"] = SuiteBuildSpec(
 )
 SUITE_BUILD_SPECS["git-import-profile"] = SUITE_BUILD_SPECS["git-ingest-scheduling"]
 SUITE_BUILD_SPECS["git-closure-import-small-files"] = SUITE_BUILD_SPECS["git-closure-import"]
+SUITE_BUILD_SPECS["git-closure-import-rotation"] = SUITE_BUILD_SPECS["git-closure-import"]
 SUITE_BUILD_SPECS["git-ingest-concurrency"] = SuiteBuildSpec(
     ("build", "--release", "--features", "cli,git", "--bin", "casita"),
     "--casita-bin", "casita", relative_artifact="release/casita",
@@ -207,6 +208,7 @@ SUITE_BUILD_SPECS["held-catalog-gc"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["catalog-marking"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["cleanup-batches"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["mutation-catalog"] = SUITE_BUILD_SPECS["metadata-collection"]
+SUITE_BUILD_SPECS["mutation-rotation"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["filesystem-outputs"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["filesystem-reuse"] = dataclasses.replace(SUITE_BUILD_SPECS["repository"], records_revision=False)
 SUITE_BUILD_SPECS["output-import"] = SUITE_BUILD_SPECS["metadata-collection"]

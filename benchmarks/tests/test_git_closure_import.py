@@ -95,6 +95,73 @@ class GitClosureBenchmarkTests(unittest.TestCase):
         with self.assertRaisesRegex(suite.common.BenchmarkError, "root"):
             suite.summarize_pairs(rows)
 
+    def test_paired_summary_reports_import_resources_when_every_pair_has_them(self):
+        rows = []
+        for repetition in range(2):
+            for variant, written, peak in [("baseline", 200, 100), ("candidate", 150, 100)]:
+                rows.append(dict(operation="cold", backend="local", files=3,
+                    file_bytes=1024, content="random", packed=True, concurrency=4,
+                    max_buffered_bytes=4096, repetition=repetition, variant=variant,
+                    wall_seconds=1, root="same root", written_bytes=written, peak_rss_bytes=peak))
+        summary, = suite.summarize_pairs(rows)
+        self.assertEqual(summary["baseline_median_written_bytes"], 200)
+        self.assertEqual(summary["candidate_median_written_bytes"], 150)
+        self.assertEqual(summary["median_paired_written_bytes_reduction_percent"], 25)
+        self.assertEqual(summary["median_paired_peak_rss_bytes_reduction_percent"], 0)
+        # An older probe, or a zero baseline, leaves the resource unsummarized.
+        rows[0]["written_bytes"] = None
+        rows[2]["peak_rss_bytes"] = 0
+        summary, = suite.summarize_pairs(rows)
+        self.assertNotIn("median_paired_written_bytes_reduction_percent", summary)
+        self.assertNotIn("median_paired_peak_rss_bytes_reduction_percent", summary)
+        self.assertEqual(summary["median_paired_reduction_percent"], 0)
+
+    def test_expected_rotations_gate_every_candidate_cold_import(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            candidate, baseline = root / "candidate", root / "baseline"
+            write_probe(candidate)
+            # Only cold imports of more than three files rotate this fake writer.
+            candidate.write_text(candidate.read_text().replace(
+                'root="fixture-root",',
+                'root="fixture-root", writer_rotations=int(operation == "cold" and count > 3),'))
+            write_probe(baseline)
+            baseline.write_text(baseline.read_text().replace(
+                'root="fixture-root",', 'root="fixture-root", writer_rotations=0,'))
+            arguments = ["--no-build", "--output", str(root / "result.json"), "--counts", "3,4",
+                      "--max-buffered-bytes", "1024", "--layout", "loose", "--backend", "local"]
+            # A baseline that predates rotation is not held to the expectation.
+            self.assertEqual(suite.main(["--probe-binary", str(candidate), "--baseline-binary", str(baseline),
+                                         "--expected-rotations", "3=0,4=1", *arguments]), 0)
+            report = json.loads((root / "result.json").read_text())
+            self.assertEqual(report["configuration"]["expected_rotations"], {"3": 0, "4": 1})
+            for expected, probe in [("3=0,4=2", candidate), ("3=0,4=1", baseline)]:
+                with self.subTest(expected=expected, probe=probe.name):
+                    with self.assertRaisesRegex(suite.common.BenchmarkError, "rotated its writer"):
+                        suite.main(["--probe-binary", str(probe), "--expected-rotations", expected, *arguments])
+            with self.assertRaises(SystemExit):
+                suite.main(["--probe-binary", str(candidate), "--expected-rotations", "3=0", *arguments])
+        for invalid in ["3", "3=-1", "0=1", "3=0,3=1", "x=1"]:
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(suite.argparse.ArgumentTypeError):
+                    suite.rotation_expectations(invalid)
+
+    def test_rejects_invalid_import_resource_measurements(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            for field, invalid in [(field, value) for field in ["written_bytes", "writer_rotations"]
+                                   for value in ["-1", "1.5", "True"]]:
+                with self.subTest(field=field, invalid=invalid):
+                    probe = root / "probe"
+                    write_probe(probe)
+                    probe.write_text(probe.read_text().replace(
+                        "root=\"fixture-root\",", f"root=\"fixture-root\", {field}={invalid},"))
+                    with self.assertRaisesRegex(suite.common.BenchmarkError, "correctness gate"):
+                        suite.main(["--probe-binary", str(probe), "--no-build",
+                                    "--output", str(root / "result.json"), "--counts", "3",
+                                    "--max-buffered-bytes", "1024", "--layout", "loose",
+                                    "--backend", "local"])
+
     def test_paired_summary_requires_nonempty_root_identities(self):
         rows = [dict(operation="cold", backend="local", files=3,
                      file_bytes=1024, content="random", packed=True, concurrency=4,
@@ -162,6 +229,21 @@ class GitClosureBenchmarkTests(unittest.TestCase):
                                     "--output", str(root / "invalid.json"),
                                     "--counts", "3", "--max-buffered-bytes", "1024",
                                     "--backend", "local", "--layout", "loose"])
+
+    def test_standard_profile_covers_owned_writer_rotation_boundaries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            probe = root / "probe"
+            write_probe(probe)
+            output = root / "result.json"
+            suite.main(["--probe-binary", str(probe), "--no-build", "--output", str(output),
+                        "--profile", "standard", "--max-buffered-bytes", "1024",
+                        "--backend", "memory", "--layout", "loose"])
+            report = json.loads(output.read_text())
+            counts = {row["files"] for row in report["samples"]}
+            # Each cold fixture adds two trees to these leaf counts; the
+            # memory backend publishes 64 objects at a time.
+            self.assertTrue({509, 510, 511, 1022, 1023} <= counts, counts)
 
     def test_blob_witnesses_must_match_the_probes_declared_witness_policy(self):
         with tempfile.TemporaryDirectory() as directory:

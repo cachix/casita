@@ -503,6 +503,9 @@ mod tests {
         flush: AtomicUsize,
         prepare: AtomicUsize,
         finish: AtomicUsize,
+        refresh: AtomicUsize,
+        synchronize: AtomicUsize,
+        admission_gate: std::sync::Mutex<Option<(Arc<MaintenancePause>, bool)>>,
     }
 
     #[derive(Clone)]
@@ -547,6 +550,7 @@ mod tests {
     #[async_trait]
     impl crate::blob::CatalogPublication for Storage {
         async fn refresh_discovery(&self) -> Result<(), Error> {
+            self.calls.refresh.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
         async fn flush(&self) -> Result<(), Error> {
@@ -554,6 +558,15 @@ mod tests {
             Ok(())
         }
         async fn synchronize_state_catalog(&self, _catalog: Option<&[u8]>) -> Result<(), Error> {
+            self.calls.synchronize.fetch_add(1, Ordering::SeqCst);
+            let gate = self.calls.admission_gate.lock().unwrap().take();
+            if let Some((pause, fail)) = gate {
+                pause.reached.notify_one();
+                pause.resume.notified().await;
+                if fail {
+                    return Err(Error::Msg("injected rotation admission failure".into()));
+                }
+            }
             Ok(())
         }
         fn enable_state_catalog(&self) {
@@ -676,6 +689,155 @@ mod tests {
         ) -> Result<CommitResult, MetadataError> {
             self.metadata.commit(revision, mutation).await
         }
+    }
+
+    fn rotation_repository() -> (Repository<Storage, Storage>, Arc<Calls>) {
+        let calls = Arc::new(Calls::default());
+        let storage = Storage {
+            payloads: MemoryBlobStore::new(),
+            metadata: MemoryMetadataStore::new().unwrap(),
+            catalog: true,
+            calls: calls.clone(),
+        };
+        (Repository::new(storage.clone(), storage), calls)
+    }
+
+    #[tokio::test]
+    async fn rotation_refreshes_catalog_protection_without_discovery() {
+        let (repository, calls) = rotation_repository();
+        let mut session = repository.mutation_session().await.unwrap();
+        assert_eq!(calls.refresh.load(Ordering::SeqCst), 1);
+        let before = calls.synchronize.load(Ordering::SeqCst);
+        for _ in 0..3 {
+            session.rotate().await.unwrap();
+        }
+        assert_eq!(calls.refresh.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.synchronize.load(Ordering::SeqCst), before + 3);
+        drop(repository.mutation_session().await.unwrap());
+        assert_eq!(calls.refresh.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn failed_and_cancelled_rotation_preserve_the_original_writer() {
+        use tokio::io::AsyncReadExt;
+        for cancel in [false, true] {
+            let (repository, calls) = rotation_repository();
+            let mut session = repository.mutation_session().await.unwrap();
+            let object = session.stage_blob(b"old writer only").await.unwrap();
+            let key = object.record().key().clone();
+            session.publish_unrooted(vec![object]).await.unwrap();
+            let pause = Arc::new(MaintenancePause::default());
+            *calls.admission_gate.lock().unwrap() = Some((pause.clone(), !cancel));
+            let mut rotating = Box::pin(session.rotate());
+            tokio::select! {
+                _ = pause.reached.notified() => {}
+                result = &mut rotating => panic!("rotation ended before the gate: {result:?}"),
+            }
+            if !cancel {
+                pause.resume.notify_one();
+                let error = rotating.as_mut().await.unwrap_err();
+                assert!(
+                    error
+                        .to_string()
+                        .contains("injected rotation admission failure")
+                );
+            }
+            drop(rotating);
+            crate::metadata::flush_repository_leases().await.unwrap();
+            let inventory = repository
+                .state
+                .pin_store()
+                .await
+                .unwrap()
+                .inventory()
+                .await
+                .unwrap();
+            assert_eq!(
+                inventory
+                    .pins
+                    .values()
+                    .filter(|p| p.scope == crate::metadata::PinScope::Staging)
+                    .count(),
+                1
+            );
+            repository.collect().await.unwrap();
+            let (_, mut payload) = repository.open_payload(&key).await.unwrap().unwrap();
+            let mut bytes = Vec::new();
+            payload.read_to_end(&mut bytes).await.unwrap();
+            assert_eq!(bytes, b"old writer only");
+            drop(payload);
+            let object = session.stage_blob(b"still usable").await.unwrap();
+            let later = object.record().key().clone();
+            session.publish_unrooted(vec![object]).await.unwrap();
+            drop(session);
+            crate::metadata::flush_repository_leases().await.unwrap();
+            repository.collect().await.unwrap();
+            assert!(repository.open_payload(&key).await.unwrap().is_none());
+            assert!(repository.open_payload(&later).await.unwrap().is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn rotation_protects_the_new_catalog_before_collection_and_old_pin_release() {
+        use crate::metadata::{PinResource, PinScope};
+        use tokio::io::AsyncReadExt;
+        let (repository, calls) = rotation_repository();
+        let mut session = repository.mutation_session().await.unwrap();
+        let object = session.stage_blob(b"held through rotation").await.unwrap();
+        let key = object.record().key().clone();
+        session.publish_unrooted(vec![object]).await.unwrap();
+        let held = repository.retention_hold().await.unwrap();
+        crate::metadata::flush_repository_leases().await.unwrap();
+        let pins = repository.state.pin_store().await.unwrap();
+        let previous = pins.inventory().await.unwrap();
+        let pause = Arc::new(MaintenancePause::default());
+        *calls.admission_gate.lock().unwrap() = Some((pause.clone(), false));
+        let mut rotating = Box::pin(session.rotate());
+        tokio::select! {
+            _ = pause.reached.notified() => {}
+            result = &mut rotating => panic!("rotation ended before the gate: {result:?}"),
+        }
+        let during = pins.inventory().await.unwrap();
+        let new_pins: Vec<_> = during
+            .pins
+            .iter()
+            .filter(|(token, _)| !previous.pins.contains_key(token))
+            .collect();
+        assert_eq!(new_pins.len(), 1);
+        let (new_token, pin) = new_pins[0];
+        assert_eq!(pin.scope, PinScope::Staging);
+        assert!(
+            pin.resources
+                .contains(&PinResource::Catalog(b"committed catalog".to_vec()))
+        );
+        repository.collect().await.unwrap();
+        pause.resume.notify_one();
+        rotating.as_mut().await.unwrap();
+        drop(rotating);
+        crate::metadata::flush_repository_leases().await.unwrap();
+        let after = pins.inventory().await.unwrap();
+        assert!(
+            after.pins[new_token]
+                .resources
+                .contains(&PinResource::Catalog(b"committed catalog".to_vec()))
+        );
+        assert_eq!(
+            after
+                .pins
+                .values()
+                .filter(|p| p.scope == PinScope::Staging)
+                .count(),
+            1
+        );
+        repository.collect().await.unwrap();
+        let (_, mut payload) = repository.open_payload(&key).await.unwrap().unwrap();
+        let mut bytes = Vec::new();
+        payload.read_to_end(&mut bytes).await.unwrap();
+        assert_eq!(bytes, b"held through rotation");
+        drop(payload);
+        let object = session.stage_blob(b"new writer works").await.unwrap();
+        session.publish_unrooted(vec![object]).await.unwrap();
+        drop(held);
     }
 
     #[tokio::test]
