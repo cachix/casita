@@ -913,6 +913,16 @@ impl StateShardMap {
         self.roots.get(at).filter(|shard| shard.first <= *name)
     }
 
+    /// Each object shard encodes its entries in blocks of
+    /// [`OBJECT_BLOCK_ENTRIES`], the last possibly partial.
+    #[cfg(test)]
+    pub(super) fn object_blocks(&self) -> u64 {
+        self.objects
+            .iter()
+            .map(|shard| shard.entries.div_ceil(OBJECT_BLOCK_ENTRIES as u64))
+            .sum()
+    }
+
     fn validate(&self) -> io::Result<()> {
         if self.objects.len() > MAX_SHARD_REFS {
             return Err(io::Error::other("too many logical object shard references"));

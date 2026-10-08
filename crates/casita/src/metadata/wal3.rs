@@ -386,6 +386,18 @@ impl Wal3MetadataStore {
         })
     }
 
+    /// The object shards and blocks of the checkpoint cached by this handle.
+    #[cfg(test)]
+    pub(crate) fn checkpoint_object_layout(&self) -> (usize, u64) {
+        let checkpoint = self.checkpoint.lock().unwrap();
+        let objects = &checkpoint
+            .as_ref()
+            .expect("a successfully opened wal3 store has a checkpoint")
+            .state
+            .base_objects;
+        (objects.objects.len(), objects.object_blocks())
+    }
+
     async fn reader(&self) -> Result<Wal3Reader, MetadataError> {
         wal3::LogReader::open_classic(
             wal3::LogReaderOptions::default(),
