@@ -121,6 +121,8 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Changed
 
+- Bounded metadata reads during verification size their scratch buffer from
+  the payload's length hint instead of always allocating 64 KiB.
 - Chunk hashing batches up to four chunks and 1 MiB per blocking job;
   larger individual chunks run alone. A lone chunk of at most 4 KiB
   is hashed inline.

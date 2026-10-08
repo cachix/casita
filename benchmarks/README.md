@@ -2397,6 +2397,29 @@ verification still consumes EOF, hashes every byte, and enforces payload limits.
 The [verification buffer report](reports/2026-09-11-verification-buffers.md)
 retains baseline/candidate scratch sizes and validation results.
 
+## Metadata read buffers
+
+`metadata_verification` reads 0, 1, 128, 1,024, 16,384, 65,535, 65,536,
+65,537 and 262,144-byte payloads with known and unknown lengths, and payloads
+over one byte with a one-byte understated length, through three helpers:
+`production` (`VerificationContext::read_to_end_bounded`), `scratch_64k` (the
+former 64 KiB scratch helper) and `hybrid` (a rejected alternative that reads
+known payloads up to 64 KiB straight into the output). Each iteration checks
+complete bytes, identity, size, EOF and the 64 KiB read cap, and that an
+accurate hint sizes production scratch to the payload; preflight JSON lines
+record the largest buffer supplied to the reader. All cases run in
+`benchmark all`.
+`CASITA_METADATA_READ_REVERSE=1` reverses helper order; `benchmark all`
+clears it.
+
+```sh
+cargo bench --no-default-features --features experimental --bench metadata_verification
+cargo bench --no-default-features --features experimental --bench metadata_verification -- --test
+```
+
+The [metadata buffer report](reports/2026-10-06-metadata-buffers/README.md)
+retains both orders and build and host provenance.
+
 ## Native Git import phase profiling
 
 `git-import-profile` runs the permanent `git-scale` many-object, delta-heavy,

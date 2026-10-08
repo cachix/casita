@@ -368,3 +368,8 @@ required-features = ["native", "experimental"]
 name = "sliced_transfer"
 harness = false
 required-features = ["ssh", "experimental"]
+
+[[bench]]
+name = "metadata_verification"
+harness = false
+required-features = ["experimental"]
