@@ -6,7 +6,8 @@ use async_trait::async_trait;
 ///
 /// `R` defaults to the application [`crate::Repository`]. The same built-in
 /// requests also support experimental repositories with custom storage, and
-/// blob and filesystem requests support an existing mutation session. Each importer
+/// blob and filesystem requests support [`crate::ImportSession`] to share staging
+/// protection across a bounded batch. Each importer
 /// preserves its own report and error types. Returned futures are `Send` so
 /// imports can run in task-based services as well as embedded applications.
 ///
@@ -66,6 +67,43 @@ macro_rules! repository_importer {
     };
 }
 
+// The application facade and experimental sessions use the same ingestion
+// implementation. Only the application adapter classifies engine errors.
+macro_rules! session_importer {
+    ($request:ty, [$($reader:ident),*], $report:ty, $error:ty) => {
+        #[async_trait]
+        impl<'session, $($reader),*> Importer<crate::ImportSession<'session>> for $request
+        where
+            $request: Send,
+            $($reader: AsyncRead + Unpin + Send,)*
+        {
+            type Report = $report;
+            type Error = crate::Error;
+
+            async fn import(self, session: &crate::ImportSession<'session>) -> Result<Self::Report, Self::Error> {
+                self.import_into(&session.inner).await
+                    .map_err(|error| crate::api::Error::classified(error.category(), error))
+            }
+        }
+
+        #[cfg(feature = "experimental")]
+        #[async_trait]
+        impl<'session, PS, SS, $($reader),*> Importer<crate::MutationSession<'session, PS, SS>> for $request
+        where
+            PS: BlobStore,
+            SS: MetadataStore,
+            $($reader: AsyncRead + Unpin + Send,)*
+        {
+            type Report = $report;
+            type Error = $error;
+
+            async fn import(self, session: &crate::MutationSession<'session, PS, SS>) -> Result<Self::Report, Self::Error> {
+                self.import_into(session).await
+            }
+        }
+    };
+}
+
 mod blob;
 mod casitar;
 mod copy;
@@ -77,9 +115,10 @@ mod git_closure;
 mod nar;
 #[cfg(feature = "oci")]
 mod oci;
+mod sequence;
 mod tar;
 
-pub use blob::BlobImport;
+pub use blob::{BlobBatchImport, BlobImport};
 pub use casitar::CasitarImport;
 pub use copy::CopyImport;
 pub use filesystem::FilesystemImport;
@@ -94,4 +133,5 @@ pub use git_closure::{
 pub use nar::{FilesystemNarImport, NarImport};
 #[cfg(feature = "oci")]
 pub use oci::OciImport;
+pub use sequence::ImportSequence;
 pub use tar::TarImport;

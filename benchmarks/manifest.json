@@ -634,13 +634,15 @@
     {
       "id": "output-import",
       "suite_id": "state-and-publication",
-      "title": "Casita output staging with per-output and batched mutation publication",
+      "title": "Casita output staging with per-output pins, shared sessions, bounded concurrent atomic imports and batched publication",
       "kind": "module",
       "target": "benchmarks.suites.output_import",
       "profiles": [
         "smoke",
         "standard"
-      ]
+      ],
+      "correctness": ["exact roots", "byte-for-byte payload reads", "clean fsck"],
+      "metrics": ["total and phase latency", "synced pin journal append counts", "15/16/17-input staging concurrency boundary"]
     },
     {
       "id": "git-verified-stream",

@@ -12,6 +12,8 @@ use crate::{
 
 type Local = Repository<ChunkedBlobStore, crate::TursoMetadataStore>;
 
+use crate::benchmark_timing as import_pin_timing;
+
 fn setting(name: &str, default: usize) -> usize {
     std::env::var(name)
         .map(|value| value.parse().unwrap())
@@ -79,6 +81,35 @@ fn emit(mut sample: Value) {
     sample["status"] = json!("ok");
     sample["implementation"] = json!("casita");
     println!("scale_sample {sample}");
+}
+
+struct LazyOutputFile {
+    path: std::path::PathBuf,
+    inner: Option<tokio::fs::File>,
+}
+impl LazyOutputFile {
+    fn new(path: std::path::PathBuf) -> Self {
+        Self { path, inner: None }
+    }
+}
+impl tokio::io::AsyncRead for LazyOutputFile {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buffer: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        if self.inner.is_none() {
+            match std::fs::File::open(&self.path) {
+                Ok(file) => self.inner = Some(tokio::fs::File::from_std(file)),
+                Err(error) => return std::task::Poll::Ready(Err(error)),
+            }
+        }
+        tokio::io::AsyncRead::poll_read(
+            std::pin::Pin::new(self.inner.as_mut().unwrap()),
+            cx,
+            buffer,
+        )
+    }
 }
 
 fn emit_output_import(mut sample: Value) {
@@ -403,19 +434,24 @@ async fn benchmark_pack_cache_working_set() {
     }
 }
 
-/// Compare one mutation publication per output with one shared publication.
+/// Compare per-output sessions, shared sessions, and shared publications.
 /// Preparation, repository opening, payload audits, and fsck are outside the
-/// measured region. The two modes perform identical staging work and differ
-/// only in mutation-session and metadata-publication batching.
+/// measured region. All modes perform identical staging work and differ
+/// only in mutation-session and metadata-publication batching. The shared-session
+/// mode keeps one publication per output to isolate staging pin lifetime.
 #[tokio::test]
 #[ignore = "Casita output-import benchmark; benchmark run output-import"]
 async fn benchmark_output_import() {
+    let timings = import_pin_timing::Timings::install();
     let count = setting("CASITA_OUTPUT_IMPORT_COUNT", 8);
     let size = setting("CASITA_OUTPUT_IMPORT_SIZE", 4096);
     let mode = std::env::var("CASITA_OUTPUT_IMPORT_MODE").unwrap_or_else(|_| "per-output".into());
     assert!(count > 0 && count <= 1024);
     assert!(size <= 64 * 1024 * 1024);
-    assert!(matches!(mode.as_str(), "per-output" | "batched"));
+    assert!(matches!(
+        mode.as_str(),
+        "per-output" | "shared-session" | "batch-api" | "atomic-api" | "batched"
+    ));
 
     let temporary = tempfile::tempdir().unwrap();
     let source = temporary.path().join("source");
@@ -432,14 +468,20 @@ async fn benchmark_output_import() {
         .map(|value| ObjectKey::blob(blob(value)))
         .collect();
 
+    let application = crate::Repository {
+        inner: repository.clone().into_builtin(),
+    };
+    crate::metadata::flush_repository_leases().await.unwrap();
+    timings.reset();
     let started = Instant::now();
     let mut session_nanos = 0u64;
     let mut stage_nanos = 0u64;
     let mut publish_nanos = 0u64;
+    let mut import_nanos = 0u64;
     if mode == "per-output" {
         for (index, expected_key) in expected_keys.iter().enumerate() {
             let phase = Instant::now();
-            let mutation = repository.mutation_session().await.unwrap();
+            let mutation = application.inner.mutation_session().await.unwrap();
             session_nanos += phase.elapsed().as_nanos() as u64;
             let phase = Instant::now();
             let mut file = tokio::fs::File::open(source.join(format!("output-{index:08}")))
@@ -454,9 +496,62 @@ async fn benchmark_output_import() {
                 .unwrap();
             publish_nanos += phase.elapsed().as_nanos() as u64;
         }
+    } else if mode == "shared-session" {
+        // Exercise the application API while preserving per-output publication.
+        let phase = Instant::now();
+        let session = application.import_session().await.unwrap();
+        session_nanos = phase.elapsed().as_nanos() as u64;
+        for (index, expected_key) in expected_keys.iter().enumerate() {
+            let mut file = tokio::fs::File::open(source.join(format!("output-{index:08}")))
+                .await
+                .unwrap();
+            let phase = Instant::now();
+            let staged = session.inner.stage_blob_reader(&mut file).await.unwrap();
+            stage_nanos += phase.elapsed().as_nanos() as u64;
+            let phase = Instant::now();
+            session
+                .inner
+                .publish_rooted(vec![staged], output_root(index), expected_key.clone())
+                .await
+                .unwrap();
+            publish_nanos += phase.elapsed().as_nanos() as u64;
+        }
+    } else if mode == "batch-api" {
+        let phase = Instant::now();
+        // Open lazily so the batch retains only one input file descriptor.
+        let inputs = (0..count).map(|index| {
+            let file = std::fs::File::open(source.join(format!("output-{index:08}"))).unwrap();
+            crate::import::BlobImport::new(tokio::fs::File::from_std(file), output_root(index))
+        });
+        let keys = application
+            .import(crate::import::ImportSequence::new(inputs))
+            .await
+            .unwrap();
+        import_nanos = phase.elapsed().as_nanos() as u64;
+        assert_eq!(keys, expected_keys);
+    } else if mode == "atomic-api" {
+        let phase = Instant::now();
+        let inputs = expected
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                // Readers open on first use so preparing the atomic request does
+                // not open every file descriptor at once.
+                crate::import::BlobImport::new(
+                    LazyOutputFile::new(source.join(format!("output-{index:08}"))),
+                    output_root(index),
+                )
+            })
+            .collect::<Vec<_>>();
+        let keys = application
+            .import(crate::import::BlobImport::batch(inputs))
+            .await
+            .unwrap();
+        import_nanos = phase.elapsed().as_nanos() as u64;
+        assert_eq!(keys, expected_keys);
     } else {
         let phase = Instant::now();
-        let mutation = repository.mutation_session().await.unwrap();
+        let mutation = application.inner.mutation_session().await.unwrap();
         session_nanos = phase.elapsed().as_nanos() as u64;
         let mut staged = Vec::with_capacity(count);
         let mut roots = Vec::with_capacity(count);
@@ -476,7 +571,10 @@ async fn benchmark_output_import() {
         mutation.publish(staged, roots).await.unwrap();
         publish_nanos = phase.elapsed().as_nanos() as u64;
     }
+    crate::metadata::flush_repository_leases().await.unwrap();
     let total_nanos = started.elapsed().as_nanos() as u64;
+    let ledger = timings.take_ledger();
+    let phases = timings.take(started);
 
     let snapshot = repository.metadata().snapshot().await.unwrap();
     for (index, expected_key) in expected_keys.iter().enumerate() {
@@ -491,6 +589,8 @@ async fn benchmark_output_import() {
     assert!(repository.fsck().await.unwrap().is_clean());
     emit_output_import(json!({
         "operation": "output-import",
+        "ledger": ledger,
+        "phases": phases,
         "mode": mode,
         "outputs": count,
         "output_bytes": size,
@@ -499,6 +599,7 @@ async fn benchmark_output_import() {
         "session_nanos": session_nanos,
         "stage_nanos": stage_nanos,
         "publish_nanos": publish_nanos,
+        "import_nanos": import_nanos,
         "correctness": "exact roots, byte-for-byte payload reads, clean fsck",
     }));
 }
