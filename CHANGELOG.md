@@ -121,6 +121,11 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Changed
 
+- Collection planning checks logical objects, payload manifests, stale
+  payloads and chunks against the live and pinned inventories in batches
+  of up to 256 instead of one lookup per item. A spilled inventory answers
+  each batch in bounded disk jobs rather than one job per lookup.
+  Collection results are unchanged.
 - Bounded metadata reads during verification size their scratch buffer from
   the payload's length hint instead of always allocating 64 KiB.
 - Chunk hashing batches up to four chunks and 1 MiB per blocking job;
