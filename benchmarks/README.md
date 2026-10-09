@@ -2257,6 +2257,23 @@ comparisons. Standard counts cross the 16-object admission window. Byte budgets
 64 MiB budget. Concurrency 1 is the serial control. A byte budget governs decoded
 staging bodies, not Gix caches, decoding workspace, payload-store memory or RSS.
 
+Both native import paths reopen their Git source after decoding 32 MiB, which
+discards its pack mappings and caches. Eight registered cases run explicit
+workloads on both sides of that trigger and of the previous 128 MiB one:
+`git-closure-source-window-32` and `-128` import 31 to 33 and 127 to 129 1 MiB
+blobs through the closure importer, `git-view-source-window-32` and `-128`
+import 511 to 513 and 2,046 to 2,049 64 KiB blobs into a Git view, and their
+`-oversized-32` and `-oversized-128` variants import two 33 MiB or 129 MiB
+blobs. Smoke keeps only the outermost file counts, one on each side of the
+trigger, and runs Git views at concurrency 16 only. `git-ingest-concurrency --file-bytes N`
+gives every blob the same size, and each result records every source
+revision's reachable and newly added object bytes, inventoried independently
+through Git. Dashboards and `benchmark revisions` report one Git view
+observation per operation and complete workload: file count and size, layout,
+concurrency and byte budget. The
+[source reopening report](reports/2026-10-09-git-source-window/README.md)
+pairs the 32 MiB and 128 MiB triggers on every case.
+
 ```sh
 benchmark run git-ingest-concurrency --profile standard --repetitions 3 \
   --output /tmp/git-ingest.json --report /tmp/git-ingest.md
@@ -2879,19 +2896,19 @@ not exclusive access: competing workloads can still add noise. Paired summaries
 include each workload's median and range of paired wall-time reductions; fewer
 than five pairs are explicitly marked as insufficient samples.
 
-The default source-byte windows include 1023/1024/1025 and 2047/2048/2049
+The default byte budgets include 1023/1024/1025 and 2047/2048/2049
 bytes: the former straddle single-body admission and the latter straddle
 two-body read-ahead for 1 KiB blobs. Paired reports preserve every sample,
 including noisy or negative results.
 
 Dashboards and `benchmark revisions` report one observation per operation,
 variant and complete workload: backend, layout, file count and size, content,
-concurrency and source window. Only repetitions of one configuration share an
+concurrency and byte budget. Only repetitions of one configuration share an
 observation.
 
 `git-closure-import-small-files` registers the workload where storing a
 witness per blob was a large share of import cost: 16384 64-byte files from
-a packed source into a local repository, with a 64 MiB source window and 16
+a packed source into a local repository, with a 64 MiB byte budget and 16
 objects staged concurrently. It uses the same probe and correctness gates,
 and is included in `benchmark all`. Deriving Git blob completeness was
 measured on it against the last `stored-blobs` revision:

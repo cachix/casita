@@ -14,7 +14,7 @@ import sys
 from collections import defaultdict
 from typing import Any, Iterable, Sequence
 
-from benchmarks.suites import git_closure_audit, git_closure_import
+from benchmarks.suites import git_closure_audit, git_closure_import, git_ingest_concurrency
 from benchmarks.suites import repository as common
 from benchmarks.metrics import MetricRegistryError, load_metric_registry
 
@@ -403,6 +403,64 @@ def normalize_git_closure_result(path: pathlib.Path, result: dict[str, Any]) -> 
                 "cache_policy": "cold" if operation.startswith("cold") else "warm",
                 "operation": operation,
                 "implementation": f"casita-{variant}" if paired else "casita",
+                "status": "ok" if len(successful) == len(samples) and not failures else "failed",
+                "samples": len(samples),
+                "successful_samples": len(successful),
+                "failures": failures,
+                "metrics": {name: value for name, value in metrics.items() if value is not None},
+                "scale": scale,
+            }
+        )
+    return normalized_run(path, result, result["suite_id"], observations)
+
+
+GIT_INGEST_COUNTS = ("objects", "reachable_source_bytes", "new_source_bytes")
+
+
+def normalize_git_ingest_result(path: pathlib.Path, result: dict[str, Any]) -> dict[str, Any]:
+    """Report one observation per operation, implementation and complete Git view workload.
+
+    Results written before blob sizes were configurable used the mixed-size
+    fixture, which later results record as a null blob size.
+    """
+    if result.get("complete") is not True:
+        raise ValueError("incomplete Git ingestion matrix cannot be compared")
+    workload = git_ingest_concurrency.WORKLOAD
+    fields = ("operation", "implementation", *workload)
+    groups: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
+    for sample in result.get("samples", []):
+        sample = {"file_bytes": None, **sample}
+        missing = [field for field in fields if field not in sample]
+        if missing:
+            raise DashboardError(f"Git ingestion sample in {path} lacks {missing}")
+        key = tuple(sample[field] for field in fields)
+        operation, implementation, entries, layout, file_bytes, concurrency, budget = key
+        if (any(type(value) is not str for value in (operation, implementation, layout))
+                or any(type(value) is not int for value in (entries, concurrency, budget))
+                or (file_bytes is not None and type(file_bytes) is not int)):
+            raise DashboardError(f"Git ingestion sample in {path} has an invalid workload {key!r}")
+        groups[key].append(sample)
+    observations = []
+    # Null blob sizes sort before explicit ones.
+    for key, samples in sorted(groups.items(), key=lambda item: [(value is not None, value) for value in item[0]]):
+        operation, implementation, *values = key
+        scale = dict(zip(workload, values, strict=True))
+        successful = [sample for sample in samples if sample.get("status") == "ok"]
+        wall, p95_wall = aggregate_metric(successful, "wall_seconds")
+        metrics = {
+            "wall_seconds": wall,
+            "p95_wall_seconds": p95_wall,
+            "max_rss_bytes": aggregate_metric(successful, "max_rss_bytes")[0],
+            **{field: aggregate_metric(successful, field)[0] for field in GIT_INGEST_COUNTS},
+        }
+        failures = sample_failures(samples)
+        observations.append(
+            {
+                "workload": "git-ingest-concurrency:" + json.dumps(scale, sort_keys=True),
+                "profile": result.get("configuration", {}).get("profile", "unknown"),
+                "cache_policy": "warm",
+                "operation": operation,
+                "implementation": implementation,
                 "status": "ok" if len(successful) == len(samples) and not failures else "failed",
                 "samples": len(samples),
                 "successful_samples": len(successful),
@@ -909,6 +967,8 @@ def normalize_result(path: pathlib.Path) -> dict[str, Any]:
         return normalize_s3_pack_result(path, result)
     if result_schema in GIT_CLOSURE_WORKLOADS:
         return normalize_git_closure_result(path, result)
+    if result_schema == "casita.git-ingest-concurrency.v1":
+        return normalize_git_ingest_result(path, result)
     suite_id = result.get("suite_id")
     if result_schema.startswith("casita.gix-odb."):
         return normalize_gix_odb_result(path, result)
