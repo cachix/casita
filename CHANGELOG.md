@@ -121,6 +121,17 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Changed
 
+- After an object-shard checkpoint, the immutable-object checks in WAL3
+  commits and tail-delta replay, and snapshot `object_batch` and
+  `validated_closures` lookups, read each routed shard and decode each selected
+  block once per batch instead of once per object.
+- WAL3 shard lookups check a block's framing and key order from borrowed key
+  bytes and decode only the records they return, instead of every record in
+  the block. Full shard reads still decode and validate every record.
+- WAL3 reads of an object shard authenticated as a whole no longer re-hash its
+  directory and blocks. A lookup's shard-cache hit checks the shard's magic and
+  length against its reference; a full shard read verifies a cached shard again
+  and fetches it anew if that fails.
 - Bounded metadata reads during verification size their scratch buffer from
   the payload's length hint instead of always allocating 64 KiB.
 - Chunk hashing batches up to four chunks and 1 MiB per blocking job;
