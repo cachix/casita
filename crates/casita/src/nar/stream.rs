@@ -248,7 +248,7 @@ async fn decode<R: AsyncRead + Unpin + Send>(
     // error before dropping the pipe end the next one is waiting on.
     let first = std::sync::Arc::new(std::sync::Mutex::new(None::<NarError>));
     let record = |error: NarError| record_first(&first, error);
-    let decoder = tokio::task::spawn_blocking({
+    let decoder = super::decoder::run({
         let first = first.clone();
         move || {
             let mut wire = tokio_util::io::SyncIoBridge::new(wire);
@@ -310,7 +310,7 @@ async fn decode<R: AsyncRead + Unpin + Send>(
         consumed
     };
     let (consumed, decoded, pumped) = tokio::join!(consume, decoder, pump);
-    decoded.map_err(NarError::storage)?;
+    decoded?;
     if let Some(error) = first.lock().unwrap().take() {
         return Err(error);
     }

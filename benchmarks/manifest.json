@@ -2257,6 +2257,22 @@
           ],
           "included_in": "benchmark all --suites core-primitives"
         },
+        "nar-decoder-admission": {
+          "runner": "cargo bench --bench nar_import -- 'nar_decoder_(pool|admission)'",
+          "correctness_runner": "cargo bench --bench nar_import -- 'nar_decoder_(pool|admission)' --test",
+          "groups": {
+            "nar_decoder_pool": "one regular-file import of 8 or 32 MiB into a fresh repository on a current-thread runtime with 1 or 2 blocking workers",
+            "nar_decoder_admission": "16, 17 or 32 concurrent 2 MiB imports into one repository, each its own task on a multi-threaded runtime"
+          },
+          "decoder_limit": 16,
+          "purpose": "Keep NAR decoders off the blocking pool their consumers need, and measure the cost of the process-wide decoder limit on both sides of it.",
+          "correctness": [
+            "canonical SHA-256 and NAR size",
+            "payload bytes hashed, or no association hit",
+            "independent stored-content scrub"
+          ],
+          "included_in": "benchmark all --suites core-primitives"
+        },
         "verification-buffers": {
           "runner": "cargo bench --features experimental --bench optimization -- verification_buffers",
           "payload_sizes_bytes": [
