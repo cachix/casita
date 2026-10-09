@@ -34,7 +34,7 @@ pub const DEFAULT_GIT_IMPORT_BUFFERED_BYTES: std::num::NonZeroU64 =
 #[cfg(feature = "git")]
 const MAX_GIT_IMPORT_BATCH_LINKS: usize = 1_000_000;
 #[cfg(feature = "git")]
-const MAX_GIT_SOURCE_MAPPING_WINDOW_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_GIT_SOURCE_MAPPING_WINDOW_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Policy for `160000` entries during native Git tree checkout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

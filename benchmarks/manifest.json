@@ -700,6 +700,246 @@
       ]
     },
     {
+      "id": "git-closure-source-window-32",
+      "suite_id": "native-git",
+      "title": "Git closure source reopening: 32 MiB boundary",
+      "kind": "module",
+      "target": "benchmarks.suites.git_closure_import",
+      "default_arguments": [
+        "--counts",
+        "31,32,33",
+        "--file-bytes",
+        "1048576",
+        "--max-buffered-bytes",
+        "67108864",
+        "--concurrency",
+        "16",
+        "--layout",
+        "packed",
+        "--backend",
+        "local",
+        "--content",
+        "random"
+      ],
+      "profiles": [
+        "smoke",
+        "standard"
+      ],
+      "correctness": [
+        "exact native identities and bytes",
+        "complete closure verification",
+        "below and above decoded source reopening threshold"
+      ]
+    },
+    {
+      "id": "git-closure-source-window-128",
+      "suite_id": "native-git",
+      "title": "Git closure source reopening: 128 MiB boundary",
+      "kind": "module",
+      "target": "benchmarks.suites.git_closure_import",
+      "default_arguments": [
+        "--counts",
+        "127,128,129",
+        "--file-bytes",
+        "1048576",
+        "--max-buffered-bytes",
+        "67108864",
+        "--concurrency",
+        "16",
+        "--layout",
+        "packed",
+        "--backend",
+        "local",
+        "--content",
+        "random"
+      ],
+      "profiles": [
+        "smoke",
+        "standard"
+      ],
+      "correctness": [
+        "exact native identities and bytes",
+        "complete closure verification",
+        "below and above decoded source reopening threshold"
+      ]
+    },
+    {
+      "id": "git-closure-source-window-oversized-32",
+      "suite_id": "native-git",
+      "title": "Git closure source reopening: oversized-32 MiB boundary",
+      "kind": "module",
+      "target": "benchmarks.suites.git_closure_import",
+      "default_arguments": [
+        "--counts",
+        "2",
+        "--file-bytes",
+        "34603008",
+        "--max-buffered-bytes",
+        "67108864",
+        "--concurrency",
+        "16",
+        "--layout",
+        "packed",
+        "--backend",
+        "local",
+        "--content",
+        "random"
+      ],
+      "profiles": [
+        "smoke",
+        "standard"
+      ],
+      "correctness": [
+        "exact native identities and bytes",
+        "complete closure verification",
+        "oversized objects and subsequent source reads"
+      ]
+    },
+    {
+      "id": "git-closure-source-window-oversized-128",
+      "suite_id": "native-git",
+      "title": "Git closure source reopening: oversized-128 MiB boundary",
+      "kind": "module",
+      "target": "benchmarks.suites.git_closure_import",
+      "default_arguments": [
+        "--counts",
+        "2",
+        "--file-bytes",
+        "135266304",
+        "--max-buffered-bytes",
+        "67108864",
+        "--concurrency",
+        "16",
+        "--layout",
+        "packed",
+        "--backend",
+        "local",
+        "--content",
+        "random"
+      ],
+      "profiles": [
+        "smoke",
+        "standard"
+      ],
+      "correctness": [
+        "exact native identities and bytes",
+        "complete closure verification",
+        "oversized objects and subsequent source reads"
+      ]
+    },
+    {
+      "id": "git-view-source-window-32",
+      "suite_id": "native-git",
+      "title": "Git view source reopening: 32 MiB boundary",
+      "kind": "module",
+      "target": "benchmarks.suites.git_ingest_concurrency",
+      "default_arguments": [
+        "--counts",
+        "511,512,513",
+        "--file-bytes",
+        "65536",
+        "--max-buffered-bytes",
+        "67108864",
+        "--concurrency",
+        "1,16",
+        "--layouts",
+        "delta"
+      ],
+      "profiles": [
+        "smoke",
+        "standard"
+      ],
+      "correctness": [
+        "exact native identities and bytes",
+        "reachable source byte inventory, checkout and fsck",
+        "below and above decoded source reopening threshold"
+      ]
+    },
+    {
+      "id": "git-view-source-window-128",
+      "suite_id": "native-git",
+      "title": "Git view source reopening: 128 MiB boundary",
+      "kind": "module",
+      "target": "benchmarks.suites.git_ingest_concurrency",
+      "default_arguments": [
+        "--counts",
+        "2046,2047,2048,2049",
+        "--file-bytes",
+        "65536",
+        "--max-buffered-bytes",
+        "67108864",
+        "--concurrency",
+        "1,16",
+        "--layouts",
+        "delta"
+      ],
+      "profiles": [
+        "smoke",
+        "standard"
+      ],
+      "correctness": [
+        "exact native identities and bytes",
+        "reachable source byte inventory, checkout and fsck",
+        "below and above decoded source reopening threshold"
+      ]
+    },
+    {
+      "id": "git-view-source-window-oversized-32",
+      "suite_id": "native-git",
+      "title": "Git view source reopening: oversized-32 MiB boundary",
+      "kind": "module",
+      "target": "benchmarks.suites.git_ingest_concurrency",
+      "default_arguments": [
+        "--counts",
+        "2",
+        "--file-bytes",
+        "34603008",
+        "--max-buffered-bytes",
+        "67108864",
+        "--concurrency",
+        "1,16",
+        "--layouts",
+        "packed"
+      ],
+      "profiles": [
+        "smoke",
+        "standard"
+      ],
+      "correctness": [
+        "exact native identities and bytes",
+        "reachable source byte inventory, checkout and fsck",
+        "oversized objects and subsequent source reads"
+      ]
+    },
+    {
+      "id": "git-view-source-window-oversized-128",
+      "suite_id": "native-git",
+      "title": "Git view source reopening: oversized-128 MiB boundary",
+      "kind": "module",
+      "target": "benchmarks.suites.git_ingest_concurrency",
+      "default_arguments": [
+        "--counts",
+        "2",
+        "--file-bytes",
+        "135266304",
+        "--max-buffered-bytes",
+        "67108864",
+        "--concurrency",
+        "1,16",
+        "--layouts",
+        "packed"
+      ],
+      "profiles": [
+        "smoke",
+        "standard"
+      ],
+      "correctness": [
+        "exact native identities and bytes",
+        "reachable source byte inventory, checkout and fsck",
+        "oversized objects and subsequent source reads"
+      ]
+    },
+    {
       "id": "git-ingest-scheduling",
       "suite_id": "native-git",
       "title": "Native Git staging with controlled upload latency and resource-bound gates",
