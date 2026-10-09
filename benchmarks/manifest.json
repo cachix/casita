@@ -1743,6 +1743,15 @@
       ]
     },
     {
+      "id": "catalog-synchronization",
+      "suite_id": "blob-backends",
+      "title": "Catalog synchronization with clean and pending overlays",
+      "kind": "module",
+      "target": "benchmarks.suites.native_probes",
+      "default_arguments": ["--probe", "catalog-synchronization"],
+      "profiles": ["custom"]
+    },
+    {
       "id": "catalog-durability",
       "suite_id": "blob-backends",
       "title": "Durable catalog publication batching",

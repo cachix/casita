@@ -69,9 +69,9 @@ use object_store::{
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
-use super::ChunkMeta;
 use super::chunked::{delete_object, digest_from_location, kind_prefix, put_object, sharded_path};
 use super::local_durability::{LocalCatalogLock, LocalDurability, PreparedLocalPut};
+use super::{CatalogOutcome, ChunkMeta};
 use crate::digest::{BlobId, ChunkId, DIGEST_LEN, Digest, PackId};
 
 mod delta;
@@ -1331,18 +1331,49 @@ struct PreparedIndexCatalog {
     background_install: Option<PreparedCatalogRebaseInstall>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PreparedCatalogInstallState {
+    /// The prepared local state is still eligible for installation.
+    Eligible,
+    /// Root synchronization has superseded the prepared local state.
+    Superseded,
+}
+
+/// The delta encoded at preparation capture remains replayable through candidate
+/// resolution. Synchronizing another root invalidates that candidate's local
+/// installation, even if its metadata commit subsequently succeeds.
+struct PreparedCatalogReplay {
+    delta: Option<Bytes>,
+    install_state: PreparedCatalogInstallState,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReplayCleanup {
+    /// On rollback, lock the transition, restore pending changes, and clear replay.
+    ClearOnRollback,
+    /// Restore pending changes without touching the replay slot.
+    LeaveUntouched,
+}
+
 /// Pending deltas belong to this guard across catalog-building awaits. Both
 /// errors and cancellation restore them ahead of mutations staged meanwhile.
 struct CatalogPreparation<'a> {
     packed: &'a PackedChunks,
     changes: Option<CatalogChanges>,
     background_start: Option<u64>,
+    replay_cleanup: ReplayCleanup,
 }
 
 impl Drop for CatalogPreparation<'_> {
     fn drop(&mut self) {
         let Some(mutations) = self.changes.take() else {
             return;
+        };
+        // In-progress preparation owns the replay slot before its first await.
+        // Restore pending ownership before making that replay unavailable.
+        let mut transition = match self.replay_cleanup {
+            ReplayCleanup::ClearOnRollback => Some(self.packed.catalog_transition.lock().unwrap()),
+            ReplayCleanup::LeaveUntouched => None,
         };
         self.packed
             .pending_catalog
@@ -1356,6 +1387,9 @@ impl Drop for CatalogPreparation<'_> {
             }
         }
         self.packed.index_dirty.store(true, Ordering::Release);
+        if let Some(transition) = transition.as_mut() {
+            **transition = None;
+        }
     }
 }
 
@@ -1464,6 +1498,12 @@ impl CatalogObjectPublication<'_> {
     }
 }
 
+#[cfg(test)]
+type CatalogStateHook = Box<dyn FnOnce(&PackedChunks) + Send>;
+
+#[cfg(test)]
+mod catalog_sync_tests;
+
 /// Chunk storage over immutable content-addressed packs.
 pub(crate) struct PackedChunks {
     sidecars: StdMutex<sidecars::Staging>,
@@ -1484,11 +1524,28 @@ pub(crate) struct PackedChunks {
     index_catalog: StdMutex<IndexCatalogWitness>,
     lazy_catalog: RwLock<LazyCatalogOverlay>,
     pending_catalog: StdMutex<CatalogChanges>,
+    // Catalog installation/resolution -> index -> pending -> lazy. Writers
+    // start at index; none acquire this lock while holding an index guard.
+    // Never hold synchronous locks across I/O. Preparation holds checkpoint
+    // until this replay state is installed; resolution needs no async lock.
+    catalog_transition: StdMutex<Option<PreparedCatalogReplay>>,
     catalog_prepared: AtomicBool,
     #[cfg(test)]
     prepared_index_catalog: StdMutex<Option<PreparedIndexCatalog>>,
     #[cfg(test)]
     flush_handoff_hook: StdMutex<Option<FlushHandoffHook>>,
+    #[cfg(test)]
+    sync_dirty_hook: StdMutex<Option<FlushHandoffHook>>,
+    #[cfg(test)]
+    catalog_prepare_hook: StdMutex<Option<FlushHandoffHook>>,
+    #[cfg(test)]
+    catalog_read_hook: StdMutex<Option<FlushHandoffHook>>,
+    #[cfg(test)]
+    catalog_capture_hook: StdMutex<Option<CatalogStateHook>>,
+    #[cfg(test)]
+    catalog_materialize_hook: StdMutex<Option<FlushHandoffHook>>,
+    #[cfg(test)]
+    sync_install_hook: StdMutex<Option<CatalogStateHook>>,
     index_dirty: AtomicBool,
     state_catalog_mode: AtomicBool,
     dirty_packs: Mutex<HashSet<PackId>>,
@@ -1649,11 +1706,24 @@ impl PackedChunks {
             index_catalog: StdMutex::new(IndexCatalogWitness::default()),
             lazy_catalog: RwLock::new(LazyCatalogOverlay::default()),
             pending_catalog: StdMutex::new(CatalogChanges::default()),
+            catalog_transition: StdMutex::new(None),
             catalog_prepared: AtomicBool::new(false),
             #[cfg(test)]
             prepared_index_catalog: StdMutex::new(None),
             #[cfg(test)]
             flush_handoff_hook: StdMutex::new(None),
+            #[cfg(test)]
+            sync_dirty_hook: StdMutex::new(None),
+            #[cfg(test)]
+            catalog_prepare_hook: StdMutex::new(None),
+            #[cfg(test)]
+            catalog_read_hook: StdMutex::new(None),
+            #[cfg(test)]
+            catalog_capture_hook: StdMutex::new(None),
+            #[cfg(test)]
+            catalog_materialize_hook: StdMutex::new(None),
+            #[cfg(test)]
+            sync_install_hook: StdMutex::new(None),
             index_dirty: AtomicBool::new(false),
             state_catalog_mode: AtomicBool::new(state_catalog_mode),
             dirty_packs: Mutex::new(HashSet::new()),
@@ -2373,16 +2443,19 @@ impl PackedChunks {
                 || self.location(&ChunkId::new(digest)).await?.is_some()),
             TOMBSTONES_KIND => {
                 if tombstones.is_none() {
-                    let mut records: HashSet<_> = self
-                        .index
-                        .read()
-                        .unwrap()
-                        .tombstone_records
-                        .values()
-                        .flatten()
-                        .copied()
-                        .collect();
-                    let lazy = self.lazy_catalog.read().unwrap().clone();
+                    let (mut records, lazy) = self
+                        .materialized_catalog(|index, lazy| {
+                            let records: HashSet<_> = index
+                                .tombstone_records
+                                .values()
+                                .flatten()
+                                .copied()
+                                .collect();
+                            (records, lazy.clone())
+                        })
+                        .await?;
+                    #[cfg(test)]
+                    self.pause_catalog_read().await;
                     if let Some(base) = lazy.base {
                         for reference in &base.map.packs {
                             let bytes = self.load_catalog_shard(*reference).await?;
@@ -2444,10 +2517,16 @@ impl PackedChunks {
     }
 
     async fn catalog_contains_manifest(&self, digest: BlobId) -> io::Result<bool> {
-        if self.index.read().unwrap().manifests.contains(&digest) {
+        let lazy = self
+            .materialized_catalog(|index, lazy| {
+                (!index.manifests.contains(&digest)).then(|| lazy.clone())
+            })
+            .await?;
+        let Some(lazy) = lazy else {
             return Ok(true);
-        }
-        let lazy = self.lazy_catalog.read().unwrap().clone();
+        };
+        #[cfg(test)]
+        self.pause_catalog_read().await;
         if lazy.removed_manifests.contains(&digest) {
             return Ok(false);
         }
@@ -2517,10 +2596,16 @@ impl PackedChunks {
     }
 
     async fn catalog_contains_pack(&self, pack: PackId) -> io::Result<bool> {
-        if self.index.read().unwrap().packs.contains_key(&pack) {
+        let lazy = self
+            .materialized_catalog(|index, lazy| {
+                (!index.packs.contains_key(&pack)).then(|| lazy.clone())
+            })
+            .await?;
+        let Some(lazy) = lazy else {
             return Ok(true);
-        }
-        let lazy = self.lazy_catalog.read().unwrap().clone();
+        };
+        #[cfg(test)]
+        self.pause_catalog_read().await;
         if lazy.changed_packs.contains(&pack) {
             return Ok(false);
         }
@@ -2565,11 +2650,6 @@ impl PackedChunks {
             return Ok(());
         }
 
-        // A background base is derived from the previously synchronized root.
-        // Once another writer advances that root, any in-flight result is only
-        // an unreachable immutable candidate and must never be installed.
-        self.background_catalog_rebase.lock().unwrap().job = None;
-
         let _rebuild = self.rebuild_lock.lock().await;
         let _checkpoint = self.checkpoint_lock.lock().await;
         let version = UpdateVersion {
@@ -2587,26 +2667,48 @@ impl PackedChunks {
         self.read_counters
             .index_hits
             .fetch_add(1, Ordering::Relaxed);
-        let dirty = self.index_dirty.load(Ordering::Acquire);
+        #[cfg(test)]
         {
-            let mut current = self.index.write().unwrap();
-            if dirty {
-                let local = current.clone();
-                let pending = self.pending_catalog.lock().unwrap();
-                if !pending.is_empty() {
-                    let delta = encode_index_mutations(&local, &pending)?;
-                    let decoded = decode_index_delta(&delta)?;
-                    lazy.apply(&decoded);
-                    apply_decoded_index_delta(&mut index, decoded);
-                }
-            } else {
-                self.pending_catalog.lock().unwrap().mutations = IndexMutations::default();
+            let hook = self.sync_dirty_hook.lock().unwrap().take();
+            if let Some(hook) = hook {
+                let _ = hook.reached.send(());
+                let _ = hook.resume.await;
             }
-            *current = index;
+        }
+        let mut transition = self.catalog_transition.lock().unwrap();
+        let mut current = self.index.write().unwrap();
+        let pending = self.pending_catalog.lock().unwrap();
+        if let Some(delta) = transition
+            .as_ref()
+            .and_then(|prepared| prepared.delta.as_ref())
+        {
+            let decoded = decode_index_delta(delta)?;
+            lazy.apply(&decoded);
+            apply_decoded_index_delta(&mut index, decoded);
+        }
+        // The actual pending mutations, protected by the writer lock, are
+        // authoritative. A flush may have finished since decoding began.
+        if !pending.is_empty() {
+            let delta = encode_index_mutations(&current, &pending)?;
+            let decoded = decode_index_delta(&delta)?;
+            lazy.apply(&decoded);
+            apply_decoded_index_delta(&mut index, decoded);
+            self.index_dirty.store(true, Ordering::Release);
+        }
+        *current = index;
+        #[cfg(test)]
+        if let Some(hook) = self.sync_install_hook.lock().unwrap().take() {
+            hook(self);
         }
         *self.lazy_catalog.write().unwrap() = lazy;
         self.catalog_run_indexes.lock().unwrap().clear();
         *self.index_catalog.lock().unwrap() = loaded.witness;
+        if let Some(prepared) = transition.as_mut() {
+            prepared.install_state = PreparedCatalogInstallState::Superseded;
+        }
+        // Invalidate a background result only when the new root is installed,
+        // including jobs armed while this synchronization waited to decode.
+        self.background_catalog_rebase.lock().unwrap().job = None;
         Ok(())
     }
 
@@ -2620,10 +2722,7 @@ impl PackedChunks {
                 let packed = self.clone();
                 super::PreparedCatalog::new(Some(catalog), move |outcome| {
                     packed
-                        .resolve_prepared_catalog(
-                            state,
-                            outcome == super::CatalogOutcome::Committed,
-                        )
+                        .resolve_prepared_catalog(state, outcome)
                         .map_err(Into::into)
                 })
             }
@@ -2643,19 +2742,28 @@ impl PackedChunks {
     }
 
     #[cfg(test)]
-    pub(crate) fn finish_state_catalog(self: &Arc<Self>, committed: bool) -> io::Result<()> {
+    pub(crate) fn finish_state_catalog(
+        self: &Arc<Self>,
+        outcome: CatalogOutcome,
+    ) -> io::Result<()> {
         let Some(prepared) = self.prepared_index_catalog.lock().unwrap().take() else {
             return Ok(());
         };
-        self.resolve_prepared_catalog(prepared, committed)
+        self.resolve_prepared_catalog(prepared, outcome)
     }
 
     fn resolve_prepared_catalog(
         self: &Arc<Self>,
         prepared: PreparedIndexCatalog,
-        committed: bool,
+        outcome: CatalogOutcome,
     ) -> io::Result<()> {
-        let result = self.finish_prepared_catalog(prepared, committed);
+        let mut transition = self.catalog_transition.lock().unwrap();
+        let install_state = transition
+            .take()
+            .map_or(PreparedCatalogInstallState::Eligible, |replay| {
+                replay.install_state
+            });
+        let result = self.finish_prepared_catalog(prepared, outcome, install_state);
         self.catalog_prepared.store(false, Ordering::Release);
         result
     }
@@ -2713,9 +2821,10 @@ impl PackedChunks {
         ) = loop {
             let previous = self.index_catalog.lock().unwrap().clone();
             let captured = {
-                // Preserve the normal index -> mutations -> background lock
+                // Preserve transition -> index -> mutations -> background lock
                 // order so mutations cannot fall between a rebase snapshot
                 // and installing the job that tracks its follow-ups.
+                let mut transition = self.catalog_transition.lock().unwrap();
                 let index = self.index.read().unwrap();
                 let mut pending = self.pending_catalog.lock().unwrap();
                 let lazy = self.lazy_catalog.read().unwrap().clone();
@@ -2750,8 +2859,15 @@ impl PackedChunks {
                         None => true,
                     };
                 if needs_materialized_runs {
-                    Err(mutations)
+                    // Restore before releasing index: concurrent materialization
+                    // must never see neither pending ownership nor replay.
+                    pending.prepend(mutations);
+                    None
                 } else {
+                    *transition = Some(PreparedCatalogReplay {
+                        delta: delta.clone(),
+                        install_state: PreparedCatalogInstallState::Eligible,
+                    });
                     let mut background_start = None;
                     let mut background_install = None;
                     // Local rebases stay within the mutation's filesystem
@@ -2790,7 +2906,7 @@ impl PackedChunks {
                             base: None,
                         });
                     }
-                    Ok((
+                    Some((
                         candidate,
                         mutations,
                         lazy,
@@ -2800,21 +2916,18 @@ impl PackedChunks {
                     ))
                 }
             };
-            match captured {
-                Ok((candidate, mutations, lazy, delta, background_start, background_install)) => {
-                    break (
-                        previous,
-                        candidate,
-                        mutations,
-                        lazy,
-                        delta,
-                        background_start,
-                        background_install,
-                    );
-                }
-                Err(mutations) => {
-                    self.pending_catalog.lock().unwrap().prepend(mutations);
-                }
+            if let Some((candidate, mutations, lazy, delta, background_start, background_install)) =
+                captured
+            {
+                break (
+                    previous,
+                    candidate,
+                    mutations,
+                    lazy,
+                    delta,
+                    background_start,
+                    background_install,
+                );
             }
 
             // The captured mutations were removed before deciding that a
@@ -2828,7 +2941,16 @@ impl PackedChunks {
             packed: self,
             changes: Some(mutations),
             background_start: background_start.as_ref().map(|start| start.id),
+            replay_cleanup: ReplayCleanup::ClearOnRollback,
         };
+        #[cfg(test)]
+        {
+            let hook = self.catalog_prepare_hook.lock().unwrap().take();
+            if let Some(hook) = hook {
+                let _ = hook.reached.send(());
+                let _ = hook.resume.await;
+            }
+        }
         #[cfg(test)]
         let build_started = Instant::now();
         let built = match &mut background_install {
@@ -2910,10 +3032,23 @@ impl PackedChunks {
 
     fn finish_prepared_catalog(
         self: &Arc<Self>,
-        prepared: PreparedIndexCatalog,
-        committed: bool,
+        mut prepared: PreparedIndexCatalog,
+        outcome: CatalogOutcome,
+        install_state: PreparedCatalogInstallState,
     ) -> io::Result<()> {
-        if !committed {
+        if outcome == CatalogOutcome::Aborted
+            || install_state == PreparedCatalogInstallState::Superseded
+        {
+            if outcome == CatalogOutcome::Committed {
+                self.published_retirements
+                    .lock()
+                    .unwrap()
+                    .extend(std::mem::take(&mut prepared.changes.retirements));
+            }
+            // The synchronized view already contains the replayed bytes.
+            // Retain their descriptors for a merged publication instead of
+            // installing the candidate's old witness/rebase over that root.
+            // Sidecars stay pending for the same merged publication.
             self.pending_catalog
                 .lock()
                 .unwrap()
@@ -2936,6 +3071,7 @@ impl PackedChunks {
             packed: self,
             changes: Some(prepared.changes),
             background_start: None,
+            replay_cleanup: ReplayCleanup::LeaveUntouched,
         };
         let mut witness = prepared.witness;
         if let Some(install) = prepared.background_install {
@@ -3194,8 +3330,8 @@ impl PackedChunks {
                     }
                     index.add_pack(sealed.id, sealed.bytes.len() as u64, sealed.entries);
                     self.record_pack_mutation(sealed.id);
+                    self.index_dirty.store(true, Ordering::Release);
                 }
-                self.index_dirty.store(true, Ordering::Release);
                 // The pack is indexed above, so clearing here leaves no gap.
                 *self.inflight.lock().await = None;
                 Ok(())
@@ -3224,12 +3360,9 @@ impl PackedChunks {
 
     pub(crate) fn list(&self) -> BoxStream<'_, io::Result<ChunkId>> {
         Box::pin(async_stream::try_stream! {
-            self.ensure_catalog_runs_loaded().await?;
-            let lazy = self.lazy_catalog.read().unwrap().clone();
             let deleted = self.deleted.lock().await.clone();
-            let local = {
-                let index = self.index.read().unwrap();
-                if lazy.base.is_none() {
+            let (local, lazy) = self.materialized_catalog(|index, lazy| {
+                let local = if lazy.base.is_none() {
                     index.chunks.ids()
                 } else {
                     let mut ids = HashSet::new();
@@ -3245,8 +3378,11 @@ impl PackedChunks {
                     let mut ids = ids.into_iter().collect::<Vec<_>>();
                     ids.sort_unstable();
                     ids
-                }
-            };
+                };
+                (local, lazy.clone())
+            }).await?;
+            #[cfg(test)]
+            self.pause_catalog_read().await;
             let local_set = local.iter().copied().collect::<HashSet<_>>();
             if let Some(base) = lazy.base {
                 for reference in base.map.chunks.iter().copied() {
@@ -3268,16 +3404,15 @@ impl PackedChunks {
 
     pub(crate) fn list_manifests(&self) -> BoxStream<'_, io::Result<BlobId>> {
         Box::pin(async_stream::try_stream! {
-            self.ensure_catalog_runs_loaded().await?;
-            let local = {
-                let index = self.index.read().unwrap();
-                index
-                    .manifests_complete
-                    .then(|| index.manifests.sorted_ids())
-            }.ok_or_else(|| io::Error::other(
+            let (local, lazy) = self.materialized_catalog(|index, lazy| {
+                let local = index.manifests_complete.then(|| index.manifests.sorted_ids());
+                (local, lazy.clone())
+            }).await?;
+            let local = local.ok_or_else(|| io::Error::other(
                 "packed manifest catalog is not authoritative",
             ))?;
-            let lazy = self.lazy_catalog.read().unwrap().clone();
+            #[cfg(test)]
+            self.pause_catalog_read().await;
             let local_set = local.iter().copied().collect::<HashSet<_>>();
             if let Some(base) = lazy.base {
                 for reference in base.map.manifests.iter().copied() {
@@ -3572,10 +3707,37 @@ impl PackedChunks {
         if self.deleted.lock().await.contains(digest) {
             return Ok(None);
         }
-        if let Some(location) = self.index.read().unwrap().chunks.get(digest) {
-            return Ok(Some(location));
+        loop {
+            // The index guard pairs the local lookup with its immutable base.
+            // No synchronous guard is held during catalog I/O.
+            let lazy = {
+                let index = self.index.read().unwrap();
+                if let Some(location) = index.chunks.get(digest) {
+                    return Ok(Some(location));
+                }
+                #[cfg(test)]
+                if let Some(hook) = self.catalog_capture_hook.lock().unwrap().take() {
+                    hook(self);
+                }
+                self.lazy_catalog.read().unwrap().clone()
+            };
+            #[cfg(test)]
+            self.pause_catalog_read().await;
+            if lazy
+                .run_refs
+                .values()
+                .any(|reference| reference.query.is_none())
+            {
+                self.ensure_catalog_runs_loaded().await?;
+                continue;
+            }
+            return Ok(self
+                .reader()
+                .base_locations(&lazy, digest)
+                .await?
+                .into_iter()
+                .next());
         }
-        Ok(self.base_locations(digest).await?.into_iter().next())
     }
 
     /// Return the immutable pack that would serve one chunk without reading
@@ -3587,19 +3749,33 @@ impl PackedChunks {
     }
 
     async fn base_locations(&self, digest: &ChunkId) -> io::Result<Vec<Location>> {
-        let mut lazy = self.lazy_catalog.read().unwrap().clone();
-        if lazy
-            .run_refs
-            .values()
-            .any(|reference| reference.query.is_none())
-        {
-            self.ensure_catalog_runs_loaded().await?;
-            if let Some(location) = self.index.read().unwrap().chunks.get(digest) {
-                return Ok(vec![location]);
+        loop {
+            let lazy = self.lazy_catalog.read().unwrap().clone();
+            if lazy
+                .run_refs
+                .values()
+                .any(|reference| reference.query.is_none())
+            {
+                self.ensure_catalog_runs_loaded().await?;
+                let lazy = {
+                    let index = self.index.read().unwrap();
+                    if let Some(location) = index.chunks.get(digest) {
+                        return Ok(vec![location]);
+                    }
+                    // Reselect under the index guard after materialization.
+                    self.lazy_catalog.read().unwrap().clone()
+                };
+                if lazy
+                    .run_refs
+                    .values()
+                    .any(|reference| reference.query.is_none())
+                {
+                    continue;
+                }
+                return self.reader().base_locations(&lazy, digest).await;
             }
-            lazy = self.lazy_catalog.read().unwrap().clone();
+            return self.reader().base_locations(&lazy, digest).await;
         }
-        self.reader().base_locations(&lazy, digest).await
     }
 
     #[cfg(test)]
@@ -3788,81 +3964,159 @@ impl PackedChunks {
             return Ok(());
         }
         let _load = self.catalog_run_load.lock().await;
-        let snapshot = self.lazy_catalog.read().unwrap().clone();
-        if snapshot.run_refs.is_empty() {
-            return Ok(());
-        }
+        loop {
+            let snapshot = self.lazy_catalog.read().unwrap().clone();
+            if snapshot.run_refs.is_empty() {
+                return Ok(());
+            }
 
-        let (overlay, materialized, loaded) = self.reader().materialize_runs(&snapshot).await?;
-        let mut overlay = overlay;
-        let mut materialized = materialized;
+            let result = self.reader().materialize_runs(&snapshot).await;
+            #[cfg(test)]
+            self.pause_catalog_read().await;
 
-        // Mutations may have landed while remote runs were loading. Capture
-        // and replay their latest exact state while holding the normal index
-        // then mutation lock order.
-        let mut current = self.index.write().unwrap();
-        let pending = self.pending_catalog.lock().unwrap();
-        let mut lazy = self.lazy_catalog.write().unwrap();
-        if lazy.run_refs != snapshot.run_refs || lazy.root_deltas != snapshot.root_deltas {
-            return Err(io::Error::other(
-                "pack catalog changed while immutable runs were loading",
-            ));
+            {
+                // Recheck the selected catalog before using either loaded bytes
+                // or an error: a superseded run need no longer be readable.
+                // Replay prepared state before newer pending mutations while
+                // holding transition -> index -> pending -> lazy.
+                let transition = self.catalog_transition.lock().unwrap();
+                let mut current = self.index.write().unwrap();
+                let pending = self.pending_catalog.lock().unwrap();
+                let mut lazy = self.lazy_catalog.write().unwrap();
+                let same_base = match (&lazy.base, &snapshot.base) {
+                    (Some(current), Some(selected)) => Arc::ptr_eq(&current.map, &selected.map),
+                    (None, None) => true,
+                    _ => false,
+                };
+                if same_base
+                    && lazy.run_refs == snapshot.run_refs
+                    && lazy.root_deltas == snapshot.root_deltas
+                {
+                    let (mut overlay, mut materialized, loaded) = result?;
+                    if let Some(delta) = transition
+                        .as_ref()
+                        .and_then(|prepared| prepared.delta.as_ref())
+                    {
+                        let decoded = decode_index_delta(delta)?;
+                        materialized.apply(&decoded);
+                        apply_decoded_index_delta(&mut overlay, decoded);
+                    }
+                    if !pending.is_empty() {
+                        let delta = encode_index_mutations(&current, &pending)?;
+                        let decoded = decode_index_delta(&delta)?;
+                        materialized.apply(&decoded);
+                        apply_decoded_index_delta(&mut overlay, decoded);
+                    }
+                    *current = overlay;
+                    *lazy = materialized;
+                    self.index_catalog.lock().unwrap().runs.extend(loaded);
+                    return Ok(());
+                }
+            }
+            // Synchronization superseded this load. Drop all synchronous guards
+            // before retrying, and remain cancellable even when reads hit caches.
+            tokio::task::yield_now().await;
         }
-        if !pending.is_empty() {
-            let delta = encode_index_mutations(&current, &pending)?;
-            let decoded = decode_index_delta(&delta)?;
-            materialized.apply(&decoded);
-            apply_decoded_index_delta(&mut overlay, decoded);
+    }
+
+    /// Capture a reader result only when the paired index contains all run
+    /// overlays. Synchronization can select a new deferred run after loading,
+    /// so the check and capture must share the index guard.
+    async fn materialized_catalog<T>(
+        &self,
+        capture: impl Fn(&Index, &LazyCatalogOverlay) -> T,
+    ) -> io::Result<T> {
+        loop {
+            #[cfg(test)]
+            {
+                let hook = self.catalog_materialize_hook.lock().unwrap().take();
+                if let Some(hook) = hook {
+                    let _ = hook.reached.send(());
+                    let _ = hook.resume.await;
+                }
+            }
+            {
+                let index = self.index.read().unwrap();
+                #[cfg(test)]
+                if let Some(hook) = self.catalog_capture_hook.lock().unwrap().take() {
+                    hook(self);
+                }
+                let lazy = self.lazy_catalog.read().unwrap();
+                if lazy.run_refs.is_empty() {
+                    return Ok(capture(&index, &lazy));
+                }
+            }
+            self.ensure_catalog_runs_loaded().await?;
         }
-        *current = overlay;
-        *lazy = materialized;
-        self.index_catalog.lock().unwrap().runs.extend(loaded);
-        Ok(())
     }
 
     async fn ensure_pack_loaded(&self, pack: PackId) -> io::Result<()> {
-        if self.index.read().unwrap().packs.contains_key(&pack) {
+        loop {
+            let base = self
+                .materialized_catalog(|index, lazy| {
+                    if index.packs.contains_key(&pack) || lazy.changed_packs.contains(&pack) {
+                        None
+                    } else {
+                        lazy.base.clone()
+                    }
+                })
+                .await?;
+            let Some(base) = base else {
+                return Ok(());
+            };
+            let prefix = digest_prefix(pack.as_digest(), base.map.shard_bits)?;
+            let Ok(at) = base
+                .map
+                .packs
+                .binary_search_by_key(&prefix, |shard| shard.prefix)
+            else {
+                return Ok(());
+            };
+            let reference = base.map.packs[at];
+            #[cfg(test)]
+            self.pause_catalog_read().await;
+            let bytes = self.load_catalog_shard(reference).await?;
+            let mut shard = decode_pack_shard(&bytes, prefix, reference.entries)?;
+            let Some(entries) = shard.packs.remove(&pack) else {
+                return Ok(());
+            };
+            let pack_len = shard
+                .pack_lengths
+                .remove(&pack)
+                .ok_or_else(|| io::Error::other("catalog pack shard has no pack length"))?;
+            let dead = shard.tombstoned.remove(&pack);
+            let records = shard.tombstone_records.remove(&pack);
+            let mut index = self.index.write().unwrap();
+            let lazy = self.lazy_catalog.read().unwrap();
+            if index.packs.contains_key(&pack) || lazy.changed_packs.contains(&pack) {
+                return Ok(());
+            }
+            if !lazy.run_refs.is_empty()
+                || !lazy
+                    .base
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(&current.map, &base.map))
+            {
+                continue;
+            }
+            if let Some(dead) = dead {
+                index.tombstoned.insert(pack, dead);
+            }
+            if let Some(records) = records {
+                index.tombstone_records.insert(pack, records);
+            }
+            index.add_pack(pack, pack_len, entries);
             return Ok(());
         }
-        let lazy = self.lazy_catalog.read().unwrap().clone();
-        if lazy.changed_packs.contains(&pack) {
-            return Ok(());
+    }
+
+    #[cfg(test)]
+    async fn pause_catalog_read(&self) {
+        let hook = self.catalog_read_hook.lock().unwrap().take();
+        if let Some(hook) = hook {
+            let _ = hook.reached.send(());
+            let _ = hook.resume.await;
         }
-        let Some(base) = lazy.base else {
-            return Ok(());
-        };
-        let prefix = digest_prefix(pack.as_digest(), base.map.shard_bits)?;
-        let Ok(at) = base
-            .map
-            .packs
-            .binary_search_by_key(&prefix, |shard| shard.prefix)
-        else {
-            return Ok(());
-        };
-        let reference = base.map.packs[at];
-        let bytes = self.load_catalog_shard(reference).await?;
-        let mut shard = decode_pack_shard(&bytes, prefix, reference.entries)?;
-        let Some(entries) = shard.packs.remove(&pack) else {
-            return Ok(());
-        };
-        let pack_len = shard
-            .pack_lengths
-            .remove(&pack)
-            .ok_or_else(|| io::Error::other("catalog pack shard has no pack length"))?;
-        let dead = shard.tombstoned.remove(&pack);
-        let records = shard.tombstone_records.remove(&pack);
-        let mut index = self.index.write().unwrap();
-        if index.packs.contains_key(&pack) {
-            return Ok(());
-        }
-        if let Some(dead) = dead {
-            index.tombstoned.insert(pack, dead);
-        }
-        if let Some(records) = records {
-            index.tombstone_records.insert(pack, records);
-        }
-        index.add_pack(pack, pack_len, entries);
-        Ok(())
     }
 
     #[cfg(test)]
@@ -4318,6 +4572,7 @@ impl PackedChunks {
             packed: self,
             changes: Some(mutations),
             background_start: None,
+            replay_cleanup: ReplayCleanup::LeaveUntouched,
         };
         let mutations = preparation.changes.as_ref().unwrap();
         let delta = if mutations.is_empty() {
@@ -6877,7 +7132,7 @@ mod tests {
         }
     }
 
-    fn chunk(data: &[u8]) -> (ChunkMeta, Bytes) {
+    pub(super) fn chunk(data: &[u8]) -> (ChunkMeta, Bytes) {
         let compressed = zstd::bulk::compress(data, 3).unwrap();
         (
             ChunkMeta {
@@ -6886,6 +7141,122 @@ mod tests {
             },
             compressed.into(),
         )
+    }
+
+    // A flush completes after synchronization decoded its incoming catalog,
+    // before it takes the writer lock. No disk-pressure injection is needed.
+    #[tokio::test]
+    async fn catalog_sync_preserves_concurrent_flush() {
+        let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let base = Path::from("sync-flush-race");
+        let empty = PackedChunks::empty_state_catalog().unwrap();
+        let writer = PackedChunks::open_with_state_catalog(
+            objects.clone(),
+            base.clone(),
+            u64::MAX,
+            0,
+            &empty,
+        )
+        .await
+        .unwrap();
+        let remote = PackedChunks::open_with_state_catalog(
+            objects.clone(),
+            base.clone(),
+            u64::MAX,
+            0,
+            &empty,
+        )
+        .await
+        .unwrap();
+        let (remote_meta, remote_bytes) = chunk(b"remote committed chunk");
+        remote
+            .put(remote_meta.clone(), remote_bytes.clone())
+            .await
+            .unwrap();
+        let catalog = remote.prepare_state_catalog().await.unwrap().unwrap();
+        remote
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
+        let (reached_tx, reached) = tokio::sync::oneshot::channel();
+        let (resume, resume_rx) = tokio::sync::oneshot::channel();
+        *writer.sync_dirty_hook.lock().unwrap() = Some(FlushHandoffHook {
+            reached: reached_tx,
+            resume: resume_rx,
+        });
+        let sync = tokio::spawn({
+            let writer = writer.clone();
+            async move { writer.synchronize_state_catalog(Some(&catalog)).await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(10), reached)
+            .await
+            .unwrap()
+            .unwrap();
+        let (meta, bytes) = chunk(b"locally flushed during synchronization");
+        writer.put(meta.clone(), bytes.clone()).await.unwrap();
+        writer.flush().await.unwrap();
+        assert_eq!(writer.get(&meta.digest).await.unwrap(), Some(bytes.clone()));
+        resume.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), sync)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            writer.get(&meta.digest).await.unwrap(),
+            Some(bytes.clone()),
+            "synchronization discarded a successfully flushed local pack"
+        );
+        assert_eq!(
+            writer.get(&remote_meta.digest).await.unwrap(),
+            Some(remote_bytes.clone())
+        );
+        let publication = writer.prepare_catalog().await.unwrap();
+        let merged = publication.catalog().unwrap().to_vec();
+        publication.commit().unwrap();
+        let reader = PackedChunks::open_with_state_catalog(objects, base, u64::MAX, 0, &merged)
+            .await
+            .unwrap();
+        for (meta, bytes) in [(meta, bytes), (remote_meta, remote_bytes)] {
+            assert_eq!(reader.get(&meta.digest).await.unwrap(), Some(bytes));
+        }
+    }
+
+    #[tokio::test]
+    async fn catalog_sync_preserves_prepared_changes_on_abort() {
+        let objects: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let base = Path::from("sync-prepared-race");
+        let empty = PackedChunks::empty_state_catalog().unwrap();
+        let local = PackedChunks::open_with_state_catalog(
+            objects.clone(),
+            base.clone(),
+            u64::MAX,
+            0,
+            &empty,
+        )
+        .await
+        .unwrap();
+        let remote = PackedChunks::open_with_state_catalog(objects, base, u64::MAX, 0, &empty)
+            .await
+            .unwrap();
+        let (meta, bytes) = chunk(b"prepared but not committed");
+        local.put(meta.clone(), bytes.clone()).await.unwrap();
+        let _candidate = local.prepare_state_catalog().await.unwrap().unwrap();
+        let (other, other_bytes) = chunk(b"another writer advances the catalog");
+        remote.put(other, other_bytes).await.unwrap();
+        let catalog = remote.prepare_state_catalog().await.unwrap().unwrap();
+        remote
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
+        local
+            .synchronize_state_catalog(Some(&catalog))
+            .await
+            .unwrap();
+        local.finish_state_catalog(CatalogOutcome::Aborted).unwrap();
+        assert_eq!(
+            local.get(&meta.digest).await.unwrap(),
+            Some(bytes),
+            "aborting after synchronization must retain unpublished bytes"
+        );
     }
 
     #[tokio::test]
@@ -7035,7 +7406,9 @@ mod tests {
         let (meta, bytes) = chunk(b"failed local marker must not retire its pack");
         store.put(meta.clone(), bytes).await.unwrap();
         store.prepare_state_catalog().await.unwrap().unwrap();
-        store.finish_state_catalog(true).unwrap();
+        store
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         let old = store.location(&meta.digest).await.unwrap().unwrap().pack;
         let marker = encode_replacement(old, None);
         let path = sharded_path(
@@ -7117,7 +7490,9 @@ mod tests {
             }
             store.register_manifest(held_manifest);
             let held_catalog = store.prepare_state_catalog().await.unwrap().unwrap();
-            store.finish_state_catalog(true).unwrap();
+            store
+                .finish_state_catalog(CatalogOutcome::Committed)
+                .unwrap();
             let held_pack = store.location(&held.digest).await.unwrap().unwrap().pack;
             let held_path = pack_path(&Path::default(), &held_pack);
             let (garbage, garbage_bytes) = chunk(b"unrelated local bytes");
@@ -7134,7 +7509,9 @@ mod tests {
             }
             store.register_manifest(garbage_manifest);
             store.prepare_state_catalog().await.unwrap().unwrap();
-            store.finish_state_catalog(true).unwrap();
+            store
+                .finish_state_catalog(CatalogOutcome::Committed)
+                .unwrap();
             let garbage_pack = store.location(&garbage.digest).await.unwrap().unwrap().pack;
             let garbage_path = pack_path(&Path::default(), &garbage_pack);
             assert_ne!(held_pack, garbage_pack);
@@ -7185,7 +7562,9 @@ mod tests {
                 "only emergency GC may reclaim before catalog publication"
             );
             store.prepare_state_catalog().await.unwrap().unwrap();
-            store.finish_state_catalog(true).unwrap();
+            store
+                .finish_state_catalog(CatalogOutcome::Committed)
+                .unwrap();
             store
                 .finish_collection_pinned(true, ledger.clone(), BTreeSet::new())
                 .await
@@ -7239,7 +7618,9 @@ mod tests {
         let (payload, bytes) = chunk(b"unrooted bytes deleted during emergency collection");
         store.put(payload.clone(), bytes.clone()).await.unwrap();
         let before = store.prepare_state_catalog().await.unwrap().unwrap();
-        store.finish_state_catalog(true).unwrap();
+        store
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         store.delete_many(&[payload.digest]).await.unwrap();
         store.finish_deletions(true).await.unwrap();
         drop(store); // process dies before its metadata commit
@@ -7257,7 +7638,9 @@ mod tests {
         assert!(!reopened.probe(&payload.digest).await.unwrap());
         reopened.put(payload.clone(), bytes.clone()).await.unwrap();
         reopened.prepare_state_catalog().await.unwrap().unwrap();
-        reopened.finish_state_catalog(true).unwrap();
+        reopened
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         assert_eq!(reopened.get(&payload.digest).await.unwrap(), Some(bytes));
     }
 
@@ -7369,13 +7752,17 @@ mod tests {
                 store.put(live.clone(), live_bytes.clone()).await.unwrap();
                 store.put(dead.clone(), dead_bytes).await.unwrap();
                 store.prepare_state_catalog().await.unwrap().unwrap();
-                store.finish_state_catalog(true).unwrap();
+                store
+                    .finish_state_catalog(CatalogOutcome::Committed)
+                    .unwrap();
                 let old_pack = store.location(&dead.digest).await.unwrap().unwrap().pack;
                 let old_path = pack_path(&base, &old_pack);
                 let (later, later_bytes) = chunk(b"retired by the next publication");
                 store.put(later.clone(), later_bytes).await.unwrap();
                 store.prepare_state_catalog().await.unwrap().unwrap();
-                store.finish_state_catalog(true).unwrap();
+                store
+                    .finish_state_catalog(CatalogOutcome::Committed)
+                    .unwrap();
                 let later_pack = store.location(&later.digest).await.unwrap().unwrap().pack;
                 let later_path = pack_path(&base, &later_pack);
 
@@ -7399,7 +7786,9 @@ mod tests {
                         .retirements
                         .contains(&later_path)
                 );
-                store.finish_state_catalog(true).unwrap();
+                store
+                    .finish_state_catalog(CatalogOutcome::Committed)
+                    .unwrap();
                 assert!(store.index_dirty.load(Ordering::Acquire));
                 assert!(
                     !store
@@ -7497,7 +7886,7 @@ mod tests {
                 if prepared {
                     // A failed publication restores its mutations. Cleanup
                     // must still defer on the next pass until retry succeeds.
-                    store.finish_state_catalog(false).unwrap();
+                    store.finish_state_catalog(CatalogOutcome::Aborted).unwrap();
                     assert!(store.index_dirty.load(Ordering::Acquire));
                 }
                 let collector = ledger.acquire_collection(None).await.unwrap().unwrap();
@@ -7508,7 +7897,9 @@ mod tests {
                 assert!(objects.head(&old_path).await.is_err());
                 assert!(objects.head(&later_path).await.is_ok());
                 store.prepare_state_catalog().await.unwrap().unwrap();
-                store.finish_state_catalog(true).unwrap();
+                store
+                    .finish_state_catalog(CatalogOutcome::Committed)
+                    .unwrap();
                 store
                     .finish_collection_pinned(true, ledger.clone(), BTreeSet::new())
                     .await
@@ -7559,14 +7950,16 @@ mod tests {
             }
             store.put(dead.clone(), dead_bytes.clone()).await.unwrap();
             let before = store.prepare_state_catalog().await.unwrap().unwrap();
-            store.finish_state_catalog(true).unwrap();
+            store
+                .finish_state_catalog(CatalogOutcome::Committed)
+                .unwrap();
             let old_pack = store.location(&dead.digest).await.unwrap().unwrap().pack;
             store.delete_many(&[dead.digest]).await.unwrap();
             store.finish_deletions(true).await.unwrap();
             assert!(objects.head(&pack_path(&base, &old_pack)).await.is_ok());
             assert!(store.finish_collection(false).await.is_err());
             let _candidate = store.prepare_state_catalog().await.unwrap().unwrap();
-            store.finish_state_catalog(false).unwrap();
+            store.finish_state_catalog(CatalogOutcome::Aborted).unwrap();
             assert!(objects.head(&pack_path(&base, &old_pack)).await.is_ok());
             drop(store); // interrupted before publishing the catalog
 
@@ -7590,7 +7983,9 @@ mod tests {
             reopened.delete_many(&[dead.digest]).await.unwrap();
             reopened.finish_deletions(true).await.unwrap();
             let after = reopened.prepare_state_catalog().await.unwrap().unwrap();
-            reopened.finish_state_catalog(true).unwrap();
+            reopened
+                .finish_state_catalog(CatalogOutcome::Committed)
+                .unwrap();
             reopened.finish_collection(false).await.unwrap();
             assert!(matches!(
                 objects.head(&pack_path(&base, &old_pack)).await,
@@ -7626,12 +8021,16 @@ mod tests {
                 let (meta, bytes) = chunk(b"retired content");
                 store.put(meta.clone(), bytes.clone()).await.unwrap();
                 store.prepare_state_catalog().await.unwrap().unwrap();
-                store.finish_state_catalog(true).unwrap();
+                store
+                    .finish_state_catalog(CatalogOutcome::Committed)
+                    .unwrap();
                 let old = store.location(&meta.digest).await.unwrap().unwrap().pack;
                 store.delete_many(&[meta.digest]).await.unwrap();
                 store.finish_deletions(true).await.unwrap();
                 let catalog = store.prepare_state_catalog().await.unwrap().unwrap();
-                store.finish_state_catalog(true).unwrap();
+                store
+                    .finish_state_catalog(CatalogOutcome::Committed)
+                    .unwrap();
                 assert!(objects.head(&pack_path(&base, &old)).await.is_ok());
                 let mut recovered = if restart {
                     drop(store); // crash after publication, before physical deletion
@@ -7650,7 +8049,9 @@ mod tests {
                 if reintroduce {
                     recovered.put(meta.clone(), bytes.clone()).await.unwrap();
                     let current = recovered.prepare_state_catalog().await.unwrap().unwrap();
-                    recovered.finish_state_catalog(true).unwrap();
+                    recovered
+                        .finish_state_catalog(CatalogOutcome::Committed)
+                        .unwrap();
                     if restart {
                         recovered = PackedChunks::open_with_state_catalog(
                             objects.clone(),
@@ -7988,7 +8389,9 @@ mod tests {
                 .unwrap(),
             old_pointer
         );
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
 
         let reader = PackedChunks::open(objects, base, u64::MAX).await.unwrap();
         assert!(reader.manifest_definitely_absent(&manifest));
@@ -8056,7 +8459,9 @@ mod tests {
         let manifest = BlobId::new(blake3::hash(b"state-seeded manifest").into());
         writer.register_manifest(manifest);
         let catalog = writer.prepare_state_catalog().await.unwrap().unwrap();
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
 
         objects
             .delete(&base.clone().join(INDEX_POINTER_NAME))
@@ -8335,7 +8740,9 @@ mod tests {
             .await
             .unwrap()
             .expect("a dirty sidecar publishes a catalog");
-        reader.finish_state_catalog(true).unwrap();
+        reader
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         let root = decode_delta_catalog(&next).unwrap();
         assert!(
             matches!(root.base, CatalogBase::Sharded { root, .. } if root == encoded.map_digest),
@@ -8768,7 +9175,9 @@ mod tests {
         let published_root = decode_delta_catalog(&published).unwrap();
         assert_eq!(published_root.runs.len(), 1);
         assert_eq!(published_root.deltas.len(), 2);
-        reader.finish_state_catalog(true).unwrap();
+        reader
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
 
         // Force the next publication to carry the lazy level-0 run without
         // materializing it as an Index. The carry should issue one whole-run
@@ -8794,7 +9203,9 @@ mod tests {
         let carried_run = carried_root.runs.get(&1).unwrap();
         assert_eq!(carried_run.first_generation, 2);
         assert_eq!(carried_run.last_generation, 5);
-        reader.finish_state_catalog(true).unwrap();
+        reader
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         assert_eq!(reader.lazy_catalog.read().unwrap().run_refs.len(), 1);
         assert_eq!(
             reader.metadata(&run_chunk.digest).await.unwrap(),
@@ -8935,7 +9346,9 @@ mod tests {
             writer.register_manifest(*digest);
         }
         writer.prepare_state_catalog().await.unwrap().unwrap();
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
 
         // A commit with no index mutation (here a sidecar) checkpoints the
         // whole materialized index. It outgrows the inline limit, so this
@@ -8945,7 +9358,9 @@ mod tests {
             .await
             .unwrap();
         writer.prepare_state_catalog().await.unwrap().unwrap();
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         let root = writer.index_catalog.lock().unwrap().root.clone().unwrap();
         assert!(matches!(root.base, CatalogBase::Sharded { .. }));
         assert!(root.runs.is_empty());
@@ -8964,7 +9379,9 @@ mod tests {
                 writer.register_manifest(*digest);
             }
             catalog = writer.prepare_state_catalog().await.unwrap().unwrap();
-            writer.finish_state_catalog(true).unwrap();
+            writer
+                .finish_state_catalog(CatalogOutcome::Committed)
+                .unwrap();
             let root = writer.index_catalog.lock().unwrap().root.clone().unwrap();
             assert!(root.deltas.is_empty());
             assert_eq!(root.runs.keys().copied().collect::<Vec<_>>(), levels);
@@ -9155,7 +9572,9 @@ mod tests {
         collector.delete_many(&[removed.digest]).await.unwrap();
         collector.finish_deletions(true).await.unwrap();
         let collected = collector.prepare_state_catalog().await.unwrap().unwrap();
-        collector.finish_state_catalog(true).unwrap();
+        collector
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
 
         let reopened =
             PackedChunks::open_with_state_catalog(objects, base, u64::MAX, 0, &collected)
@@ -9240,7 +9659,9 @@ mod tests {
         assert!(collector.index.read().unwrap().tombstoned.is_empty());
         collector.finish_deletions(true).await.unwrap();
         let collected = collector.prepare_state_catalog().await.unwrap().unwrap();
-        collector.finish_state_catalog(true).unwrap();
+        collector
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
 
         let reopened =
             PackedChunks::open_with_state_catalog(objects, base, u64::MAX, 0, &collected)
@@ -9461,7 +9882,9 @@ mod tests {
         let (old, old_bytes) = chunk(b"catalog before rebase");
         writer.put(old.clone(), old_bytes.clone()).await.unwrap();
         let old_catalog = writer.prepare_state_catalog().await.unwrap().unwrap();
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
 
         writer.set_catalog_rebase_run_bytes_for_test(1);
         let (added, added_bytes) = chunk(b"catalog included by rebase");
@@ -9490,7 +9913,9 @@ mod tests {
         );
         assert_eq!(before_commit.get(&added.digest).await.unwrap(), None);
 
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         // The triggering commit is immediately readable while immutable shard
         // construction proceeds independently.
         let after_commit = PackedChunks::open_with_state_catalog(
@@ -9524,7 +9949,9 @@ mod tests {
             .put(post_prepare.clone(), post_prepare_bytes.clone())
             .await
             .unwrap();
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         assert!(writer.read_stats().index_sharded_base);
         assert_eq!(
             writer.get(&later.digest).await.unwrap(),
@@ -9551,7 +9978,9 @@ mod tests {
         assert_eq!(committed.get(&post_prepare.digest).await.unwrap(), None);
 
         let next_catalog = writer.prepare_state_catalog().await.unwrap().unwrap();
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         let next = PackedChunks::open_with_state_catalog(objects, base, u64::MAX, 0, &next_catalog)
             .await
             .unwrap();
@@ -9647,11 +10076,15 @@ mod tests {
             writer.put(live.clone(), live_bytes.clone()).await.unwrap();
             writer.put(old.clone(), old_bytes.clone()).await.unwrap();
             let mut catalog = writer.prepare_state_catalog().await.unwrap().unwrap();
-            writer.finish_state_catalog(true).unwrap();
+            writer
+                .finish_state_catalog(CatalogOutcome::Committed)
+                .unwrap();
             if sharded {
                 writer.wait_for_background_catalog_rebase().await.unwrap();
                 catalog = writer.prepare_state_catalog().await.unwrap().unwrap();
-                writer.finish_state_catalog(true).unwrap();
+                writer
+                    .finish_state_catalog(CatalogOutcome::Committed)
+                    .unwrap();
                 assert!(matches!(
                     decode_delta_catalog(&catalog).unwrap().base,
                     CatalogBase::Sharded { .. }
@@ -9688,7 +10121,9 @@ mod tests {
             writer.delete_many(&[old.digest]).await.unwrap();
             writer.finish_deletions(true).await.unwrap();
             writer.prepare_state_catalog().await.unwrap().unwrap();
-            writer.finish_state_catalog(true).unwrap();
+            writer
+                .finish_state_catalog(CatalogOutcome::Committed)
+                .unwrap();
             assert_ne!(
                 writer.location(&live.digest).await.unwrap().unwrap().pack,
                 old_pack
@@ -10877,10 +11312,14 @@ mod tests {
         let (old, old_bytes) = chunk(b"catalog pin old chunk");
         writer.put(old.clone(), old_bytes.clone()).await.unwrap();
         let old_trigger = writer.prepare_state_catalog().await.unwrap().unwrap();
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         writer.wait_for_background_catalog_rebase().await.unwrap();
         let old_catalog = writer.prepare_state_catalog().await.unwrap().unwrap();
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         assert_ne!(old_catalog, old_trigger);
         let old_root = match decode_delta_catalog(&old_catalog).unwrap().base {
             CatalogBase::Sharded { root, .. } => root,
@@ -10902,10 +11341,14 @@ mod tests {
             .await
             .unwrap();
         let current_trigger = writer.prepare_state_catalog().await.unwrap().unwrap();
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         writer.wait_for_background_catalog_rebase().await.unwrap();
         let current_catalog = writer.prepare_state_catalog().await.unwrap().unwrap();
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         assert_ne!(current_catalog, current_trigger);
         let current_root = match decode_delta_catalog(&current_catalog).unwrap().base {
             CatalogBase::Sharded { root, .. } => root,
@@ -11053,10 +11496,14 @@ mod tests {
         let error = writer.reclaim_catalog_objects(&[]).await.unwrap_err();
         assert!(error.to_string().contains("state commit is prepared"));
 
-        writer.finish_state_catalog(false).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Aborted)
+            .unwrap();
         let retry = writer.prepare_state_catalog().await.unwrap().unwrap();
         assert_eq!(retry, prepared);
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
     }
 
     #[tokio::test]
@@ -11199,7 +11646,9 @@ mod tests {
         let (first, bytes) = chunk(b"first maintained chunk");
         writer.put(first.clone(), bytes.clone()).await.unwrap();
         writer.prepare_state_catalog().await.unwrap().unwrap();
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         writer.set_catalog_rebase_run_bytes_for_test(1);
         let (second, second_bytes) = chunk(b"second maintained chunk");
         writer
@@ -11207,7 +11656,9 @@ mod tests {
             .await
             .unwrap();
         let catalog = writer.prepare_state_catalog().await.unwrap().unwrap();
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         let mut maintenance = writer.take_catalog_maintenance().unwrap();
         fault.fail_catalog_put(2);
         assert!(maintenance.run().await.is_err());
@@ -11241,11 +11692,15 @@ mod tests {
             .await
             .unwrap();
         writer.prepare_state_catalog().await.unwrap().unwrap();
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         let mut maintenance = writer.take_catalog_maintenance().unwrap();
         maintenance.run().await.unwrap();
         let catalog = writer.prepare_state_catalog().await.unwrap().unwrap();
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         drop(maintenance);
         let reopened = PackedChunks::open_with_state_catalog(objects, base, u64::MAX, 0, &catalog)
             .await
@@ -11273,7 +11728,9 @@ mod tests {
         let (old, old_bytes) = chunk(b"rebase upload old chunk");
         writer.put(old.clone(), old_bytes.clone()).await.unwrap();
         let old_catalog = writer.prepare_state_catalog().await.unwrap().unwrap();
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
 
         writer.set_catalog_rebase_run_bytes_for_test(1);
         let (added, added_bytes) = chunk(b"rebase upload new chunk");
@@ -11283,7 +11740,9 @@ mod tests {
             .unwrap();
         fault.fail_catalog_put(2);
         let trigger_catalog = writer.prepare_state_catalog().await.unwrap().unwrap();
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         let error = writer
             .wait_for_background_catalog_rebase()
             .await
@@ -11332,7 +11791,9 @@ mod tests {
         assert_eq!(writer.prepare_state_catalog().await.unwrap(), None);
         writer.wait_for_background_catalog_rebase().await.unwrap();
         let retry_catalog = writer.prepare_state_catalog().await.unwrap().unwrap();
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         let reopened =
             PackedChunks::open_with_state_catalog(objects, base, u64::MAX, 0, &retry_catalog)
                 .await
@@ -11361,7 +11822,9 @@ mod tests {
         let (old, old_bytes) = chunk(b"rebase commit old chunk");
         writer.put(old.clone(), old_bytes.clone()).await.unwrap();
         let old_catalog = writer.prepare_state_catalog().await.unwrap().unwrap();
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
 
         writer.set_catalog_rebase_run_bytes_for_test(1);
         let (added, added_bytes) = chunk(b"rebase commit retried chunk");
@@ -11370,7 +11833,9 @@ mod tests {
             .await
             .unwrap();
         let uncommitted = writer.prepare_state_catalog().await.unwrap().unwrap();
-        writer.finish_state_catalog(false).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Aborted)
+            .unwrap();
 
         let old_reader = PackedChunks::open_with_state_catalog(
             objects.clone(),
@@ -11386,7 +11851,9 @@ mod tests {
 
         let retry = writer.prepare_state_catalog().await.unwrap().unwrap();
         assert_eq!(retry, uncommitted);
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
         let reopened = PackedChunks::open_with_state_catalog(objects, base, u64::MAX, 0, &retry)
             .await
             .unwrap();
@@ -11484,6 +11951,99 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn catalog_sync_after_failed_or_cancelled_preparation_preserves_retry() {
+        for fail in [false, true] {
+            let fault = Arc::new(FailingCatalogPutStore::new());
+            let objects: Arc<dyn ObjectStore> = fault.clone();
+            let base = Path::from("sync-after-interrupted-preparation");
+            let empty = PackedChunks::empty_state_catalog().unwrap();
+            let local = PackedChunks::open_with_state_catalog(
+                objects.clone(),
+                base.clone(),
+                u64::MAX,
+                0,
+                &empty,
+            )
+            .await
+            .unwrap();
+            let (first, first_bytes) = chunk(b"payload from interrupted preparation");
+            local.put(first.clone(), first_bytes.clone()).await.unwrap();
+            // Force a real immutable catalog PUT, beyond the inline delta.
+            let manifest_count = delta::MAX_INLINE_DELTA_BYTES / DIGEST_LEN + 1;
+            for ordinal in 0..manifest_count {
+                local.register_manifest(BlobId::new(Digest::hash(&ordinal.to_le_bytes())));
+            }
+            if fail {
+                fault.fail_catalog_put(1);
+                let error = match local.prepare_catalog().await {
+                    Err(error) => error,
+                    Ok(_) => panic!("catalog preparation unexpectedly succeeded"),
+                };
+                assert!(
+                    error
+                        .to_string()
+                        .contains("injected catalog shard PUT failure")
+                );
+            } else {
+                fault.pause_catalog_put();
+                let prepare = local.prepare_catalog();
+                tokio::pin!(prepare);
+                tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                    tokio::select! {
+                        _ = async { while fault.catalog_puts.load(Ordering::SeqCst) == 0 { tokio::task::yield_now().await; } } => {},
+                        _ = &mut prepare => panic!("preparation did not pause"),
+                    }
+                }).await.unwrap();
+                // Dropping the in-flight preparation restores its exact changes.
+            }
+            fault.disarm();
+            let remote = PackedChunks::open_with_state_catalog(
+                objects.clone(),
+                base.clone(),
+                u64::MAX,
+                0,
+                &empty,
+            )
+            .await
+            .unwrap();
+            let (other, other_bytes) = chunk(b"remote after interrupted preparation");
+            remote
+                .put(other.clone(), other_bytes.clone())
+                .await
+                .unwrap();
+            let advance = remote.prepare_catalog().await.unwrap();
+            let catalog = advance.catalog().unwrap().to_vec();
+            advance.commit().unwrap();
+            local
+                .synchronize_state_catalog(Some(&catalog))
+                .await
+                .unwrap();
+            assert_eq!(
+                local.get(&first.digest).await.unwrap(),
+                Some(first_bytes.clone())
+            );
+            let retry = local.prepare_catalog().await.unwrap();
+            let merged = retry.catalog().unwrap().to_vec();
+            retry.commit().unwrap();
+            let reader = PackedChunks::open_with_state_catalog(objects, base, u64::MAX, 0, &merged)
+                .await
+                .unwrap();
+            for (meta, bytes) in [(first, first_bytes), (other, other_bytes)] {
+                assert_eq!(reader.get(&meta.digest).await.unwrap(), Some(bytes));
+            }
+            assert_eq!(
+                reader
+                    .list_manifests()
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .unwrap()
+                    .len(),
+                manifest_count
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn cancelled_publication_restores_mutations_and_retirements() {
         for standalone in [false, true] {
             let fault = Arc::new(FailingCatalogPutStore::new());
@@ -11520,7 +12080,9 @@ mod tests {
                 store.flush().await.unwrap();
             } else {
                 store.prepare_state_catalog().await.unwrap().unwrap();
-                store.finish_state_catalog(true).unwrap();
+                store
+                    .finish_state_catalog(CatalogOutcome::Committed)
+                    .unwrap();
             }
             store.unregister_manifest_retiring(old, HashSet::from([old_path.clone()]));
             let mut last = None;
@@ -11571,7 +12133,9 @@ mod tests {
                     .unwrap()
             } else {
                 let catalog = store.prepare_state_catalog().await.unwrap().unwrap();
-                store.finish_state_catalog(true).unwrap();
+                store
+                    .finish_state_catalog(CatalogOutcome::Committed)
+                    .unwrap();
                 PackedChunks::open_with_state_catalog(
                     objects.clone(),
                     base.clone(),
@@ -11619,10 +12183,14 @@ mod tests {
         assert!(!reader.manifest_definitely_absent(&first));
         assert!(reader.manifest_definitely_absent(&later));
 
-        writer.finish_state_catalog(false).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Aborted)
+            .unwrap();
         let retry_catalog = writer.prepare_state_catalog().await.unwrap().unwrap();
         assert_ne!(retry_catalog, first_catalog);
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
 
         reader
             .synchronize_state_catalog(Some(&retry_catalog))
@@ -11644,7 +12212,9 @@ mod tests {
         let (meta, compressed) = chunk(b"state catalog gc payload");
         writer.put(meta.clone(), compressed).await.unwrap();
         let initial = writer.prepare_state_catalog().await.unwrap().unwrap();
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
 
         writer.delete_many(&[meta.digest]).await.unwrap();
         writer.reset_read_stats();
@@ -11652,7 +12222,9 @@ mod tests {
         assert_eq!(writer.read_stats().index_put_requests, 0);
         let collected = writer.prepare_state_catalog().await.unwrap().unwrap();
         assert_ne!(collected, initial);
-        writer.finish_state_catalog(true).unwrap();
+        writer
+            .finish_state_catalog(CatalogOutcome::Committed)
+            .unwrap();
 
         let reader = PackedChunks::open(objects, base, u64::MAX).await.unwrap();
         reader

@@ -339,4 +339,6 @@ mod collection_benchmark;
 mod fsck_benchmark;
 
 #[cfg(test)]
+mod catalog_sync_tests;
+#[cfg(test)]
 mod tests;
