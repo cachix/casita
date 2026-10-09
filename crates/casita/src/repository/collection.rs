@@ -246,12 +246,18 @@ where
         let live_objects = live_objects.freeze().await?;
 
         let mut logical_objects = 0usize;
-        let mut records = snapshot.objects_unordered();
-        while let Some(record) = records.next().await {
-            let record = record?;
-            if !live_objects.contains(record.key()).await? {
-                logical_objects += 1;
-            }
+        let mut records = snapshot
+            .objects_unordered()
+            .map_ok(|record| record.key().clone())
+            .try_chunks(CLOSURE_FRONTIER);
+        while let Some(keys) = records.next().await {
+            let keys = keys.map_err(|error| error.1)?;
+            logical_objects += live_objects
+                .contains_batch(&keys)
+                .await?
+                .into_iter()
+                .filter(|present| !present)
+                .count();
         }
 
         Ok(LogicalCollectionPlan {
@@ -1132,19 +1138,23 @@ where
             let Some(last) = payloads.last().copied() else {
                 break;
             };
-            let reads = payloads.into_iter().map(|payload| async move {
-                let manifest_present = physical_blobs.contains(&payload).await?;
-                let chunks = self
-                    .payloads
-                    .chunks_for_gc(&payload, manifest_present)
-                    .await?
-                    .ok_or_else(|| {
-                        MetadataError::Corruption(format!(
-                            "reachable object payload {payload} is physically absent"
-                        ))
-                    })?;
-                Ok::<_, RepositoryError>(chunks)
-            });
+            let manifests = physical_blobs.contains_batch(&payloads).await?;
+            let reads =
+                payloads
+                    .into_iter()
+                    .zip(manifests)
+                    .map(|(payload, manifest_present)| async move {
+                        let chunks = self
+                            .payloads
+                            .chunks_for_gc(&payload, manifest_present)
+                            .await?
+                            .ok_or_else(|| {
+                                MetadataError::Corruption(format!(
+                                    "reachable object payload {payload} is physically absent"
+                                ))
+                            })?;
+                        Ok::<_, RepositoryError>(chunks)
+                    });
             let reads = futures::stream::iter(reads).buffered(COLLECTION_PAYLOAD_READS);
             futures::pin_mut!(reads);
             while let Some(chunks) = reads.next().await {
@@ -1180,11 +1190,14 @@ where
             let Some(last) = page.last().copied() else {
                 break;
             };
-            for payload in page {
-                if live_payloads.contains(&payload).await? {
-                    continue;
-                }
-                let present = physical_blobs.contains(&payload).await?;
+            let live = live_payloads.contains_batch(&page).await?;
+            let unpublished: Vec<_> = page
+                .into_iter()
+                .zip(live)
+                .filter_map(|(payload, live)| (!live).then_some(payload))
+                .collect();
+            let manifests = physical_blobs.contains_batch(&unpublished).await?;
+            for (payload, present) in unpublished.into_iter().zip(manifests) {
                 if let Some(chunks) = self.payloads.chunks_for_gc(&payload, present).await? {
                     for chunk in chunks {
                         live_chunks.insert(chunk.digest).await?;
@@ -1201,9 +1214,15 @@ where
             let Some(last) = blobs.last().copied() else {
                 break;
             };
-            for blob in blobs {
-                if !live_payloads.contains(&blob).await? && !pinned_payloads.contains(&blob).await?
-                {
+            let live = live_payloads.contains_batch(&blobs).await?;
+            let candidates: Vec<_> = blobs
+                .into_iter()
+                .zip(live)
+                .filter_map(|(blob, live)| (!live).then_some(blob))
+                .collect();
+            let pinned = pinned_payloads.contains_batch(&candidates).await?;
+            for (blob, pinned) in candidates.into_iter().zip(pinned) {
+                if !pinned {
                     stale_blobs.insert(blob).await?;
                 }
             }
@@ -1213,11 +1232,14 @@ where
         drop(live_payloads);
         let live_chunks = live_chunks.freeze().await?;
         let mut stale_chunks = SpillSet::new(area.clone(), "stale-chunks");
-        let mut chunks = self.payloads.list_chunks();
-        while let Some(chunk) = chunks.next().await {
-            let chunk = chunk?;
-            if !live_chunks.contains(&chunk).await? {
-                stale_chunks.insert(chunk).await?;
+        let mut chunks = self.payloads.list_chunks().try_chunks(CLOSURE_FRONTIER);
+        while let Some(page) = chunks.next().await {
+            let page = page.map_err(|error| error.1)?;
+            let live = live_chunks.contains_batch(&page).await?;
+            for (chunk, live) in page.into_iter().zip(live) {
+                if !live {
+                    stale_chunks.insert(chunk).await?;
+                }
             }
         }
         drop(chunks);

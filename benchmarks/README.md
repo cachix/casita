@@ -603,6 +603,37 @@ retained. This isolates metadata collection, not graph traversal or payload
 reclamation. The first collection follows seeding and does not imply a cold OS
 cache. The paging investigation's paired results remain in the report above.
 
+### Full collection inventory
+
+The [membership batching comparison](reports/2026-10-09-collection-membership/README.md)
+records paired upstream and batched planning times, spill counts and stalls
+common to both builds.
+
+```console
+$ benchmark run collection-inventory --profile smoke --repetitions 1 --output benchmarks/results/collection-inventory.json
+```
+
+This probe uses memory metadata and chunked payloads to time the whole collection
+plan: lock acquisition, logical marking, manifest classification and chunk
+classification. Setup, plan disposal, a separate collecting pass and exhaustive
+retained-data audits are outside timing. Process RSS includes all these phases.
+It checks five exact orphan removals, every live metadata record and payload,
+shared directory edges, the remaining chunk set, unchanged preview revision and
+spill cleanup. Live files use distinct 4,096-byte repeating patterns, except for
+one eight-byte file; all five orphans are 4,096 bytes. With 1,024-byte average
+chunks, this exercises both stored manifests and single-chunk manifest elision.
+The fixture checks these representations before timing. It does not measure a
+complete server ingestion or sweep latency.
+
+Smoke uses 255, 256 and 257 live files; standard also uses 8,192. The default
+memory limits are 17, file count, file count plus one, file count plus two and
+sixteen times file count plus 128. These cover forced spill, the live-object set
+boundary (files plus the directory) and an in-memory control. Other inventories
+and the traversal queue may still spill around the live-object boundary.
+Use `--counts`, `--memory-limits` and `--probe-binary` for controlled comparisons.
+Raw process output, executable hash and a deterministic schedule accompany each
+result. Plan timings are separate from whole-process resource measurements.
+
 ### Ordered metadata inventory
 
 The [2026-09-08 ordered-scan investigation](reports/2026-09-08-ordered-scan.md)
