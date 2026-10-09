@@ -4,7 +4,7 @@ use futures::FutureExt;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use super::MetadataError;
 
@@ -57,9 +57,8 @@ impl RepositoryLease {
 struct Releases {
     pending: usize,
     error: Option<MetadataError>,
+    changed: Arc<tokio::sync::Notify>,
 }
-
-static RELEASE_CHANGED: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
 fn releases() -> &'static Mutex<HashMap<tokio::runtime::Id, Releases>> {
     static RELEASES: OnceLock<Mutex<HashMap<tokio::runtime::Id, Releases>>> = OnceLock::new();
@@ -92,7 +91,7 @@ pub(crate) fn spawn_lease_task(
             tracing::error!("repository background task failed: {error}");
             pending.error.get_or_insert(error);
         }
-        RELEASE_CHANGED.notify_waiters();
+        pending.changed.notify_waiters();
     });
 }
 
@@ -144,10 +143,7 @@ impl Drop for RepositoryLease {
 pub async fn flush_repository_leases() -> Result<(), MetadataError> {
     let id = tokio::runtime::Handle::current().id();
     loop {
-        let changed = RELEASE_CHANGED.notified();
-        tokio::pin!(changed);
-        changed.as_mut().enable();
-        {
+        let changed = {
             let mut all = releases().lock().unwrap_or_else(|e| e.into_inner());
             let Some(pending) = all.get(&id) else {
                 return Ok(());
@@ -155,7 +151,13 @@ pub async fn flush_repository_leases() -> Result<(), MetadataError> {
             if pending.pending == 0 {
                 return all.remove(&id).unwrap().error.map_or(Ok(()), Err);
             }
-        }
+            // Register under the same lock used by completion. Reacquire the
+            // current entry each loop: another drain may remove an idle entry
+            // before a new task creates its replacement.
+            let mut changed = Box::pin(pending.changed.clone().notified_owned());
+            changed.as_mut().enable();
+            changed
+        };
         changed.await;
     }
 }
@@ -163,6 +165,65 @@ pub async fn flush_repository_leases() -> Result<(), MetadataError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unrelated_runtime_completion_does_not_wake_a_lease_drain() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use std::task::{Context, Wake, Waker};
+        struct CountWake(AtomicUsize);
+        impl Wake for CountWake {
+            fn wake(self: Arc<Self>) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let owner = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let other = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let resume = Arc::new(tokio::sync::Notify::new());
+        let wait = resume.clone();
+        let wakes = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = Waker::from(wakes.clone());
+        owner.block_on(async {
+            spawn_lease_task(async move {
+                wait.notified().await;
+                Ok(())
+            });
+            tokio::task::yield_now().await;
+        });
+        let mut drain = Box::pin(flush_repository_leases());
+        {
+            let _entered = owner.enter();
+            assert!(
+                drain
+                    .as_mut()
+                    .poll(&mut Context::from_waker(&waker))
+                    .is_pending()
+            );
+        }
+        other.block_on(async {
+            spawn_lease_task(async { Ok(()) });
+            flush_repository_leases().await.unwrap();
+        });
+        let unrelated_wakes = wakes.0.load(Ordering::SeqCst);
+        // Clean up both runtimes before asserting, including on the broken implementation.
+        resume.notify_one();
+        owner.block_on(drain.as_mut()).unwrap();
+        assert_eq!(
+            unrelated_wakes, 0,
+            "another runtime woke this runtime's drain"
+        );
+    }
 
     #[tokio::test]
     async fn foreground_reply_does_not_hide_later_cleanup_failure() {
