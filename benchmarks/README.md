@@ -603,6 +603,33 @@ retained. This isolates metadata collection, not graph traversal or payload
 reclamation. The first collection follows seeding and does not imply a cold OS
 cache. The paging investigation's paired results remain in the report above.
 
+### Collection graph marking
+
+The [named-root marking comparison](reports/2026-10-06-collection-mark/README.md)
+records the paired results and their limits.
+
+```console
+$ benchmark run collection-mark --profile smoke --repetitions 1 --output benchmarks/results/collection-mark.json
+```
+
+Named-root and pin marking run over reopened Turso metadata in which each
+parent has one edge: to a shared leaf, to its own leaf, or, for a single-root
+chain, to the next directory. Smoke uses 127, 128, 255 and 256 parents;
+standard adds 257 and 8,192. Both use 256- and 250,000-key (default) spill
+limits, so the small cases straddle the spill limit and the 256-key traversal
+frontier. `--shape`, `--parents`, `--memory-limits`, `--iterations`,
+`--repetitions`, `--strategy legacy|current` and `--mode named|pins` select
+dimensions.
+
+The previous named-root traversal is compiled into the probe as `legacy`.
+Each process runs one strategy and mode; matching legacy/current processes run
+adjacently, in reversed order on even repetitions. Pins run the same code under
+both labels and serve as a control. Every process checks the exact marked set,
+its cardinality, whether it spilled and the reopened revision. Timing excludes
+fixture construction, audits and returned mark-set cleanup; record reads, spill
+files and bytes, and process RSS are retained. The suite is registered in
+`benchmark all`, revision comparisons and the dashboard.
+
 ### Ordered metadata inventory
 
 The [2026-09-08 ordered-scan investigation](reports/2026-09-08-ordered-scan.md)

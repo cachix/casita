@@ -1318,6 +1318,17 @@
       ]
     },
     {
+      "id": "collection-mark",
+      "suite_id": "collection-and-fsck",
+      "title": "Collection marks over shared graphs, deep chains and spill boundaries",
+      "kind": "module",
+      "target": "benchmarks.suites.collection_mark",
+      "profiles": [
+        "smoke",
+        "standard"
+      ]
+    },
+    {
       "id": "repository",
       "suite_id": "repository-e2e",
       "title": "Repository workflow comparison",

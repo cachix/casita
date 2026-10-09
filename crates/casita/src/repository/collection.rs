@@ -1346,14 +1346,31 @@ pub(super) async fn mark_named_roots(
         if frontier.is_empty() {
             break;
         }
+        // Mark before fetching so repeated edges are read once; insert already
+        // tests membership. Any missing record fails the whole pass, so these
+        // provisional marks never reach pruning.
+        let mut visited = marked.len();
+        let mut pending = Vec::new();
+        for (from, key) in frontier {
+            if marked.insert(key.clone()).await? {
+                pending.push((from, key));
+                // Stop at the first key past the limit. The loop below reports it
+                // only after any earlier missing record, as before.
+                if marked.len() > max_objects {
+                    break;
+                }
+            }
+        }
+        let frontier = pending;
+        if frontier.is_empty() {
+            continue;
+        }
         let keys: Vec<_> = frontier.iter().map(|(_, key)| key.clone()).collect();
         let found = snapshot.object_batch(&keys).await?;
 
         for ((from, key), record) in frontier.into_iter().zip(found) {
-            if !marked.insert(key.clone()).await? {
-                continue;
-            }
-            if marked.len() > max_objects {
+            visited += 1;
+            if visited > max_objects {
                 return Err(RepositoryError::LimitExceeded(format!(
                     "collection mark exceeded {max_objects} objects"
                 )));
