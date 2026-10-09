@@ -189,6 +189,7 @@ SUITE_BUILD_SPECS["git-ingest-concurrency"] = SuiteBuildSpec(
     "--casita-bin", "casita", relative_artifact="release/casita",
 )
 SUITE_BUILD_SPECS["metadata-scan"] = SUITE_BUILD_SPECS["metadata-collection"]
+SUITE_BUILD_SPECS["collection-mark"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["memory-snapshots"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["memory-publication"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["memory-index-lifecycle"] = SUITE_BUILD_SPECS["metadata-collection"]

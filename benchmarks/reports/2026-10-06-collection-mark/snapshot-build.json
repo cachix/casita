@@ -1,0 +1,11 @@
+{
+  "crates_casita_tree": "80489acc05c3859f95cf29c21e3ee782994a6574",
+  "command": "cargo test --release --features cli --lib --no-run --message-format=json",
+  "profile": "Cargo release profile defaults",
+  "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+  "lockfile": {
+    "sha256": "6d53fd6e7d4836f70c740024695f3d11a106e71f074157b442da08194e2673f3",
+    "note": "Cargo.lock is untracked; generated at cachix/casita 84ec292 and shared by every build."
+  },
+  "binary_sha256": "a95b5444859068bf15b1bf031afc8a593d988c177946f0a7f5fe040c1db396e8"
+}
