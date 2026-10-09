@@ -233,15 +233,46 @@ where
             Some(start) => start.before_mutation(self.profile.spill_limits()).await?,
             None => false,
         };
-        let pin = crate::metadata::DataPinLease::acquire(
-            self.state.pin_store().await?,
-            crate::metadata::DataPin {
-                scope: crate::metadata::PinScope::Staging,
-                catalog: None,
-                resources: BTreeSet::new(),
-            },
-        )
-        .await?;
+        let pins = self.state.pin_store().await?;
+        // Register the current catalog with the staging pin when possible.
+        // Admission still rechecks the metadata revision below, so a catalog
+        // change between the snapshot and registration is protected there.
+        let initial = if self.publication.coordinates_payload_catalog() {
+            let snapshot = self.state.snapshot().await?;
+            let mut resources = snapshot.retention_resources();
+            if let Some(catalog) = snapshot.payload_catalog() {
+                resources.insert(crate::metadata::PinResource::Catalog(catalog.to_vec()));
+            }
+            if resources.is_empty() {
+                None
+            } else {
+                crate::metadata::DataPinLease::try_acquire(
+                    pins.clone(),
+                    crate::metadata::DataPin {
+                        scope: crate::metadata::PinScope::Staging,
+                        catalog: None,
+                        resources,
+                    },
+                )
+                .await?
+            }
+        } else {
+            None
+        };
+        let pin = match initial {
+            Some(pin) => pin,
+            None => {
+                crate::metadata::DataPinLease::acquire(
+                    pins,
+                    crate::metadata::DataPin {
+                        scope: crate::metadata::PinScope::Staging,
+                        catalog: None,
+                        resources: BTreeSet::new(),
+                    },
+                )
+                .await?
+            }
+        };
         let payload_batch = self.payloads.begin_pinned_batch(pin.clone())?;
         // One discovery refresh is sufficient for the complete mutation. A
         // racing writer may cause a redundant immutable upload, but cannot

@@ -60,6 +60,10 @@ impl PublicationRetry {
 }
 
 impl Publication {
+    pub(super) fn coordinates_payload_catalog(&self) -> bool {
+        self.lock.is_some()
+    }
+
     pub(super) fn new<PS: BlobStore + 'static, SS: MetadataStore + 'static>(
         payloads: Arc<PS>,
         metadata: Arc<SS>,
