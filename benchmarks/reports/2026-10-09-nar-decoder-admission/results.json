@@ -1,0 +1,5881 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-09",
+  "builds": {
+    "upstream": {
+      "commit": "1407672f4b235609ae7fff0f87a30e06183f941f",
+      "crates_casita_tree": "dbb21e518940fa829ce922c6a2b9d457af4d5ff4",
+      "harness_from_candidate": {
+        "crates/casita/tests/nar_decoder_admission.rs": "fb31c712938e30a56cf7b82624b756d21f555d9e",
+        "benchmarks/fixtures/nar_decoder.rs": "2113817f76ea6da9d87ce3b9a1fa9a4642716c97",
+        "crates/casita/benches/nar_import.rs": "1d85ad10efec298919e21f82b33a1a48f23c01ce"
+      },
+      "bench_sha256": "40cab1802fdba9152b9514cad6e5e5c746246c5aeaf96e531548a229b8362459",
+      "integration_test_sha256": "b71da7cfb3075a3910c1c5a1921cd845441525628b72289e970c98a3aa57f41b"
+    },
+    "candidate": {
+      "crates_casita_tree": "bd2635adfd4f2f9cc3aab6443c570e866a0f9ac8",
+      "bench_sha256": "b13651734cf51e3a446a527ad984d3f6897191cae7fdcbaf7fe62ea1b4f5706b",
+      "integration_test_sha256": "0c7da07d050612e93339d4cc3fd544808b43b8b58220275662a7ee0aaa5e5626",
+      "library_test_sha256": "f37bae57e2af327662ee24fe4f55b154da16fda3a1fe967fa52db4e537da8d40"
+    },
+    "pooled_variant": {
+      "description": "Rejected alternative: decoder threads from a dedicated, never-driven runtime's blocking pool, keeping the 16-slot admission; otherwise this commit.",
+      "bench_sha256": "0e43a0a2d83fe966c28ff82f8554124b0c95b23a6a402d19ab9a4f1ab67f8946"
+    },
+    "bench_command": "cargo bench -p casita --features native --bench nar_import --no-run",
+    "test_command": "cargo test -p casita --features native --test nar_decoder_admission --lib --no-run",
+    "profile": "Cargo bench profile for benchmarks, test profile for tests",
+    "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+    "lockfile": {
+      "sha256": "6d53fd6e7d4836f70c740024695f3d11a106e71f074157b442da08194e2673f3",
+      "note": "Cargo.lock is untracked; generated at cachix/casita 84ec292 and shared by every build."
+    }
+  },
+  "host": {
+    "cpu": "AMD EPYC 9454P 48-Core Processor, 96 hardware threads",
+    "kernel": "Linux 6.18.42",
+    "filesystem": "ZFS",
+    "pinning": "taskset -c 36-41 (one L3 domain)",
+    "note": "Shared host; other users' load was present. Runs were serial and nothing else from this work ran during timing."
+  },
+  "commands": {
+    "main": "CRITERION_HOME=<run> taskset -c 36-41 <nar_import> --bench --noplot '^(nar_import|nar_import_sequence|nar_decoder_admission)/|^nar_decoder_pool/(workers-2/|workers-1/8388608$)'",
+    "candidate_only": "CRITERION_HOME=<run> taskset -c 36-41 <nar_import> --bench --noplot '^nar_decoder_pool/workers-1/33554432$'",
+    "followup": "CRITERION_HOME=<run> taskset -c 36-41 <nar_import> --bench --noplot '^nar_import/bytes-1024/1$|^nar_import/bytes-65536/2048$|^nar_import_sequence/'",
+    "pooled_probe": "CRITERION_HOME=<run> taskset -c 36-41 <nar_import> --bench --noplot '^nar_import_sequence/'"
+  },
+  "tests": {
+    "library_nar_passed": 54,
+    "integration": [
+      {
+        "build": "candidate",
+        "test": "durable_intake_crosses_the_buffer_window_with_one_worker",
+        "exit_code": 0,
+        "seconds": 9.12,
+        "watchdog_exceeded": false
+      },
+      {
+        "build": "upstream",
+        "test": "durable_intake_crosses_the_buffer_window_with_one_worker",
+        "exit_code": 101,
+        "seconds": 60.03,
+        "watchdog_exceeded": true
+      },
+      {
+        "build": "candidate",
+        "test": "concurrent_repositories_import_large_archives_with_one_worker",
+        "exit_code": 0,
+        "seconds": 6.74,
+        "watchdog_exceeded": false
+      },
+      {
+        "build": "upstream",
+        "test": "concurrent_repositories_import_large_archives_with_one_worker",
+        "exit_code": 101,
+        "seconds": 60.02,
+        "watchdog_exceeded": true
+      },
+      {
+        "build": "candidate",
+        "test": "fewer_large_imports_than_blocking_workers",
+        "exit_code": 0,
+        "seconds": 10.59,
+        "watchdog_exceeded": false
+      },
+      {
+        "build": "upstream",
+        "test": "fewer_large_imports_than_blocking_workers",
+        "exit_code": 0,
+        "seconds": 10.66,
+        "watchdog_exceeded": false
+      },
+      {
+        "build": "candidate",
+        "test": "as_many_large_imports_as_blocking_workers",
+        "exit_code": 0,
+        "seconds": 13.96,
+        "watchdog_exceeded": false
+      },
+      {
+        "build": "upstream",
+        "test": "as_many_large_imports_as_blocking_workers",
+        "exit_code": 101,
+        "seconds": 60.03,
+        "watchdog_exceeded": true
+      },
+      {
+        "build": "candidate",
+        "test": "imports_beyond_decoder_capacity_share_one_worker",
+        "exit_code": 0,
+        "seconds": 4.3,
+        "watchdog_exceeded": false
+      },
+      {
+        "build": "upstream",
+        "test": "imports_beyond_decoder_capacity_share_one_worker",
+        "exit_code": 0,
+        "seconds": 4.78,
+        "watchdog_exceeded": false
+      }
+    ]
+  },
+  "main": {
+    "rounds": "four, upstream first in rounds 1 and 3",
+    "runs": [
+      {
+        "build": "c9base",
+        "round": "r1",
+        "started": "2026-10-09T06:03:13+00:00",
+        "ended": "2026-10-09T06:05:09+00:00",
+        "load_start": 1.91,
+        "load_end": 2.13
+      },
+      {
+        "build": "c9cand",
+        "round": "r1",
+        "started": "2026-10-09T06:05:09+00:00",
+        "ended": "2026-10-09T06:07:12+00:00",
+        "load_start": 2.13,
+        "load_end": 4.44
+      },
+      {
+        "build": "c9cand",
+        "round": "r2",
+        "started": "2026-10-09T06:07:12+00:00",
+        "ended": "2026-10-09T06:09:11+00:00",
+        "load_start": 4.44,
+        "load_end": 2.95
+      },
+      {
+        "build": "c9base",
+        "round": "r2",
+        "started": "2026-10-09T06:09:11+00:00",
+        "ended": "2026-10-09T06:11:17+00:00",
+        "load_start": 2.95,
+        "load_end": 2.98
+      },
+      {
+        "build": "c9base",
+        "round": "r3",
+        "started": "2026-10-09T06:11:17+00:00",
+        "ended": "2026-10-09T06:13:32+00:00",
+        "load_start": 2.98,
+        "load_end": 3.14
+      },
+      {
+        "build": "c9cand",
+        "round": "r3",
+        "started": "2026-10-09T06:13:32+00:00",
+        "ended": "2026-10-09T06:15:44+00:00",
+        "load_start": 3.14,
+        "load_end": 2.77
+      },
+      {
+        "build": "c9cand",
+        "round": "r4",
+        "started": "2026-10-09T06:15:44+00:00",
+        "ended": "2026-10-09T06:18:02+00:00",
+        "load_start": 2.77,
+        "load_end": 3.52
+      },
+      {
+        "build": "c9base",
+        "round": "r4",
+        "started": "2026-10-09T06:18:02+00:00",
+        "ended": "2026-10-09T06:20:04+00:00",
+        "load_start": 3.52,
+        "load_end": 2.74
+      },
+      {
+        "build": "c9cand",
+        "round": "rstall",
+        "started": "2026-10-09T06:20:04+00:00",
+        "ended": "2026-10-09T06:20:08+00:00",
+        "load_start": 2.74,
+        "load_end": 2.68
+      }
+    ],
+    "paired": {
+      "nar_decoder_admission/16": {
+        "base_median_ns": 31017945.0,
+        "candidate_median_ns": 28217265.5,
+        "median_ratio": 0.913928023004003,
+        "ratio_range": [
+          0.8701894647365757,
+          0.9484588628394895
+        ],
+        "candidate_faster_rounds": 4,
+        "rounds": 4
+      },
+      "nar_decoder_admission/17": {
+        "base_median_ns": 32678029.5,
+        "candidate_median_ns": 29443407.5,
+        "median_ratio": 0.9044237832365397,
+        "ratio_range": [
+          0.8550024070854514,
+          0.9399731144487112
+        ],
+        "candidate_faster_rounds": 4,
+        "rounds": 4
+      },
+      "nar_decoder_admission/32": {
+        "base_median_ns": 55335219.5,
+        "candidate_median_ns": 52223014.25,
+        "median_ratio": 0.9430767770299902,
+        "ratio_range": [
+          0.9338686433866092,
+          0.9733700815064258
+        ],
+        "candidate_faster_rounds": 4,
+        "rounds": 4
+      },
+      "nar_decoder_pool/workers-1/8388608": {
+        "base_median_ns": 40059313.5,
+        "candidate_median_ns": 38970395.5,
+        "median_ratio": 0.973029809251359,
+        "ratio_range": [
+          0.9623651107477383,
+          1.0667885490826112
+        ],
+        "candidate_faster_rounds": 3,
+        "rounds": 4
+      },
+      "nar_decoder_pool/workers-2/8388608": {
+        "base_median_ns": 41738625.75,
+        "candidate_median_ns": 42026996.0,
+        "median_ratio": 1.0083715303102516,
+        "ratio_range": [
+          0.9880644522303289,
+          1.0141849453855716
+        ],
+        "candidate_faster_rounds": 1,
+        "rounds": 4
+      },
+      "nar_decoder_pool/workers-2/33554432": {
+        "base_median_ns": 100620023.25,
+        "candidate_median_ns": 100585473.5,
+        "median_ratio": 0.9993688273390875,
+        "ratio_range": [
+          0.9337397716241386,
+          1.0046442496321062
+        ],
+        "candidate_faster_rounds": 2,
+        "rounds": 4
+      },
+      "nar_import/bytes-0/32": {
+        "base_median_ns": 5050087.25,
+        "candidate_median_ns": 4823679.18125,
+        "median_ratio": 0.9878110244464109,
+        "ratio_range": [
+          0.8849690397758271,
+          1.1198423385430656
+        ],
+        "candidate_faster_rounds": 2,
+        "rounds": 4
+      },
+      "nar_import/bytes-1024/1": {
+        "base_median_ns": 2748864.625,
+        "candidate_median_ns": 2954895.5,
+        "median_ratio": 1.1045532267915956,
+        "ratio_range": [
+          0.8896684987962735,
+          1.2335519975485014
+        ],
+        "candidate_faster_rounds": 1,
+        "rounds": 4
+      },
+      "nar_import/bytes-1024/15": {
+        "base_median_ns": 4490083.5,
+        "candidate_median_ns": 4564302.5,
+        "median_ratio": 1.0133487829317245,
+        "ratio_range": [
+          0.9957404280632328,
+          1.0343270461669982
+        ],
+        "candidate_faster_rounds": 2,
+        "rounds": 4
+      },
+      "nar_import/bytes-1024/16": {
+        "base_median_ns": 4633324.5,
+        "candidate_median_ns": 4755781.25,
+        "median_ratio": 1.0148726325000557,
+        "ratio_range": [
+          0.9085921441312308,
+          1.1119787970013033
+        ],
+        "candidate_faster_rounds": 1,
+        "rounds": 4
+      },
+      "nar_import/bytes-1024/17": {
+        "base_median_ns": 4804666.0,
+        "candidate_median_ns": 4964320.75,
+        "median_ratio": 0.9979159721345443,
+        "ratio_range": [
+          0.8841580375750036,
+          1.1158567933582173
+        ],
+        "candidate_faster_rounds": 2,
+        "rounds": 4
+      },
+      "nar_import/bytes-1024/64": {
+        "base_median_ns": 8860671.75,
+        "candidate_median_ns": 8320904.25,
+        "median_ratio": 0.9377272245284366,
+        "ratio_range": [
+          0.8686172786653844,
+          1.0308134303272052
+        ],
+        "candidate_faster_rounds": 3,
+        "rounds": 4
+      },
+      "nar_import/bytes-1024/256": {
+        "base_median_ns": 22820960.75,
+        "candidate_median_ns": 22765218.0,
+        "median_ratio": 1.0041752004117614,
+        "ratio_range": [
+          0.9701767930123678,
+          1.0345710844160325
+        ],
+        "candidate_faster_rounds": 2,
+        "rounds": 4
+      },
+      "nar_import/bytes-1024/1024": {
+        "base_median_ns": 90343219.75,
+        "candidate_median_ns": 89281104.25,
+        "median_ratio": 0.9832556189639183,
+        "ratio_range": [
+          0.952841419097126,
+          1.015977368425164
+        ],
+        "candidate_faster_rounds": 3,
+        "rounds": 4
+      },
+      "nar_import/bytes-16383/32": {
+        "base_median_ns": 8412222.0,
+        "candidate_median_ns": 7980518.25,
+        "median_ratio": 0.9695486103125628,
+        "ratio_range": [
+          0.9170814863904295,
+          0.994932761866747
+        ],
+        "candidate_faster_rounds": 4,
+        "rounds": 4
+      },
+      "nar_import/bytes-16384/32": {
+        "base_median_ns": 7760063.5,
+        "candidate_median_ns": 7365114.75,
+        "median_ratio": 0.9490884866345288,
+        "ratio_range": [
+          0.9103663615862834,
+          1.0044916264415746
+        ],
+        "candidate_faster_rounds": 3,
+        "rounds": 4
+      },
+      "nar_import/bytes-16385/15": {
+        "base_median_ns": 6162540.208333333,
+        "candidate_median_ns": 5304970.416666666,
+        "median_ratio": 0.8546250140959639,
+        "ratio_range": [
+          0.8089839669339469,
+          0.9159736147516216
+        ],
+        "candidate_faster_rounds": 4,
+        "rounds": 4
+      },
+      "nar_import/bytes-16385/16": {
+        "base_median_ns": 6231785.205555555,
+        "candidate_median_ns": 5612739.229166667,
+        "median_ratio": 0.9029036307789722,
+        "ratio_range": [
+          0.5199603741778996,
+          0.9720490202621396
+        ],
+        "candidate_faster_rounds": 4,
+        "rounds": 4
+      },
+      "nar_import/bytes-16385/17": {
+        "base_median_ns": 6715867.25,
+        "candidate_median_ns": 5727628.333333333,
+        "median_ratio": 0.866551489072042,
+        "ratio_range": [
+          0.4579883643492814,
+          0.9377667325135061
+        ],
+        "candidate_faster_rounds": 4,
+        "rounds": 4
+      },
+      "nar_import/bytes-16385/32": {
+        "base_median_ns": 8476737.5,
+        "candidate_median_ns": 8408886.75,
+        "median_ratio": 0.9919934782183855,
+        "ratio_range": [
+          0.9125491598933411,
+          1.050452451558441
+        ],
+        "candidate_faster_rounds": 3,
+        "rounds": 4
+      },
+      "nar_import/bytes-16385/127": {
+        "base_median_ns": 22067743.75,
+        "candidate_median_ns": 20170910.0,
+        "median_ratio": 0.9059278771783886,
+        "ratio_range": [
+          0.8611959074571821,
+          0.9568282902016302
+        ],
+        "candidate_faster_rounds": 4,
+        "rounds": 4
+      },
+      "nar_import/bytes-16385/128": {
+        "base_median_ns": 21983729.25,
+        "candidate_median_ns": 20324006.5,
+        "median_ratio": 0.9243123171656553,
+        "ratio_range": [
+          0.8546437245338669,
+          1.012829794407514
+        ],
+        "candidate_faster_rounds": 3,
+        "rounds": 4
+      },
+      "nar_import/bytes-16385/129": {
+        "base_median_ns": 23070805.25,
+        "candidate_median_ns": 19569915.0,
+        "median_ratio": 0.8387564983135957,
+        "ratio_range": [
+          0.43556338454613663,
+          1.56688375775249
+        ],
+        "candidate_faster_rounds": 3,
+        "rounds": 4
+      },
+      "nar_import/bytes-16385/629": {
+        "base_median_ns": 74716576.25,
+        "candidate_median_ns": 74098838.5,
+        "median_ratio": 0.996056672110825,
+        "ratio_range": [
+          0.950644037668352,
+          1.2751505487541877
+        ],
+        "candidate_faster_rounds": 2,
+        "rounds": 4
+      },
+      "nar_import/bytes-16385/630": {
+        "base_median_ns": 74150179.5,
+        "candidate_median_ns": 71796247.75,
+        "median_ratio": 0.9683932719830181,
+        "ratio_range": [
+          0.7371574819610536,
+          1.3618056821214877
+        ],
+        "candidate_faster_rounds": 3,
+        "rounds": 4
+      },
+      "nar_import/bytes-16385/631": {
+        "base_median_ns": 74205817.5,
+        "candidate_median_ns": 72814227.5,
+        "median_ratio": 0.9454687252240801,
+        "ratio_range": [
+          0.7483992870560475,
+          1.0285693748615823
+        ],
+        "candidate_faster_rounds": 3,
+        "rounds": 4
+      },
+      "nar_import/bytes-65535/32": {
+        "base_median_ns": 13985941.25,
+        "candidate_median_ns": 12681690.583333332,
+        "median_ratio": 0.8655590035172034,
+        "ratio_range": [
+          0.7101372277378526,
+          0.9532582136357742
+        ],
+        "candidate_faster_rounds": 4,
+        "rounds": 4
+      },
+      "nar_import/bytes-65536/32": {
+        "base_median_ns": 13466573.0,
+        "candidate_median_ns": 11591198.319444444,
+        "median_ratio": 0.8340314209053226,
+        "ratio_range": [
+          0.4636043683581386,
+          0.9982626754436625
+        ],
+        "candidate_faster_rounds": 4,
+        "rounds": 4
+      },
+      "nar_import/bytes-65536/512": {
+        "base_median_ns": 85216004.5,
+        "candidate_median_ns": 80098363.25,
+        "median_ratio": 0.9823582825221528,
+        "ratio_range": [
+          0.7682365253230573,
+          1.2987654060005143
+        ],
+        "candidate_faster_rounds": 3,
+        "rounds": 4
+      },
+      "nar_import/bytes-65536/2048": {
+        "base_median_ns": 356069398.0,
+        "candidate_median_ns": 383817952.25,
+        "median_ratio": 1.0815416384407874,
+        "ratio_range": [
+          0.9234941823362828,
+          1.2294848802304048
+        ],
+        "candidate_faster_rounds": 1,
+        "rounds": 4
+      },
+      "nar_import/bytes-65537/32": {
+        "base_median_ns": 14959124.0,
+        "candidate_median_ns": 13361819.520833334,
+        "median_ratio": 0.8932296067382473,
+        "ratio_range": [
+          0.40303737406238194,
+          1.010571105348093
+        ],
+        "candidate_faster_rounds": 3,
+        "rounds": 4
+      },
+      "nar_import/bytes-131071/16": {
+        "base_median_ns": 13100700.083333334,
+        "candidate_median_ns": 6937228.09375,
+        "median_ratio": 0.5375789596498098,
+        "ratio_range": [
+          0.39639211858573614,
+          0.9470186462590234
+        ],
+        "candidate_faster_rounds": 4,
+        "rounds": 4
+      },
+      "nar_import/bytes-131072/16": {
+        "base_median_ns": 13006260.7,
+        "candidate_median_ns": 6631512.934722222,
+        "median_ratio": 0.491862971320846,
+        "ratio_range": [
+          0.4521846197359458,
+          0.9982988297177661
+        ],
+        "candidate_faster_rounds": 4,
+        "rounds": 4
+      },
+      "nar_import/bytes-131073/16": {
+        "base_median_ns": 12650480.783333333,
+        "candidate_median_ns": 5975807.916666666,
+        "median_ratio": 0.4896774626000806,
+        "ratio_range": [
+          0.4000775247003985,
+          1.08398569518373
+        ],
+        "candidate_faster_rounds": 3,
+        "rounds": 4
+      },
+      "nar_import/directories/15": {
+        "base_median_ns": 4938719.875,
+        "candidate_median_ns": 2562348.638541667,
+        "median_ratio": 0.5313911551939671,
+        "ratio_range": [
+          0.43131851644307345,
+          1.0479490195144894
+        ],
+        "candidate_faster_rounds": 3,
+        "rounds": 4
+      },
+      "nar_import/directories/16": {
+        "base_median_ns": 5222945.75,
+        "candidate_median_ns": 4862728.25,
+        "median_ratio": 0.9135986955640739,
+        "ratio_range": [
+          0.4524959065617365,
+          0.9673519313619892
+        ],
+        "candidate_faster_rounds": 4,
+        "rounds": 4
+      },
+      "nar_import/directories/17": {
+        "base_median_ns": 5138807.75,
+        "candidate_median_ns": 5021499.625,
+        "median_ratio": 0.9700851060960121,
+        "ratio_range": [
+          0.44111872679580366,
+          1.1422152923356648
+        ],
+        "candidate_faster_rounds": 2,
+        "rounds": 4
+      },
+      "nar_import/directories/256": {
+        "base_median_ns": 27918847.0,
+        "candidate_median_ns": 24626351.25,
+        "median_ratio": 0.8781469613915407,
+        "ratio_range": [
+          0.7888427354511953,
+          0.9059211929468292
+        ],
+        "candidate_faster_rounds": 4,
+        "rounds": 4
+      },
+      "nar_import/directory-links-4095/63": {
+        "base_median_ns": 8775714.771428572,
+        "candidate_median_ns": 6949135.491666667,
+        "median_ratio": 0.7638535618648792,
+        "ratio_range": [
+          0.5281255641318561,
+          1.014018348716927
+        ],
+        "candidate_faster_rounds": 3,
+        "rounds": 4
+      },
+      "nar_import/directory-links-4095/64": {
+        "base_median_ns": 9204836.25,
+        "candidate_median_ns": 8944285.875,
+        "median_ratio": 0.9645565068320547,
+        "ratio_range": [
+          0.9521729648890465,
+          0.9909215791739024
+        ],
+        "candidate_faster_rounds": 4,
+        "rounds": 4
+      },
+      "nar_import/directory-links-4095/65": {
+        "base_median_ns": 9437323.5,
+        "candidate_median_ns": 9009009.25,
+        "median_ratio": 0.9546106318628765,
+        "ratio_range": [
+          0.9029321154099729,
+          0.9845166782419523
+        ],
+        "candidate_faster_rounds": 4,
+        "rounds": 4
+      },
+      "nar_import/nested-bytes-1024/45": {
+        "base_median_ns": 7693165.0,
+        "candidate_median_ns": 5154552.301587301,
+        "median_ratio": 0.6687008612084722,
+        "ratio_range": [
+          0.4285137213563954,
+          1.0373335998468276
+        ],
+        "candidate_faster_rounds": 3,
+        "rounds": 4
+      },
+      "nar_import/nested-bytes-1024/48": {
+        "base_median_ns": 8066757.75,
+        "candidate_median_ns": 5383677.616666666,
+        "median_ratio": 0.6510729084037716,
+        "ratio_range": [
+          0.4276547772319213,
+          0.9264373364450283
+        ],
+        "candidate_faster_rounds": 4,
+        "rounds": 4
+      },
+      "nar_import/nested-bytes-1024/51": {
+        "base_median_ns": 7868966.25,
+        "candidate_median_ns": 5712262.535714285,
+        "median_ratio": 0.7004190969429505,
+        "ratio_range": [
+          0.44585993378026184,
+          1.0631108807966
+        ],
+        "candidate_faster_rounds": 3,
+        "rounds": 4
+      },
+      "nar_import/nested-directories/15": {
+        "base_median_ns": 4713480.25,
+        "candidate_median_ns": 4639161.25,
+        "median_ratio": 0.988996197154318,
+        "ratio_range": [
+          0.4135752405214499,
+          1.1167852835387708
+        ],
+        "candidate_faster_rounds": 2,
+        "rounds": 4
+      },
+      "nar_import/nested-directories/16": {
+        "base_median_ns": 4837606.949999999,
+        "candidate_median_ns": 4797981.375,
+        "median_ratio": 0.9925050231785857,
+        "ratio_range": [
+          0.42795990156230623,
+          1.0663247047403681
+        ],
+        "candidate_faster_rounds": 2,
+        "rounds": 4
+      },
+      "nar_import/nested-directories/17": {
+        "base_median_ns": 5205600.6,
+        "candidate_median_ns": 4597264.666666667,
+        "median_ratio": 0.8887731664191945,
+        "ratio_range": [
+          0.4164417639410988,
+          0.9969435941513491
+        ],
+        "candidate_faster_rounds": 4,
+        "rounds": 4
+      },
+      "nar_import_sequence/15": {
+        "base_median_ns": 42595833.5,
+        "candidate_median_ns": 42934860.25,
+        "median_ratio": 1.0065044106769365,
+        "ratio_range": [
+          0.8917620656597771,
+          1.0161677976157901
+        ],
+        "candidate_faster_rounds": 1,
+        "rounds": 4
+      },
+      "nar_import_sequence/16": {
+        "base_median_ns": 45048551.25,
+        "candidate_median_ns": 45788822.5,
+        "median_ratio": 1.015854276136857,
+        "ratio_range": [
+          1.011039834457078,
+          1.188827951072939
+        ],
+        "candidate_faster_rounds": 0,
+        "rounds": 4
+      },
+      "nar_import_sequence/17": {
+        "base_median_ns": 47999697.5,
+        "candidate_median_ns": 48676126.0,
+        "median_ratio": 1.0123814863136196,
+        "ratio_range": [
+          0.8175748041653814,
+          1.0196321058948759
+        ],
+        "candidate_faster_rounds": 1,
+        "rounds": 4
+      },
+      "nar_import_sequence/18": {
+        "base_median_ns": 53296664.0,
+        "candidate_median_ns": 53381833.5,
+        "median_ratio": 1.001300892322888,
+        "ratio_range": [
+          0.8265133157172941,
+          1.0110231739540947
+        ],
+        "candidate_faster_rounds": 1,
+        "rounds": 4
+      },
+      "nar_import_sequence/19": {
+        "base_median_ns": 59318620.5,
+        "candidate_median_ns": 60336796.0,
+        "median_ratio": 1.0048859541013735,
+        "ratio_range": [
+          0.8592989069402123,
+          1.092077010697892
+        ],
+        "candidate_faster_rounds": 2,
+        "rounds": 4
+      },
+      "nar_import_sequence/32": {
+        "base_median_ns": 94775433.0,
+        "candidate_median_ns": 99365085.75,
+        "median_ratio": 0.9261038451715682,
+        "ratio_range": [
+          0.7466656370800638,
+          1.0739973296296201
+        ],
+        "candidate_faster_rounds": 2,
+        "rounds": 4
+      }
+    },
+    "candidate_only": {
+      "nar_decoder_pool/workers-1/33554432": {
+        "median_ns": 97292631.0,
+        "median_ci95_ns": [
+          94188210.5,
+          98500794.5
+        ]
+      }
+    },
+    "series": {
+      "c9base-r1": {
+        "nar_decoder_admission/16": {
+          "median_ns": 32175512.5,
+          "median_ci95_ns": [
+            29586777.0,
+            33639854.0
+          ]
+        },
+        "nar_decoder_admission/17": {
+          "median_ns": 31682445.0,
+          "median_ci95_ns": [
+            29280880.0,
+            33351556.0
+          ]
+        },
+        "nar_decoder_admission/32": {
+          "median_ns": 53863176.5,
+          "median_ci95_ns": [
+            51690773.5,
+            58934821.5
+          ]
+        },
+        "nar_decoder_pool/workers-1/8388608": {
+          "median_ns": 36544967.166666664,
+          "median_ci95_ns": [
+            20340945.0,
+            40171946.166666664
+          ]
+        },
+        "nar_decoder_pool/workers-2/33554432": {
+          "median_ns": 100400130.5,
+          "median_ci95_ns": [
+            99202517.0,
+            106463100.0
+          ]
+        },
+        "nar_decoder_pool/workers-2/8388608": {
+          "median_ns": 42221564.5,
+          "median_ci95_ns": [
+            41332934.5,
+            43277557.5
+          ]
+        },
+        "nar_import/bytes-0/32": {
+          "median_ns": 4253417.5,
+          "median_ci95_ns": [
+            3746963.0,
+            4799832.0
+          ]
+        },
+        "nar_import/bytes-1024/1": {
+          "median_ns": 3088118.5,
+          "median_ci95_ns": [
+            3043579.0,
+            3293378.0
+          ]
+        },
+        "nar_import/bytes-1024/1024": {
+          "median_ns": 92092794.5,
+          "median_ci95_ns": [
+            89225726.0,
+            92367212.0
+          ]
+        },
+        "nar_import/bytes-1024/15": {
+          "median_ns": 4687440.25,
+          "median_ci95_ns": [
+            4261839.69047619,
+            4930356.725
+          ]
+        },
+        "nar_import/bytes-1024/16": {
+          "median_ns": 4621233.0,
+          "median_ci95_ns": [
+            4334085.0,
+            5053082.166666666
+          ]
+        },
+        "nar_import/bytes-1024/17": {
+          "median_ns": 5534603.25,
+          "median_ci95_ns": [
+            5087787.75,
+            5739136.5
+          ]
+        },
+        "nar_import/bytes-1024/256": {
+          "median_ns": 22176118.5,
+          "median_ci95_ns": [
+            21389400.5,
+            24093189.75
+          ]
+        },
+        "nar_import/bytes-1024/64": {
+          "median_ns": 9509374.5,
+          "median_ci95_ns": [
+            9169377.0,
+            9637814.0
+          ]
+        },
+        "nar_import/bytes-131071/16": {
+          "median_ns": 13047635.666666668,
+          "median_ci95_ns": [
+            12586563.5,
+            14141494.333333334
+          ]
+        },
+        "nar_import/bytes-131072/16": {
+          "median_ns": 13038279.333333332,
+          "median_ci95_ns": [
+            12611813.0,
+            14347523.333333334
+          ]
+        },
+        "nar_import/bytes-131073/16": {
+          "median_ns": 12044074.066666666,
+          "median_ci95_ns": [
+            8531691.0,
+            13422113.714285715
+          ]
+        },
+        "nar_import/bytes-16383/32": {
+          "median_ns": 8635779.5,
+          "median_ci95_ns": [
+            7768785.0,
+            9561974.0
+          ]
+        },
+        "nar_import/bytes-16384/32": {
+          "median_ns": 7744232.0,
+          "median_ci95_ns": [
+            7588905.833333333,
+            7969867.166666666
+          ]
+        },
+        "nar_import/bytes-16385/127": {
+          "median_ns": 23583137.5,
+          "median_ci95_ns": [
+            21993501.5,
+            24186654.5
+          ]
+        },
+        "nar_import/bytes-16385/128": {
+          "median_ns": 23807231.5,
+          "median_ci95_ns": [
+            21180967.0,
+            24279699.0
+          ]
+        },
+        "nar_import/bytes-16385/129": {
+          "median_ns": 13725268.0,
+          "median_ci95_ns": [
+            12346765.75,
+            22052986.5
+          ]
+        },
+        "nar_import/bytes-16385/15": {
+          "median_ns": 6097771.75,
+          "median_ci95_ns": [
+            5897438.25,
+            6289491.0
+          ]
+        },
+        "nar_import/bytes-16385/16": {
+          "median_ns": 5948519.4,
+          "median_ci95_ns": [
+            5410716.25,
+            6209009.571428572
+          ]
+        },
+        "nar_import/bytes-16385/17": {
+          "median_ns": 5960422.75,
+          "median_ci95_ns": [
+            5527553.0,
+            6433867.5
+          ]
+        },
+        "nar_import/bytes-16385/32": {
+          "median_ns": 8470947.5,
+          "median_ci95_ns": [
+            8388144.333333333,
+            8624728.0
+          ]
+        },
+        "nar_import/bytes-16385/629": {
+          "median_ns": 75653960.0,
+          "median_ci95_ns": [
+            67054064.0,
+            75935103.0
+          ]
+        },
+        "nar_import/bytes-16385/630": {
+          "median_ns": 74729695.5,
+          "median_ci95_ns": [
+            59370445.0,
+            75423381.0
+          ]
+        },
+        "nar_import/bytes-16385/631": {
+          "median_ns": 74809639.5,
+          "median_ci95_ns": [
+            60018051.0,
+            75972247.0
+          ]
+        },
+        "nar_import/bytes-65535/32": {
+          "median_ns": 15283481.25,
+          "median_ci95_ns": [
+            13916899.0,
+            15362156.0
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 315753092.0,
+          "median_ci95_ns": [
+            294578715.0,
+            343052998.5
+          ]
+        },
+        "nar_import/bytes-65536/32": {
+          "median_ns": 13378305.0,
+          "median_ci95_ns": [
+            13122810.75,
+            14686834.5
+          ]
+        },
+        "nar_import/bytes-65536/512": {
+          "median_ns": 81245367.0,
+          "median_ci95_ns": [
+            77876082.0,
+            83095761.5
+          ]
+        },
+        "nar_import/bytes-65537/32": {
+          "median_ns": 14929769.5,
+          "median_ci95_ns": [
+            13672515.666666668,
+            15254284.166666668
+          ]
+        },
+        "nar_import/directories/15": {
+          "median_ns": 4662843.0,
+          "median_ci95_ns": [
+            4564074.0,
+            4741472.0
+          ]
+        },
+        "nar_import/directories/16": {
+          "median_ns": 5038491.0,
+          "median_ci95_ns": [
+            4998126.0,
+            5127030.0
+          ]
+        },
+        "nar_import/directories/17": {
+          "median_ns": 4889357.0,
+          "median_ci95_ns": [
+            4658458.0,
+            4950882.0
+          ]
+        },
+        "nar_import/directories/256": {
+          "median_ns": 28667892.5,
+          "median_ci95_ns": [
+            27124462.5,
+            28889827.0
+          ]
+        },
+        "nar_import/directory-links-4095/63": {
+          "median_ns": 8477050.5,
+          "median_ci95_ns": [
+            7915264.0,
+            8719684.5
+          ]
+        },
+        "nar_import/directory-links-4095/64": {
+          "median_ns": 9115432.0,
+          "median_ci95_ns": [
+            8918553.0,
+            9862732.0
+          ]
+        },
+        "nar_import/directory-links-4095/65": {
+          "median_ns": 9749053.5,
+          "median_ci95_ns": [
+            9093713.666666666,
+            10234917.0
+          ]
+        },
+        "nar_import/nested-bytes-1024/45": {
+          "median_ns": 7307808.694444444,
+          "median_ci95_ns": [
+            7220351.708333334,
+            7709626.0
+          ]
+        },
+        "nar_import/nested-bytes-1024/48": {
+          "median_ns": 8011068.0,
+          "median_ci95_ns": [
+            7010419.0,
+            8716230.0
+          ]
+        },
+        "nar_import/nested-bytes-1024/51": {
+          "median_ns": 7480592.0,
+          "median_ci95_ns": [
+            7047259.0,
+            7874164.0
+          ]
+        },
+        "nar_import/nested-directories/15": {
+          "median_ns": 4673283.0,
+          "median_ci95_ns": [
+            4392785.0,
+            4760422.0
+          ]
+        },
+        "nar_import/nested-directories/16": {
+          "median_ns": 4644133.0,
+          "median_ci95_ns": [
+            4516013.0,
+            4741172.5
+          ]
+        },
+        "nar_import/nested-directories/17": {
+          "median_ns": 4805146.5,
+          "median_ci95_ns": [
+            4627283.0,
+            4905676.5
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 42836479.0,
+          "median_ci95_ns": [
+            40826934.0,
+            44667572.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 39941536.5,
+          "median_ci95_ns": [
+            37687952.0,
+            40837900.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 63223117.0,
+          "median_ci95_ns": [
+            58090836.5,
+            63335156.5
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 67802036.5,
+          "median_ci95_ns": [
+            61563809.0,
+            70880171.5
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 64651075.0,
+          "median_ci95_ns": [
+            61557449.5,
+            65030204.5
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 123120379.5,
+          "median_ci95_ns": [
+            120162708.5,
+            123305149.0
+          ]
+        }
+      },
+      "c9base-r2": {
+        "nar_decoder_admission/16": {
+          "median_ns": 31324412.0,
+          "median_ci95_ns": [
+            30163794.0,
+            33417250.0
+          ]
+        },
+        "nar_decoder_admission/17": {
+          "median_ns": 33094211.0,
+          "median_ci95_ns": [
+            31576175.0,
+            34919176.0
+          ]
+        },
+        "nar_decoder_admission/32": {
+          "median_ns": 55112543.5,
+          "median_ci95_ns": [
+            54019934.5,
+            56863507.5
+          ]
+        },
+        "nar_decoder_pool/workers-1/8388608": {
+          "median_ns": 39996026.5,
+          "median_ci95_ns": [
+            39984836.5,
+            40070636.0
+          ]
+        },
+        "nar_decoder_pool/workers-2/33554432": {
+          "median_ns": 100109390.5,
+          "median_ci95_ns": [
+            97960288.0,
+            108404607.0
+          ]
+        },
+        "nar_decoder_pool/workers-2/8388608": {
+          "median_ns": 41450443.0,
+          "median_ci95_ns": [
+            41116490.0,
+            42140054.0
+          ]
+        },
+        "nar_import/bytes-0/32": {
+          "median_ns": 5129970.0,
+          "median_ci95_ns": [
+            4825667.0,
+            5507698.0
+          ]
+        },
+        "nar_import/bytes-1024/1": {
+          "median_ns": 2566272.25,
+          "median_ci95_ns": [
+            2338826.0,
+            2758328.5
+          ]
+        },
+        "nar_import/bytes-1024/1024": {
+          "median_ns": 89751211.0,
+          "median_ci95_ns": [
+            88608268.0,
+            90282257.5
+          ]
+        },
+        "nar_import/bytes-1024/15": {
+          "median_ns": 4411124.0,
+          "median_ci95_ns": [
+            4119146.0,
+            4612923.0
+          ]
+        },
+        "nar_import/bytes-1024/16": {
+          "median_ns": 4346555.0,
+          "median_ci95_ns": [
+            4156101.0,
+            4844212.0
+          ]
+        },
+        "nar_import/bytes-1024/17": {
+          "median_ns": 4556318.5,
+          "median_ci95_ns": [
+            4402015.0,
+            5314359.0
+          ]
+        },
+        "nar_import/bytes-1024/256": {
+          "median_ns": 23465803.0,
+          "median_ci95_ns": [
+            22834081.5,
+            23934000.0
+          ]
+        },
+        "nar_import/bytes-1024/64": {
+          "median_ns": 8174812.0,
+          "median_ci95_ns": [
+            7885709.0,
+            8758399.0
+          ]
+        },
+        "nar_import/bytes-131071/16": {
+          "median_ns": 14337947.0,
+          "median_ci95_ns": [
+            14048158.0,
+            14557680.5
+          ]
+        },
+        "nar_import/bytes-131072/16": {
+          "median_ns": 12974242.066666666,
+          "median_ci95_ns": [
+            8281481.541666666,
+            14126679.0
+          ]
+        },
+        "nar_import/bytes-131073/16": {
+          "median_ns": 11247732.133333333,
+          "median_ci95_ns": [
+            8356607.791666666,
+            11937284.055555556
+          ]
+        },
+        "nar_import/bytes-16383/32": {
+          "median_ns": 7906674.0,
+          "median_ci95_ns": [
+            7706385.0,
+            8206342.0
+          ]
+        },
+        "nar_import/bytes-16384/32": {
+          "median_ns": 7775895.0,
+          "median_ci95_ns": [
+            6900110.0,
+            8107873.0
+          ]
+        },
+        "nar_import/bytes-16385/127": {
+          "median_ns": 21695343.5,
+          "median_ci95_ns": [
+            20181372.0,
+            22015586.5
+          ]
+        },
+        "nar_import/bytes-16385/128": {
+          "median_ns": 21251760.5,
+          "median_ci95_ns": [
+            20040003.0,
+            22254095.0
+          ]
+        },
+        "nar_import/bytes-16385/129": {
+          "median_ns": 23187324.5,
+          "median_ci95_ns": [
+            21967371.0,
+            25603360.0
+          ]
+        },
+        "nar_import/bytes-16385/15": {
+          "median_ns": 5965820.916666667,
+          "median_ci95_ns": [
+            5563402.775,
+            6506780.144444445
+          ]
+        },
+        "nar_import/bytes-16385/16": {
+          "median_ns": 5941121.5,
+          "median_ci95_ns": [
+            5189489.833333334,
+            6359989.666666667
+          ]
+        },
+        "nar_import/bytes-16385/17": {
+          "median_ns": 6811735.166666667,
+          "median_ci95_ns": [
+            6257470.0,
+            7589566.0
+          ]
+        },
+        "nar_import/bytes-16385/32": {
+          "median_ns": 8344926.5,
+          "median_ci95_ns": [
+            8292207.0,
+            8791919.0
+          ]
+        },
+        "nar_import/bytes-16385/629": {
+          "median_ns": 74256426.5,
+          "median_ci95_ns": [
+            73062753.0,
+            96287588.0
+          ]
+        },
+        "nar_import/bytes-16385/630": {
+          "median_ns": 72412302.5,
+          "median_ci95_ns": [
+            63106807.0,
+            73579611.0
+          ]
+        },
+        "nar_import/bytes-16385/631": {
+          "median_ns": 73601995.5,
+          "median_ci95_ns": [
+            69978706.5,
+            86540680.0
+          ]
+        },
+        "nar_import/bytes-65535/32": {
+          "median_ns": 13463556.0,
+          "median_ci95_ns": [
+            10931986.0,
+            13760049.5
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 336890363.5,
+          "median_ci95_ns": [
+            327100011.0,
+            357470878.5
+          ]
+        },
+        "nar_import/bytes-65536/32": {
+          "median_ns": 14606885.0,
+          "median_ci95_ns": [
+            13852069.0,
+            14874653.0
+          ]
+        },
+        "nar_import/bytes-65536/512": {
+          "median_ns": 81830452.5,
+          "median_ci95_ns": [
+            77497702.5,
+            120357877.0
+          ]
+        },
+        "nar_import/bytes-65537/32": {
+          "median_ns": 15123162.0,
+          "median_ci95_ns": [
+            15037582.0,
+            15371815.0
+          ]
+        },
+        "nar_import/directories/15": {
+          "median_ns": 5346466.0,
+          "median_ci95_ns": [
+            5263654.25,
+            5739047.0
+          ]
+        },
+        "nar_import/directories/16": {
+          "median_ns": 5129580.0,
+          "median_ci95_ns": [
+            4723802.25,
+            5353013.75
+          ]
+        },
+        "nar_import/directories/17": {
+          "median_ns": 5388258.5,
+          "median_ci95_ns": [
+            5030010.5,
+            5739226.5
+          ]
+        },
+        "nar_import/directories/256": {
+          "median_ns": 28406429.5,
+          "median_ci95_ns": [
+            27167871.5,
+            28549818.0
+          ]
+        },
+        "nar_import/directory-links-4095/63": {
+          "median_ns": 7672107.7,
+          "median_ci95_ns": [
+            7610061.833333334,
+            8986809.75
+          ]
+        },
+        "nar_import/directory-links-4095/64": {
+          "median_ns": 9203913.5,
+          "median_ci95_ns": [
+            9026442.0,
+            9367137.75
+          ]
+        },
+        "nar_import/directory-links-4095/65": {
+          "median_ns": 9409415.0,
+          "median_ci95_ns": [
+            9272416.0,
+            9824688.0
+          ]
+        },
+        "nar_import/nested-bytes-1024/45": {
+          "median_ns": 7943836.25,
+          "median_ci95_ns": [
+            7279857.5,
+            8470693.0
+          ]
+        },
+        "nar_import/nested-bytes-1024/48": {
+          "median_ns": 7752092.0,
+          "median_ci95_ns": [
+            7466738.5,
+            8075488.0
+          ]
+        },
+        "nar_import/nested-bytes-1024/51": {
+          "median_ns": 8040222.5,
+          "median_ci95_ns": [
+            7406307.0,
+            8429150.5
+          ]
+        },
+        "nar_import/nested-directories/15": {
+          "median_ns": 5326482.666666666,
+          "median_ci95_ns": [
+            5306556.142857143,
+            5338913.666666667
+          ]
+        },
+        "nar_import/nested-directories/16": {
+          "median_ns": 5183448.0,
+          "median_ci95_ns": [
+            4867341.333333334,
+            5417594.392857143
+          ]
+        },
+        "nar_import/nested-directories/17": {
+          "median_ns": 5464214.2,
+          "median_ci95_ns": [
+            5439888.3125,
+            5500223.888888889
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 42595436.5,
+          "median_ci95_ns": [
+            42537131.0,
+            42700392.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45046811.5,
+          "median_ci95_ns": [
+            42515718.0,
+            45422254.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 47891118.0,
+          "median_ci95_ns": [
+            47770446.0,
+            48125949.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 53273888.5,
+          "median_ci95_ns": [
+            52454923.5,
+            53506178.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 55994373.0,
+          "median_ci95_ns": [
+            55563583.0,
+            56279622.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 92315284.0,
+          "median_ci95_ns": [
+            79434937.0,
+            92800992.0
+          ]
+        }
+      },
+      "c9base-r3": {
+        "nar_decoder_admission/16": {
+          "median_ns": 30711478.0,
+          "median_ci95_ns": [
+            30249870.25,
+            33839187.5
+          ]
+        },
+        "nar_decoder_admission/17": {
+          "median_ns": 34042206.5,
+          "median_ci95_ns": [
+            33351765.0,
+            34963735.0
+          ]
+        },
+        "nar_decoder_admission/32": {
+          "median_ns": 55557895.5,
+          "median_ci95_ns": [
+            52946961.0,
+            58916146.0
+          ]
+        },
+        "nar_decoder_pool/workers-1/8388608": {
+          "median_ns": 40195335.5,
+          "median_ci95_ns": [
+            40154736.0,
+            40228875.0
+          ]
+        },
+        "nar_decoder_pool/workers-2/33554432": {
+          "median_ns": 100839916.0,
+          "median_ci95_ns": [
+            100028750.5,
+            107155093.5
+          ]
+        },
+        "nar_decoder_pool/workers-2/8388608": {
+          "median_ns": 41520392.5,
+          "median_ci95_ns": [
+            40823331.0,
+            42581716.0
+          ]
+        },
+        "nar_import/bytes-0/32": {
+          "median_ns": 5403812.616666667,
+          "median_ci95_ns": [
+            3916345.6666666665,
+            5542170.21875
+          ]
+        },
+        "nar_import/bytes-1024/1": {
+          "median_ns": 2352846.5,
+          "median_ci95_ns": [
+            2326786.0,
+            2751079.0
+          ]
+        },
+        "nar_import/bytes-1024/1024": {
+          "median_ns": 90935228.5,
+          "median_ci95_ns": [
+            89960664.5,
+            91356211.0
+          ]
+        },
+        "nar_import/bytes-1024/15": {
+          "median_ns": 4569043.0,
+          "median_ci95_ns": [
+            4066956.0,
+            4798122.0
+          ]
+        },
+        "nar_import/bytes-1024/16": {
+          "median_ns": 4727897.5,
+          "median_ci95_ns": [
+            4453889.0,
+            4965362.0
+          ]
+        },
+        "nar_import/bytes-1024/17": {
+          "median_ns": 4505838.5,
+          "median_ci95_ns": [
+            4364514.5,
+            4943471.0
+          ]
+        },
+        "nar_import/bytes-1024/256": {
+          "median_ns": 23517557.5,
+          "median_ci95_ns": [
+            23076405.0,
+            23838215.5
+          ]
+        },
+        "nar_import/bytes-1024/64": {
+          "median_ns": 8835103.5,
+          "median_ci95_ns": [
+            8385862.0,
+            8983697.5
+          ]
+        },
+        "nar_import/bytes-131071/16": {
+          "median_ns": 12775226.0,
+          "median_ci95_ns": [
+            12379218.0,
+            13019939.0
+          ]
+        },
+        "nar_import/bytes-131072/16": {
+          "median_ns": 12508616.5,
+          "median_ci95_ns": [
+            12018215.0,
+            14100828.0
+          ]
+        },
+        "nar_import/bytes-131073/16": {
+          "median_ns": 13256887.5,
+          "median_ci95_ns": [
+            13038714.0,
+            13469561.5
+          ]
+        },
+        "nar_import/bytes-16383/32": {
+          "median_ns": 8305556.5,
+          "median_ci95_ns": [
+            7987614.0,
+            8686760.0
+          ]
+        },
+        "nar_import/bytes-16384/32": {
+          "median_ns": 7920754.0,
+          "median_ci95_ns": [
+            7650535.0,
+            8163657.5
+          ]
+        },
+        "nar_import/bytes-16385/127": {
+          "median_ns": 22440144.0,
+          "median_ci95_ns": [
+            21856042.0,
+            22559448.0
+          ]
+        },
+        "nar_import/bytes-16385/128": {
+          "median_ns": 22715698.0,
+          "median_ci95_ns": [
+            21588714.0,
+            23148099.5
+          ]
+        },
+        "nar_import/bytes-16385/129": {
+          "median_ns": 22954286.0,
+          "median_ci95_ns": [
+            21298445.0,
+            25981838.0
+          ]
+        },
+        "nar_import/bytes-16385/15": {
+          "median_ns": 6539516.5,
+          "median_ci95_ns": [
+            6258563.0,
+            6796965.5
+          ]
+        },
+        "nar_import/bytes-16385/16": {
+          "median_ns": 6515051.01111111,
+          "median_ci95_ns": [
+            5354818.833333334,
+            7337923.0625
+          ]
+        },
+        "nar_import/bytes-16385/17": {
+          "median_ns": 6946399.25,
+          "median_ci95_ns": [
+            6865655.8,
+            7186854.05
+          ]
+        },
+        "nar_import/bytes-16385/32": {
+          "median_ns": 9022217.5,
+          "median_ci95_ns": [
+            8829638.0,
+            9183211.0
+          ]
+        },
+        "nar_import/bytes-16385/629": {
+          "median_ns": 75176726.0,
+          "median_ci95_ns": [
+            71769265.5,
+            86115742.0
+          ]
+        },
+        "nar_import/bytes-16385/630": {
+          "median_ns": 88603983.0,
+          "median_ci95_ns": [
+            74965322.0,
+            99279970.0
+          ]
+        },
+        "nar_import/bytes-16385/631": {
+          "median_ns": 98484319.5,
+          "median_ci95_ns": [
+            75029292.0,
+            99314490.0
+          ]
+        },
+        "nar_import/bytes-65535/32": {
+          "median_ns": 14109340.0,
+          "median_ci95_ns": [
+            13845501.75,
+            14701466.25
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 375248432.5,
+          "median_ci95_ns": [
+            349162605.5,
+            409140170.0
+          ]
+        },
+        "nar_import/bytes-65536/32": {
+          "median_ns": 13554841.0,
+          "median_ci95_ns": [
+            13369992.0,
+            14364931.0
+          ]
+        },
+        "nar_import/bytes-65536/512": {
+          "median_ns": 104052977.0,
+          "median_ci95_ns": [
+            79998082.5,
+            120110928.0
+          ]
+        },
+        "nar_import/bytes-65537/32": {
+          "median_ns": 13679175.0,
+          "median_ci95_ns": [
+            13090948.5,
+            14557905.0
+          ]
+        },
+        "nar_import/directories/15": {
+          "median_ns": 5214596.75,
+          "median_ci95_ns": [
+            4834436.5,
+            5606777.25
+          ]
+        },
+        "nar_import/directories/16": {
+          "median_ns": 5316311.5,
+          "median_ci95_ns": [
+            5113517.5,
+            5598869.75
+          ]
+        },
+        "nar_import/directories/17": {
+          "median_ns": 5497893.0,
+          "median_ci95_ns": [
+            5034090.75,
+            5821160.75
+          ]
+        },
+        "nar_import/directories/256": {
+          "median_ns": 27431264.5,
+          "median_ci95_ns": [
+            26484525.5,
+            27865332.5
+          ]
+        },
+        "nar_import/directory-links-4095/63": {
+          "median_ns": 9074379.042857144,
+          "median_ci95_ns": [
+            8254830.75,
+            9601731.8
+          ]
+        },
+        "nar_import/directory-links-4095/64": {
+          "median_ns": 9434805.0,
+          "median_ci95_ns": [
+            9155996.5,
+            9698148.0
+          ]
+        },
+        "nar_import/directory-links-4095/65": {
+          "median_ns": 9444685.0,
+          "median_ci95_ns": [
+            9239231.0,
+            9759048.0
+          ]
+        },
+        "nar_import/nested-bytes-1024/45": {
+          "median_ns": 7707114.5,
+          "median_ci95_ns": [
+            7261107.5,
+            8031583.0
+          ]
+        },
+        "nar_import/nested-bytes-1024/48": {
+          "median_ns": 8122447.5,
+          "median_ci95_ns": [
+            7561305.0,
+            8743814.0
+          ]
+        },
+        "nar_import/nested-bytes-1024/51": {
+          "median_ns": 7697710.0,
+          "median_ci95_ns": [
+            7389747.0,
+            8406621.0
+          ]
+        },
+        "nar_import/nested-directories/15": {
+          "median_ns": 4753677.5,
+          "median_ci95_ns": [
+            4073491.5,
+            5397178.5
+          ]
+        },
+        "nar_import/nested-directories/16": {
+          "median_ns": 4681134.166666666,
+          "median_ci95_ns": [
+            4376331.875,
+            5514316.527777778
+          ]
+        },
+        "nar_import/nested-directories/17": {
+          "median_ns": 5605497.475,
+          "median_ci95_ns": [
+            5588164.008928571,
+            5618704.9
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 42219479.5,
+          "median_ci95_ns": [
+            32557559.0,
+            42603501.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45050291.0,
+          "median_ci95_ns": [
+            40567973.0,
+            45231405.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 47685441.0,
+          "median_ci95_ns": [
+            34763439.0,
+            48337860.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 52794141.0,
+          "median_ci95_ns": [
+            45730200.0,
+            53348845.5
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 55674239.0,
+          "median_ci95_ns": [
+            47037756.0,
+            56003205.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 96523237.5,
+          "median_ci95_ns": [
+            84006045.0,
+            97059384.0
+          ]
+        }
+      },
+      "c9base-r4": {
+        "nar_decoder_admission/16": {
+          "median_ns": 29865892.5,
+          "median_ci95_ns": [
+            28585940.5,
+            31112630.0
+          ]
+        },
+        "nar_decoder_admission/17": {
+          "median_ns": 32261848.0,
+          "median_ci95_ns": [
+            29838548.0,
+            35327214.5
+          ]
+        },
+        "nar_decoder_admission/32": {
+          "median_ns": 55639695.5,
+          "median_ci95_ns": [
+            53592482.0,
+            56932153.0
+          ]
+        },
+        "nar_decoder_pool/workers-1/8388608": {
+          "median_ns": 40122600.5,
+          "median_ci95_ns": [
+            40064740.5,
+            40205724.5
+          ]
+        },
+        "nar_decoder_pool/workers-2/33554432": {
+          "median_ns": 107737962.5,
+          "median_ci95_ns": [
+            100182222.5,
+            110222951.5
+          ]
+        },
+        "nar_decoder_pool/workers-2/8388608": {
+          "median_ns": 41956859.0,
+          "median_ci95_ns": [
+            41632466.0,
+            42202592.0
+          ]
+        },
+        "nar_import/bytes-0/32": {
+          "median_ns": 4970204.5,
+          "median_ci95_ns": [
+            4707321.0,
+            5335812.0
+          ]
+        },
+        "nar_import/bytes-1024/1": {
+          "median_ns": 2931457.0,
+          "median_ci95_ns": [
+            2340956.0,
+            3251931.0
+          ]
+        },
+        "nar_import/bytes-1024/1024": {
+          "median_ns": 89673653.5,
+          "median_ci95_ns": [
+            87753139.5,
+            91050884.5
+          ]
+        },
+        "nar_import/bytes-1024/15": {
+          "median_ns": 4326018.5,
+          "median_ci95_ns": [
+            4072719.5,
+            4643091.0
+          ]
+        },
+        "nar_import/bytes-1024/16": {
+          "median_ns": 4645416.0,
+          "median_ci95_ns": [
+            4456653.0,
+            4791160.0
+          ]
+        },
+        "nar_import/bytes-1024/17": {
+          "median_ns": 5053013.5,
+          "median_ci95_ns": [
+            4805145.5,
+            5138038.5
+          ]
+        },
+        "nar_import/bytes-1024/256": {
+          "median_ns": 22003764.5,
+          "median_ci95_ns": [
+            20530053.0,
+            23689624.5
+          ]
+        },
+        "nar_import/bytes-1024/64": {
+          "median_ns": 8886240.0,
+          "median_ci95_ns": [
+            8375883.5,
+            8953159.5
+          ]
+        },
+        "nar_import/bytes-131071/16": {
+          "median_ns": 13153764.5,
+          "median_ci95_ns": [
+            12897051.0,
+            13979499.5
+          ]
+        },
+        "nar_import/bytes-131072/16": {
+          "median_ns": 14546796.5,
+          "median_ci95_ns": [
+            13996085.0,
+            14669520.0
+          ]
+        },
+        "nar_import/bytes-131073/16": {
+          "median_ns": 14642645.0,
+          "median_ci95_ns": [
+            14407322.0,
+            14722520.0
+          ]
+        },
+        "nar_import/bytes-16383/32": {
+          "median_ns": 8518887.5,
+          "median_ci95_ns": [
+            8103340.0,
+            8798201.0
+          ]
+        },
+        "nar_import/bytes-16384/32": {
+          "median_ns": 7597248.0,
+          "median_ci95_ns": [
+            6998342.0,
+            7978886.0
+          ]
+        },
+        "nar_import/bytes-16385/127": {
+          "median_ns": 21238109.5,
+          "median_ci95_ns": [
+            20458774.0,
+            22306333.0
+          ]
+        },
+        "nar_import/bytes-16385/128": {
+          "median_ns": 20862922.0,
+          "median_ci95_ns": [
+            20530024.0,
+            22030805.0
+          ]
+        },
+        "nar_import/bytes-16385/129": {
+          "median_ns": 25076326.0,
+          "median_ci95_ns": [
+            22791510.0,
+            25425988.5
+          ]
+        },
+        "nar_import/bytes-16385/15": {
+          "median_ns": 6227308.666666666,
+          "median_ci95_ns": [
+            5938893.833333334,
+            7066933.0
+          ]
+        },
+        "nar_import/bytes-16385/16": {
+          "median_ns": 6547221.833333333,
+          "median_ci95_ns": [
+            6160437.166666667,
+            6842604.666666667
+          ]
+        },
+        "nar_import/bytes-16385/17": {
+          "median_ns": 6619999.333333334,
+          "median_ci95_ns": [
+            6354775.833333334,
+            7148859.166666667
+          ]
+        },
+        "nar_import/bytes-16385/32": {
+          "median_ns": 8482527.5,
+          "median_ci95_ns": [
+            8021511.0,
+            8789251.0
+          ]
+        },
+        "nar_import/bytes-16385/629": {
+          "median_ns": 73623198.0,
+          "median_ci95_ns": [
+            66147793.5,
+            86785946.5
+          ]
+        },
+        "nar_import/bytes-16385/630": {
+          "median_ns": 73570663.5,
+          "median_ci95_ns": [
+            65962075.0,
+            85140392.0
+          ]
+        },
+        "nar_import/bytes-16385/631": {
+          "median_ns": 73530888.0,
+          "median_ci95_ns": [
+            67990767.0,
+            74755666.0
+          ]
+        },
+        "nar_import/bytes-65535/32": {
+          "median_ns": 13862542.5,
+          "median_ci95_ns": [
+            13323688.5,
+            14236440.0
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 381506582.0,
+          "median_ci95_ns": [
+            359422687.0,
+            399175454.0
+          ]
+        },
+        "nar_import/bytes-65536/32": {
+          "median_ns": 13276448.5,
+          "median_ci95_ns": [
+            12844256.5,
+            14499991.0
+          ]
+        },
+        "nar_import/bytes-65536/512": {
+          "median_ns": 88601556.5,
+          "median_ci95_ns": [
+            81101152.5,
+            118143475.0
+          ]
+        },
+        "nar_import/bytes-65537/32": {
+          "median_ns": 14988478.5,
+          "median_ci95_ns": [
+            14532051.0,
+            15450775.0
+          ]
+        },
+        "nar_import/directories/15": {
+          "median_ns": 4507535.0,
+          "median_ci95_ns": [
+            4357783.5,
+            4627639.0
+          ]
+        },
+        "nar_import/directories/16": {
+          "median_ns": 5360468.1625,
+          "median_ci95_ns": [
+            5343537.0,
+            5378572.25
+          ]
+        },
+        "nar_import/directories/17": {
+          "median_ns": 4663279.8,
+          "median_ci95_ns": [
+            4617478.333333333,
+            5361889.3125
+          ]
+        },
+        "nar_import/directories/256": {
+          "median_ns": 26463780.5,
+          "median_ci95_ns": [
+            25265133.0,
+            28415416.0
+          ]
+        },
+        "nar_import/directory-links-4095/63": {
+          "median_ns": 9457747.25,
+          "median_ci95_ns": [
+            9222076.25,
+            9681646.0
+          ]
+        },
+        "nar_import/directory-links-4095/64": {
+          "median_ns": 9205759.0,
+          "median_ci95_ns": [
+            8810326.0,
+            9609321.0
+          ]
+        },
+        "nar_import/directory-links-4095/65": {
+          "median_ns": 9429962.0,
+          "median_ci95_ns": [
+            9375262.0,
+            9625731.0
+          ]
+        },
+        "nar_import/nested-bytes-1024/45": {
+          "median_ns": 7679215.5,
+          "median_ci95_ns": [
+            7361209.75,
+            8355226.0
+          ]
+        },
+        "nar_import/nested-bytes-1024/48": {
+          "median_ns": 8544087.0,
+          "median_ci95_ns": [
+            8003571.0,
+            8894756.0
+          ]
+        },
+        "nar_import/nested-bytes-1024/51": {
+          "median_ns": 8355069.5,
+          "median_ci95_ns": [
+            7655868.5,
+            8959405.0
+          ]
+        },
+        "nar_import/nested-directories/15": {
+          "median_ns": 4177077.5625,
+          "median_ci95_ns": [
+            3881244.8,
+            4220566.285714285
+          ]
+        },
+        "nar_import/nested-directories/16": {
+          "median_ns": 4994079.733333333,
+          "median_ci95_ns": [
+            4302093.0,
+            5278967.333333333
+          ]
+        },
+        "nar_import/nested-directories/17": {
+          "median_ns": 4946987.0,
+          "median_ci95_ns": [
+            4894020.5,
+            5151631.25
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 42596230.5,
+          "median_ci95_ns": [
+            39697837.0,
+            42761056.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45196737.5,
+          "median_ci95_ns": [
+            43844542.0,
+            45507064.5
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 48108277.0,
+          "median_ci95_ns": [
+            47983639.0,
+            48324733.5
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 53319439.5,
+          "median_ci95_ns": [
+            52860581.0,
+            53558914.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 62642868.0,
+          "median_ci95_ns": [
+            50401381.0,
+            63943896.5
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 93027628.5,
+          "median_ci95_ns": [
+            87313058.0,
+            106194406.0
+          ]
+        }
+      },
+      "c9cand-r1": {
+        "nar_decoder_admission/16": {
+          "median_ns": 27998792.0,
+          "median_ci95_ns": [
+            27203671.0,
+            29312529.5
+          ]
+        },
+        "nar_decoder_admission/17": {
+          "median_ns": 29780646.5,
+          "median_ci95_ns": [
+            28955476.0,
+            30936285.0
+          ]
+        },
+        "nar_decoder_admission/32": {
+          "median_ns": 52428804.5,
+          "median_ci95_ns": [
+            51963982.5,
+            54695371.5
+          ]
+        },
+        "nar_decoder_pool/workers-1/8388608": {
+          "median_ns": 38985752.5,
+          "median_ci95_ns": [
+            38846593.5,
+            40242715.0
+          ]
+        },
+        "nar_decoder_pool/workers-2/33554432": {
+          "median_ns": 100596623.5,
+          "median_ci95_ns": [
+            100142126.0,
+            102973125.0
+          ]
+        },
+        "nar_decoder_pool/workers-2/8388608": {
+          "median_ns": 41717627.0,
+          "median_ci95_ns": [
+            41467468.0,
+            42024065.0
+          ]
+        },
+        "nar_import/bytes-0/32": {
+          "median_ns": 4763157.0,
+          "median_ci95_ns": [
+            4532109.0,
+            5120110.0
+          ]
+        },
+        "nar_import/bytes-1024/1": {
+          "median_ns": 2747401.75,
+          "median_ci95_ns": [
+            2632407.25,
+            2882903.0
+          ]
+        },
+        "nar_import/bytes-1024/1024": {
+          "median_ns": 87749829.0,
+          "median_ci95_ns": [
+            84225294.5,
+            90199684.5
+          ]
+        },
+        "nar_import/bytes-1024/15": {
+          "median_ns": 4682928.0,
+          "median_ci95_ns": [
+            4322494.0,
+            5109770.0
+          ]
+        },
+        "nar_import/bytes-1024/16": {
+          "median_ns": 4198816.0,
+          "median_ci95_ns": [
+            4060621.0,
+            4347619.5
+          ]
+        },
+        "nar_import/bytes-1024/17": {
+          "median_ns": 5093125.0,
+          "median_ci95_ns": [
+            4809447.5,
+            5201549.5
+          ]
+        },
+        "nar_import/bytes-1024/256": {
+          "median_ns": 22659403.5,
+          "median_ci95_ns": [
+            22574319.0,
+            23006586.5
+          ]
+        },
+        "nar_import/bytes-1024/64": {
+          "median_ns": 8260007.0,
+          "median_ci95_ns": [
+            7772560.0,
+            8444690.5
+          ]
+        },
+        "nar_import/bytes-131071/16": {
+          "median_ns": 5662602.714285715,
+          "median_ci95_ns": [
+            5638993.975,
+            8984173.1
+          ]
+        },
+        "nar_import/bytes-131072/16": {
+          "median_ns": 13016099.0,
+          "median_ci95_ns": [
+            12683121.0,
+            13535691.0
+          ]
+        },
+        "nar_import/bytes-131073/16": {
+          "median_ns": 13055604.0,
+          "median_ci95_ns": [
+            12161534.5,
+            13345692.0
+          ]
+        },
+        "nar_import/bytes-16383/32": {
+          "median_ns": 7919713.5,
+          "median_ci95_ns": [
+            7401307.0,
+            8080167.5
+          ]
+        },
+        "nar_import/bytes-16384/32": {
+          "median_ns": 7287433.0,
+          "median_ci95_ns": [
+            7099923.5,
+            7955573.0
+          ]
+        },
+        "nar_import/bytes-16385/127": {
+          "median_ns": 20309701.5,
+          "median_ci95_ns": [
+            19753735.0,
+            21770263.0
+          ]
+        },
+        "nar_import/bytes-16385/128": {
+          "median_ns": 20346701.0,
+          "median_ci95_ns": [
+            19911004.0,
+            21000458.0
+          ]
+        },
+        "nar_import/bytes-16385/129": {
+          "median_ns": 21505899.5,
+          "median_ci95_ns": [
+            20721319.5,
+            23122395.0
+          ]
+        },
+        "nar_import/bytes-16385/15": {
+          "median_ns": 5213694.5,
+          "median_ci95_ns": [
+            4815380.333333333,
+            5377782.0
+          ]
+        },
+        "nar_import/bytes-16385/16": {
+          "median_ns": 5664144.125,
+          "median_ci95_ns": [
+            5399270.8,
+            5971470.071428571
+          ]
+        },
+        "nar_import/bytes-16385/17": {
+          "median_ns": 5589486.166666666,
+          "median_ci95_ns": [
+            4927614.5,
+            6173487.333333333
+          ]
+        },
+        "nar_import/bytes-16385/32": {
+          "median_ns": 8376156.0,
+          "median_ci95_ns": [
+            8230196.5,
+            8753309.0
+          ]
+        },
+        "nar_import/bytes-16385/629": {
+          "median_ns": 71919986.0,
+          "median_ci95_ns": [
+            57592914.0,
+            84099559.5
+          ]
+        },
+        "nar_import/bytes-16385/630": {
+          "median_ns": 71041181.0,
+          "median_ci95_ns": [
+            57437426.0,
+            74430661.0
+          ]
+        },
+        "nar_import/bytes-16385/631": {
+          "median_ns": 71922860.5,
+          "median_ci95_ns": [
+            62580765.5,
+            80819399.0
+          ]
+        },
+        "nar_import/bytes-65535/32": {
+          "median_ns": 12215533.666666666,
+          "median_ci95_ns": [
+            11021932.333333334,
+            13157369.666666666
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 388213652.5,
+          "median_ci95_ns": [
+            354239316.0,
+            405801445.5
+          ]
+        },
+        "nar_import/bytes-65536/32": {
+          "median_ns": 12879855.0,
+          "median_ci95_ns": [
+            6463022.5,
+            13220800.5
+          ]
+        },
+        "nar_import/bytes-65536/512": {
+          "median_ns": 80111368.5,
+          "median_ci95_ns": [
+            79364767.0,
+            80222717.5
+          ]
+        },
+        "nar_import/bytes-65537/32": {
+          "median_ns": 13393147.0,
+          "median_ci95_ns": [
+            12935945.0,
+            14138092.5
+          ]
+        },
+        "nar_import/directories/15": {
+          "median_ns": 4886421.75,
+          "median_ci95_ns": [
+            4366464.5,
+            5107607.5
+          ]
+        },
+        "nar_import/directories/16": {
+          "median_ns": 4873994.0,
+          "median_ci95_ns": [
+            4340115.0,
+            5079853.0
+          ]
+        },
+        "nar_import/directories/17": {
+          "median_ns": 5012391.0,
+          "median_ci95_ns": [
+            4902681.0,
+            5342826.25
+          ]
+        },
+        "nar_import/directories/256": {
+          "median_ns": 24928849.5,
+          "median_ci95_ns": [
+            22753952.5,
+            25687370.5
+          ]
+        },
+        "nar_import/directory-links-4095/63": {
+          "median_ns": 8595884.75,
+          "median_ci95_ns": [
+            5688712.0,
+            9011462.0
+          ]
+        },
+        "nar_import/directory-links-4095/64": {
+          "median_ns": 8767069.0,
+          "median_ci95_ns": [
+            8401591.0,
+            8972628.0
+          ]
+        },
+        "nar_import/directory-links-4095/65": {
+          "median_ns": 8802733.5,
+          "median_ci95_ns": [
+            8646359.5,
+            9070047.0
+          ]
+        },
+        "nar_import/nested-bytes-1024/45": {
+          "median_ns": 7580635.5,
+          "median_ci95_ns": [
+            7366097.0,
+            8050323.0
+          ]
+        },
+        "nar_import/nested-bytes-1024/48": {
+          "median_ns": 7421752.5,
+          "median_ci95_ns": [
+            6599202.0,
+            8377381.0
+          ]
+        },
+        "nar_import/nested-bytes-1024/51": {
+          "median_ns": 7952698.75,
+          "median_ci95_ns": [
+            7648108.0,
+            8281371.5
+          ]
+        },
+        "nar_import/nested-directories/15": {
+          "median_ns": 4708317.0,
+          "median_ci95_ns": [
+            4397714.25,
+            4955716.0
+          ]
+        },
+        "nar_import/nested-directories/16": {
+          "median_ns": 4952153.75,
+          "median_ci95_ns": [
+            4729727.5,
+            5208894.5
+          ]
+        },
+        "nar_import/nested-directories/17": {
+          "median_ns": 4619936.333333334,
+          "median_ci95_ns": [
+            4516494.0,
+            5023193.666666667
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 42967645.0,
+          "median_ci95_ns": [
+            41369325.5,
+            43114129.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 47483615.0,
+          "median_ci95_ns": [
+            41810687.0,
+            49290160.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 51689627.5,
+          "median_ci95_ns": [
+            45564588.0,
+            52143116.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 56039286.0,
+          "median_ci95_ns": [
+            40638564.0,
+            57534103.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 60774805.5,
+          "median_ci95_ns": [
+            56668942.0,
+            60880017.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 99583803.0,
+          "median_ci95_ns": [
+            70228759.0,
+            100866266.0
+          ]
+        }
+      },
+      "c9cand-r2": {
+        "nar_decoder_admission/16": {
+          "median_ns": 28435739.0,
+          "median_ci95_ns": [
+            27431449.0,
+            30856860.0
+          ]
+        },
+        "nar_decoder_admission/17": {
+          "median_ns": 30008180.0,
+          "median_ci95_ns": [
+            29483538.0,
+            30401623.0
+          ]
+        },
+        "nar_decoder_admission/32": {
+          "median_ns": 52167320.5,
+          "median_ci95_ns": [
+            51249286.0,
+            53387848.5
+          ]
+        },
+        "nar_decoder_pool/workers-1/8388608": {
+          "median_ns": 38955038.5,
+          "median_ci95_ns": [
+            38789494.0,
+            39260870.5
+          ]
+        },
+        "nar_decoder_pool/workers-2/33554432": {
+          "median_ns": 100574323.5,
+          "median_ci95_ns": [
+            99835718.0,
+            101290629.0
+          ]
+        },
+        "nar_decoder_pool/workers-2/8388608": {
+          "median_ns": 41944635.0,
+          "median_ci95_ns": [
+            41798645.5,
+            42669305.5
+          ]
+        },
+        "nar_import/bytes-0/32": {
+          "median_ns": 4865151.5,
+          "median_ci95_ns": [
+            4729862.0,
+            5174144.5
+          ]
+        },
+        "nar_import/bytes-1024/1": {
+          "median_ns": 3007432.5,
+          "median_ci95_ns": [
+            2491810.5,
+            3383700.0
+          ]
+        },
+        "nar_import/bytes-1024/1024": {
+          "median_ns": 86866803.5,
+          "median_ci95_ns": [
+            85300102.0,
+            88461759.0
+          ]
+        },
+        "nar_import/bytes-1024/15": {
+          "median_ns": 4392334.5,
+          "median_ci95_ns": [
+            4158635.5,
+            4642573.0
+          ]
+        },
+        "nar_import/bytes-1024/16": {
+          "median_ns": 4833277.0,
+          "median_ci95_ns": [
+            4277785.0,
+            5106840.0
+          ]
+        },
+        "nar_import/bytes-1024/17": {
+          "median_ns": 4900771.0,
+          "median_ci95_ns": [
+            4521134.0,
+            5071030.5
+          ]
+        },
+        "nar_import/bytes-1024/256": {
+          "median_ns": 22765977.5,
+          "median_ci95_ns": [
+            19122858.0,
+            23891360.5
+          ]
+        },
+        "nar_import/bytes-1024/64": {
+          "median_ns": 8426706.0,
+          "median_ci95_ns": [
+            8172292.0,
+            8832768.0
+          ]
+        },
+        "nar_import/bytes-131071/16": {
+          "median_ns": 5683449.1875,
+          "median_ci95_ns": [
+            5676739.777777778,
+            5729246.75
+          ]
+        },
+        "nar_import/bytes-131072/16": {
+          "median_ns": 5866752.715277778,
+          "median_ci95_ns": [
+            5834006.0,
+            5879754.0
+          ]
+        },
+        "nar_import/bytes-131073/16": {
+          "median_ns": 5845591.444444444,
+          "median_ci95_ns": [
+            5817361.0,
+            5862298.666666667
+          ]
+        },
+        "nar_import/bytes-16383/32": {
+          "median_ns": 7866609.0,
+          "median_ci95_ns": [
+            7645106.0,
+            8464740.0
+          ]
+        },
+        "nar_import/bytes-16384/32": {
+          "median_ns": 7442796.5,
+          "median_ci95_ns": [
+            7131938.0,
+            7575255.0
+          ]
+        },
+        "nar_import/bytes-16385/127": {
+          "median_ns": 20032118.5,
+          "median_ci95_ns": [
+            19680375.0,
+            21640764.0
+          ]
+        },
+        "nar_import/bytes-16385/128": {
+          "median_ns": 20301312.0,
+          "median_ci95_ns": [
+            19766965.0,
+            21288746.0
+          ]
+        },
+        "nar_import/bytes-16385/129": {
+          "median_ns": 22591473.0,
+          "median_ci95_ns": [
+            20512081.0,
+            23232114.5
+          ]
+        },
+        "nar_import/bytes-16385/15": {
+          "median_ns": 5464534.55,
+          "median_ci95_ns": [
+            5028121.291666666,
+            5626626.0
+          ]
+        },
+        "nar_import/bytes-16385/16": {
+          "median_ns": 5775061.333333333,
+          "median_ci95_ns": [
+            5596787.333333333,
+            6067114.333333333
+          ]
+        },
+        "nar_import/bytes-16385/17": {
+          "median_ns": 6053382.833333334,
+          "median_ci95_ns": [
+            5598029.0,
+            6167331.0
+          ]
+        },
+        "nar_import/bytes-16385/32": {
+          "median_ns": 8765948.5,
+          "median_ci95_ns": [
+            8053403.0,
+            8971502.5
+          ]
+        },
+        "nar_import/bytes-16385/629": {
+          "median_ns": 94688123.0,
+          "median_ci95_ns": [
+            65384919.0,
+            120657591.5
+          ]
+        },
+        "nar_import/bytes-16385/630": {
+          "median_ns": 98611485.0,
+          "median_ci95_ns": [
+            65694112.0,
+            136541634.0
+          ]
+        },
+        "nar_import/bytes-16385/631": {
+          "median_ns": 75704758.5,
+          "median_ci95_ns": [
+            70190610.5,
+            114808910.0
+          ]
+        },
+        "nar_import/bytes-65535/32": {
+          "median_ns": 9560972.333333332,
+          "median_ci95_ns": [
+            7267737.214285715,
+            10511119.35
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 379422252.0,
+          "median_ci95_ns": [
+            335214214.0,
+            403673506.0
+          ]
+        },
+        "nar_import/bytes-65536/32": {
+          "median_ns": 10302541.638888888,
+          "median_ci95_ns": [
+            9730794.833333334,
+            10767369.75
+          ]
+        },
+        "nar_import/bytes-65536/512": {
+          "median_ns": 80085358.0,
+          "median_ci95_ns": [
+            78826540.0,
+            80519425.5
+          ]
+        },
+        "nar_import/bytes-65537/32": {
+          "median_ns": 6095199.5,
+          "median_ci95_ns": [
+            6046940.0,
+            6454272.0
+          ]
+        },
+        "nar_import/directories/15": {
+          "median_ns": 2306029.783333333,
+          "median_ci95_ns": [
+            2296790.8333333335,
+            2311884.3080357146
+          ]
+        },
+        "nar_import/directories/16": {
+          "median_ns": 2321113.9523809524,
+          "median_ci95_ns": [
+            2313392.0,
+            2335821.5
+          ]
+        },
+        "nar_import/directories/17": {
+          "median_ns": 2376861.729166667,
+          "median_ci95_ns": [
+            2369935.277777778,
+            2382236.5
+          ]
+        },
+        "nar_import/directories/256": {
+          "median_ns": 25733986.5,
+          "median_ci95_ns": [
+            25395743.666666664,
+            26938209.333333332
+          ]
+        },
+        "nar_import/directory-links-4095/63": {
+          "median_ns": 4051836.207142857,
+          "median_ci95_ns": [
+            3893691.0555555555,
+            4417927.166666666
+          ]
+        },
+        "nar_import/directory-links-4095/64": {
+          "median_ns": 9120356.5,
+          "median_ci95_ns": [
+            8760049.0,
+            9407675.0
+          ]
+        },
+        "nar_import/directory-links-4095/65": {
+          "median_ns": 9263726.0,
+          "median_ci95_ns": [
+            8903678.0,
+            9322980.5
+          ]
+        },
+        "nar_import/nested-bytes-1024/45": {
+          "median_ns": 3404042.833333333,
+          "median_ci95_ns": [
+            3392810.2666666666,
+            3538747.9285714286
+          ]
+        },
+        "nar_import/nested-bytes-1024/48": {
+          "median_ns": 3506981.5666666664,
+          "median_ci95_ns": [
+            3486789.5714285714,
+            3520844.75
+          ]
+        },
+        "nar_import/nested-bytes-1024/51": {
+          "median_ns": 3584813.0714285714,
+          "median_ci95_ns": [
+            3575257.75,
+            3592177.54375
+          ]
+        },
+        "nar_import/nested-directories/15": {
+          "median_ns": 2202901.35,
+          "median_ci95_ns": [
+            2193028.3333333335,
+            2215548.125
+          ]
+        },
+        "nar_import/nested-directories/16": {
+          "median_ns": 2218307.895833333,
+          "median_ci95_ns": [
+            2212011.05,
+            2225946.6428571427
+          ]
+        },
+        "nar_import/nested-directories/17": {
+          "median_ns": 2275527.0,
+          "median_ci95_ns": [
+            2262924.0,
+            2283276.5
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 43019125.0,
+          "median_ci95_ns": [
+            41092636.0,
+            43094994.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45881943.0,
+          "median_ci95_ns": [
+            39974261.5,
+            46038685.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 48831321.5,
+          "median_ci95_ns": [
+            48524349.0,
+            49071909.5
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 53387567.0,
+          "median_ci95_ns": [
+            52548263.0,
+            54046795.5
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 59898786.5,
+          "median_ci95_ns": [
+            53894866.0,
+            61126618.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 99146368.5,
+          "median_ci95_ns": [
+            83752496.0,
+            101342798.0
+          ]
+        }
+      },
+      "c9cand-r3": {
+        "nar_decoder_admission/16": {
+          "median_ns": 29128573.5,
+          "median_ci95_ns": [
+            28070890.0,
+            30460730.0
+          ]
+        },
+        "nar_decoder_admission/17": {
+          "median_ns": 29106168.5,
+          "median_ci95_ns": [
+            28231073.0,
+            30269581.5
+          ]
+        },
+        "nar_decoder_admission/32": {
+          "median_ns": 51883776.5,
+          "median_ci95_ns": [
+            51159211.0,
+            52491553.0
+          ]
+        },
+        "nar_decoder_pool/workers-1/8388608": {
+          "median_ns": 38682588.5,
+          "median_ci95_ns": [
+            38555569.0,
+            38828068.0
+          ]
+        },
+        "nar_decoder_pool/workers-2/33554432": {
+          "median_ns": 100515267.5,
+          "median_ci95_ns": [
+            97001509.5,
+            101459137.0
+          ]
+        },
+        "nar_decoder_pool/workers-2/8388608": {
+          "median_ns": 42109357.0,
+          "median_ci95_ns": [
+            41212567.5,
+            42167476.0
+          ]
+        },
+        "nar_import/bytes-0/32": {
+          "median_ns": 4782206.8625,
+          "median_ci95_ns": [
+            3479396.777777778,
+            5060477.5
+          ]
+        },
+        "nar_import/bytes-1024/1": {
+          "median_ns": 2902358.5,
+          "median_ci95_ns": [
+            2478446.0,
+            3240501.0
+          ]
+        },
+        "nar_import/bytes-1024/1024": {
+          "median_ns": 90812379.5,
+          "median_ci95_ns": [
+            81438924.0,
+            91506055.0
+          ]
+        },
+        "nar_import/bytes-1024/15": {
+          "median_ns": 4725884.75,
+          "median_ci95_ns": [
+            4451139.0,
+            4865491.75
+          ]
+        },
+        "nar_import/bytes-1024/16": {
+          "median_ns": 4731902.5,
+          "median_ci95_ns": [
+            4499054.5,
+            5096220.0
+          ]
+        },
+        "nar_import/bytes-1024/17": {
+          "median_ns": 5027870.5,
+          "median_ci95_ns": [
+            4687063.0,
+            5218919.5
+          ]
+        },
+        "nar_import/bytes-1024/256": {
+          "median_ns": 23201419.5,
+          "median_ci95_ns": [
+            19556266.0,
+            23379308.5
+          ]
+        },
+        "nar_import/bytes-1024/64": {
+          "median_ns": 8381801.5,
+          "median_ci95_ns": [
+            7427627.0,
+            8576949.5
+          ]
+        },
+        "nar_import/bytes-131071/16": {
+          "median_ns": 8191007.0,
+          "median_ci95_ns": [
+            5982627.75,
+            12797385.25
+          ]
+        },
+        "nar_import/bytes-131072/16": {
+          "median_ns": 6425812.319444444,
+          "median_ci95_ns": [
+            6294395.732142857,
+            6966576.4
+          ]
+        },
+        "nar_import/bytes-131073/16": {
+          "median_ns": 6093422.666666666,
+          "median_ci95_ns": [
+            5847056.777777778,
+            6181066.708333334
+          ]
+        },
+        "nar_import/bytes-16383/32": {
+          "median_ns": 8041323.0,
+          "median_ci95_ns": [
+            7476206.0,
+            8290476.5
+          ]
+        },
+        "nar_import/bytes-16384/32": {
+          "median_ns": 7210788.0,
+          "median_ci95_ns": [
+            6905550.0,
+            7350142.5
+          ]
+        },
+        "nar_import/bytes-16385/127": {
+          "median_ns": 19938483.5,
+          "median_ci95_ns": [
+            19583846.0,
+            21585989.0
+          ]
+        },
+        "nar_import/bytes-16385/128": {
+          "median_ns": 20293021.5,
+          "median_ci95_ns": [
+            19678735.0,
+            21670783.0
+          ]
+        },
+        "nar_import/bytes-16385/129": {
+          "median_ns": 9998046.5,
+          "median_ci95_ns": [
+            9910892.0,
+            10090366.0
+          ]
+        },
+        "nar_import/bytes-16385/15": {
+          "median_ns": 5290364.0,
+          "median_ci95_ns": [
+            4919486.166666666,
+            5865279.0
+          ]
+        },
+        "nar_import/bytes-16385/16": {
+          "median_ns": 5561334.333333334,
+          "median_ci95_ns": [
+            5114825.166666666,
+            5945465.333333333
+          ]
+        },
+        "nar_import/bytes-16385/17": {
+          "median_ns": 5865770.5,
+          "median_ci95_ns": [
+            5267769.333333333,
+            6076171.0
+          ]
+        },
+        "nar_import/bytes-16385/32": {
+          "median_ns": 8233217.0,
+          "median_ci95_ns": [
+            8013813.0,
+            8777499.0
+          ]
+        },
+        "nar_import/bytes-16385/629": {
+          "median_ns": 74131182.0,
+          "median_ci95_ns": [
+            69657463.0,
+            83050295.0
+          ]
+        },
+        "nar_import/bytes-16385/630": {
+          "median_ns": 65315089.0,
+          "median_ci95_ns": [
+            49034043.0,
+            86259646.0
+          ]
+        },
+        "nar_import/bytes-16385/631": {
+          "median_ns": 73705594.5,
+          "median_ci95_ns": [
+            65336323.5,
+            85107252.5
+          ]
+        },
+        "nar_import/bytes-65535/32": {
+          "median_ns": 13147847.5,
+          "median_ci95_ns": [
+            12202709.0,
+            13471056.5
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 389070641.0,
+          "median_ci95_ns": [
+            365480809.0,
+            407547449.0
+          ]
+        },
+        "nar_import/bytes-65536/32": {
+          "median_ns": 6284083.5,
+          "median_ci95_ns": [
+            6186053.5,
+            6530842.0
+          ]
+        },
+        "nar_import/bytes-65536/512": {
+          "median_ns": 79937297.5,
+          "median_ci95_ns": [
+            79447630.5,
+            80296376.0
+          ]
+        },
+        "nar_import/bytes-65537/32": {
+          "median_ns": 13823779.0,
+          "median_ci95_ns": [
+            13121373.0,
+            14099202.5
+          ]
+        },
+        "nar_import/directories/15": {
+          "median_ns": 2464502.739583333,
+          "median_ci95_ns": [
+            2302889.7,
+            3831942.9583333335
+          ]
+        },
+        "nar_import/directories/16": {
+          "median_ns": 4902451.75,
+          "median_ci95_ns": [
+            4680345.5,
+            5228355.0
+          ]
+        },
+        "nar_import/directories/17": {
+          "median_ns": 5030608.25,
+          "median_ci95_ns": [
+            4703165.5,
+            5472033.0
+          ]
+        },
+        "nar_import/directories/256": {
+          "median_ns": 24323853.0,
+          "median_ci95_ns": [
+            21311727.0,
+            26002988.0
+          ]
+        },
+        "nar_import/directory-links-4095/63": {
+          "median_ns": 5302386.233333333,
+          "median_ci95_ns": [
+            3882965.511111111,
+            6255037.833333333
+          ]
+        },
+        "nar_import/directory-links-4095/64": {
+          "median_ns": 8983566.25,
+          "median_ci95_ns": [
+            8810000.25,
+            9195062.5
+          ]
+        },
+        "nar_import/directory-links-4095/65": {
+          "median_ns": 9067188.5,
+          "median_ci95_ns": [
+            8935394.5,
+            9247612.0
+          ]
+        },
+        "nar_import/nested-bytes-1024/45": {
+          "median_ns": 3377359.979166667,
+          "median_ci95_ns": [
+            3357706.3499999996,
+            3398190.0
+          ]
+        },
+        "nar_import/nested-bytes-1024/48": {
+          "median_ns": 3473603.476190476,
+          "median_ci95_ns": [
+            3456149.95,
+            4304194.666666667
+          ]
+        },
+        "nar_import/nested-bytes-1024/51": {
+          "median_ns": 3560346.416666667,
+          "median_ci95_ns": [
+            3545905.15,
+            3574600.2875
+          ]
+        },
+        "nar_import/nested-directories/15": {
+          "median_ns": 4613423.75,
+          "median_ci95_ns": [
+            4319673.0,
+            4782594.75
+          ]
+        },
+        "nar_import/nested-directories/16": {
+          "median_ns": 4746803.0,
+          "median_ci95_ns": [
+            4679601.0,
+            4901364.25
+          ]
+        },
+        "nar_import/nested-directories/17": {
+          "median_ns": 4574593.0,
+          "median_ci95_ns": [
+            2812435.833333333,
+            4851538.0
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 42902075.5,
+          "median_ci95_ns": [
+            42785242.0,
+            43069001.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45643574.5,
+          "median_ci95_ns": [
+            39682081.5,
+            45940294.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 48520930.5,
+          "median_ci95_ns": [
+            48448874.0,
+            48673686.5
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 53376100.0,
+          "median_ci95_ns": [
+            53132414.5,
+            53601917.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 60800556.5,
+          "median_ci95_ns": [
+            56148353.0,
+            60884658.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 100709921.0,
+          "median_ci95_ns": [
+            70677017.0,
+            101234118.0
+          ]
+        }
+      },
+      "c9cand-r4": {
+        "nar_decoder_admission/16": {
+          "median_ns": 27478831.0,
+          "median_ci95_ns": [
+            27001129.0,
+            28712494.0
+          ]
+        },
+        "nar_decoder_admission/17": {
+          "median_ns": 29103330.5,
+          "median_ci95_ns": [
+            28507804.0,
+            29923570.5
+          ]
+        },
+        "nar_decoder_admission/32": {
+          "median_ns": 52278708.0,
+          "median_ci95_ns": [
+            52023730.0,
+            53310191.0
+          ]
+        },
+        "nar_decoder_pool/workers-1/8388608": {
+          "median_ns": 39002654.5,
+          "median_ci95_ns": [
+            38875710.0,
+            39231638.0
+          ]
+        },
+        "nar_decoder_pool/workers-2/33554432": {
+          "median_ns": 100599220.5,
+          "median_ci95_ns": [
+            100241767.5,
+            107399458.5
+          ]
+        },
+        "nar_decoder_pool/workers-2/8388608": {
+          "median_ns": 42159115.5,
+          "median_ci95_ns": [
+            41701703.0,
+            42287879.0
+          ]
+        },
+        "nar_import/bytes-0/32": {
+          "median_ns": 5105612.208333334,
+          "median_ci95_ns": [
+            5029504.888888889,
+            5165330.0
+          ]
+        },
+        "nar_import/bytes-1024/1": {
+          "median_ns": 3040505.5,
+          "median_ci95_ns": [
+            2537114.0,
+            3231305.0
+          ]
+        },
+        "nar_import/bytes-1024/1024": {
+          "median_ns": 91106402.5,
+          "median_ci95_ns": [
+            89729621.5,
+            91792199.0
+          ]
+        },
+        "nar_import/bytes-1024/15": {
+          "median_ns": 4445677.0,
+          "median_ci95_ns": [
+            4105979.5,
+            4702685.0
+          ]
+        },
+        "nar_import/bytes-1024/16": {
+          "median_ns": 4779660.0,
+          "median_ci95_ns": [
+            4557551.0,
+            4948339.0
+          ]
+        },
+        "nar_import/bytes-1024/17": {
+          "median_ns": 4467662.5,
+          "median_ci95_ns": [
+            4317873.0,
+            4971594.0
+          ]
+        },
+        "nar_import/bytes-1024/256": {
+          "median_ns": 22764458.5,
+          "median_ci95_ns": [
+            21066799.0,
+            22872968.0
+          ]
+        },
+        "nar_import/bytes-1024/64": {
+          "median_ns": 8235424.0,
+          "median_ci95_ns": [
+            7716667.5,
+            8611016.0
+          ]
+        },
+        "nar_import/bytes-131071/16": {
+          "median_ns": 12456860.25,
+          "median_ci95_ns": [
+            10820883.25,
+            12780963.25
+          ]
+        },
+        "nar_import/bytes-131072/16": {
+          "median_ns": 6837213.55,
+          "median_ci95_ns": [
+            5803509.904761905,
+            7753642.0
+          ]
+        },
+        "nar_import/bytes-131073/16": {
+          "median_ns": 5858193.166666666,
+          "median_ci95_ns": [
+            5828816.9,
+            5879325.0625
+          ]
+        },
+        "nar_import/bytes-16383/32": {
+          "median_ns": 8271084.0,
+          "median_ci95_ns": [
+            8025110.5,
+            8369323.5
+          ]
+        },
+        "nar_import/bytes-16384/32": {
+          "median_ns": 7631372.0,
+          "median_ci95_ns": [
+            7316495.0,
+            7947425.5
+          ]
+        },
+        "nar_import/bytes-16385/127": {
+          "median_ns": 20321224.0,
+          "median_ci95_ns": [
+            19472429.0,
+            21742944.0
+          ]
+        },
+        "nar_import/bytes-16385/128": {
+          "median_ns": 21130589.0,
+          "median_ci95_ns": [
+            19884567.0,
+            22060018.0
+          ]
+        },
+        "nar_import/bytes-16385/129": {
+          "median_ns": 17633930.5,
+          "median_ci95_ns": [
+            13901443.5,
+            20629592.0
+          ]
+        },
+        "nar_import/bytes-16385/15": {
+          "median_ns": 5319576.833333333,
+          "median_ci95_ns": [
+            5001679.0,
+            5711474.666666667
+          ]
+        },
+        "nar_import/bytes-16385/16": {
+          "median_ns": 3404295.9142857143,
+          "median_ci95_ns": [
+            2935601.888888889,
+            4125100.0
+          ]
+        },
+        "nar_import/bytes-16385/17": {
+          "median_ns": 3031882.666666667,
+          "median_ci95_ns": [
+            3020387.5714285714,
+            3047521.888888889
+          ]
+        },
+        "nar_import/bytes-16385/32": {
+          "median_ns": 8441617.5,
+          "median_ci95_ns": [
+            8000830.0,
+            8950079.5
+          ]
+        },
+        "nar_import/bytes-16385/629": {
+          "median_ns": 74066495.0,
+          "median_ci95_ns": [
+            68103697.0,
+            75023824.0
+          ]
+        },
+        "nar_import/bytes-16385/630": {
+          "median_ns": 72551314.5,
+          "median_ci95_ns": [
+            70034666.0,
+            77266110.0
+          ]
+        },
+        "nar_import/bytes-16385/631": {
+          "median_ns": 68348856.0,
+          "median_ci95_ns": [
+            57561913.0,
+            74531127.0
+          ]
+        },
+        "nar_import/bytes-65535/32": {
+          "median_ns": 13214582.5,
+          "median_ci95_ns": [
+            12449388.0,
+            13888313.5
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 352319109.0,
+          "median_ci95_ns": [
+            315921334.0,
+            358322760.5
+          ]
+        },
+        "nar_import/bytes-65536/32": {
+          "median_ns": 13253383.0,
+          "median_ci95_ns": [
+            12833465.0,
+            13778974.5
+          ]
+        },
+        "nar_import/bytes-65536/512": {
+          "median_ns": 115072636.5,
+          "median_ci95_ns": [
+            107769171.5,
+            119209311.0
+          ]
+        },
+        "nar_import/bytes-65537/32": {
+          "median_ns": 13330492.041666668,
+          "median_ci95_ns": [
+            9606928.6,
+            13512916.042857144
+          ]
+        },
+        "nar_import/directories/15": {
+          "median_ns": 2660194.5375,
+          "median_ci95_ns": [
+            2303449.2743055555,
+            3315918.3166666664
+          ]
+        },
+        "nar_import/directories/16": {
+          "median_ns": 4851462.5,
+          "median_ci95_ns": [
+            4587501.75,
+            5073198.5
+          ]
+        },
+        "nar_import/directories/17": {
+          "median_ns": 5326469.5,
+          "median_ci95_ns": [
+            5108023.0,
+            5446076.5
+          ]
+        },
+        "nar_import/directories/256": {
+          "median_ns": 20875761.0,
+          "median_ci95_ns": [
+            20474133.0,
+            22072629.0
+          ]
+        },
+        "nar_import/directory-links-4095/63": {
+          "median_ns": 8922270.0,
+          "median_ci95_ns": [
+            8588897.0,
+            8975469.5
+          ]
+        },
+        "nar_import/directory-links-4095/64": {
+          "median_ns": 8905005.5,
+          "median_ci95_ns": [
+            8649576.0,
+            9234118.0
+          ]
+        },
+        "nar_import/directory-links-4095/65": {
+          "median_ns": 8950830.0,
+          "median_ci95_ns": [
+            8815355.0,
+            9286693.0
+          ]
+        },
+        "nar_import/nested-bytes-1024/45": {
+          "median_ns": 6905061.76984127,
+          "median_ci95_ns": [
+            6457780.0,
+            7405232.666666667
+          ]
+        },
+        "nar_import/nested-bytes-1024/48": {
+          "median_ns": 7260373.666666666,
+          "median_ci95_ns": [
+            6916401.0,
+            7650332.666666667
+          ]
+        },
+        "nar_import/nested-bytes-1024/51": {
+          "median_ns": 7839712.0,
+          "median_ci95_ns": [
+            7333225.0,
+            8124469.5
+          ]
+        },
+        "nar_import/nested-directories/15": {
+          "median_ns": 4664898.75,
+          "median_ci95_ns": [
+            4357098.0,
+            4886184.75
+          ]
+        },
+        "nar_import/nested-directories/16": {
+          "median_ns": 4849159.75,
+          "median_ci95_ns": [
+            4284508.5,
+            4997984.25
+          ]
+        },
+        "nar_import/nested-directories/17": {
+          "median_ns": 4931867.0,
+          "median_ci95_ns": [
+            4828300.0,
+            5215673.5
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 37985702.5,
+          "median_ci95_ns": [
+            31844922.0,
+            42923997.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45695702.0,
+          "median_ci95_ns": [
+            45544120.0,
+            45858889.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 48456683.0,
+          "median_ci95_ns": [
+            48331001.0,
+            48683954.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 53344389.5,
+          "median_ci95_ns": [
+            44957659.0,
+            53589531.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 53828948.0,
+          "median_ci95_ns": [
+            41728405.0,
+            56346803.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 69460533.5,
+          "median_ci95_ns": [
+            69231332.0,
+            94514558.0
+          ]
+        }
+      }
+    }
+  },
+  "followup": {
+    "rounds": "eight, upstream first in odd rounds",
+    "runs": [
+      {
+        "build": "c9base",
+        "round": "r1",
+        "started": "2026-10-09T06:21:08+00:00",
+        "ended": "2026-10-09T06:21:42+00:00",
+        "load_start": 1.77,
+        "load_end": 2.15
+      },
+      {
+        "build": "c9cand",
+        "round": "r1",
+        "started": "2026-10-09T06:21:42+00:00",
+        "ended": "2026-10-09T06:22:13+00:00",
+        "load_start": 2.15,
+        "load_end": 2.47
+      },
+      {
+        "build": "c9cand",
+        "round": "r2",
+        "started": "2026-10-09T06:22:13+00:00",
+        "ended": "2026-10-09T06:22:47+00:00",
+        "load_start": 2.47,
+        "load_end": 2.58
+      },
+      {
+        "build": "c9base",
+        "round": "r2",
+        "started": "2026-10-09T06:22:47+00:00",
+        "ended": "2026-10-09T06:23:17+00:00",
+        "load_start": 2.58,
+        "load_end": 2.4
+      },
+      {
+        "build": "c9base",
+        "round": "r3",
+        "started": "2026-10-09T06:23:17+00:00",
+        "ended": "2026-10-09T06:23:48+00:00",
+        "load_start": 2.4,
+        "load_end": 2.22
+      },
+      {
+        "build": "c9cand",
+        "round": "r3",
+        "started": "2026-10-09T06:23:48+00:00",
+        "ended": "2026-10-09T06:24:21+00:00",
+        "load_start": 2.22,
+        "load_end": 2.74
+      },
+      {
+        "build": "c9cand",
+        "round": "r4",
+        "started": "2026-10-09T06:24:21+00:00",
+        "ended": "2026-10-09T06:24:52+00:00",
+        "load_start": 2.74,
+        "load_end": 3.13
+      },
+      {
+        "build": "c9base",
+        "round": "r4",
+        "started": "2026-10-09T06:24:52+00:00",
+        "ended": "2026-10-09T06:25:25+00:00",
+        "load_start": 3.13,
+        "load_end": 3.18
+      },
+      {
+        "build": "c9base",
+        "round": "r5",
+        "started": "2026-10-09T06:25:25+00:00",
+        "ended": "2026-10-09T06:25:57+00:00",
+        "load_start": 3.18,
+        "load_end": 2.86
+      },
+      {
+        "build": "c9cand",
+        "round": "r5",
+        "started": "2026-10-09T06:25:57+00:00",
+        "ended": "2026-10-09T06:26:30+00:00",
+        "load_start": 2.86,
+        "load_end": 2.75
+      },
+      {
+        "build": "c9cand",
+        "round": "r6",
+        "started": "2026-10-09T06:26:30+00:00",
+        "ended": "2026-10-09T06:27:02+00:00",
+        "load_start": 2.75,
+        "load_end": 2.67
+      },
+      {
+        "build": "c9base",
+        "round": "r6",
+        "started": "2026-10-09T06:27:02+00:00",
+        "ended": "2026-10-09T06:27:34+00:00",
+        "load_start": 2.67,
+        "load_end": 2.54
+      },
+      {
+        "build": "c9base",
+        "round": "r7",
+        "started": "2026-10-09T06:27:34+00:00",
+        "ended": "2026-10-09T06:28:21+00:00",
+        "load_start": 2.54,
+        "load_end": 2.95
+      },
+      {
+        "build": "c9cand",
+        "round": "r7",
+        "started": "2026-10-09T06:28:21+00:00",
+        "ended": "2026-10-09T06:29:05+00:00",
+        "load_start": 2.95,
+        "load_end": 2.8
+      },
+      {
+        "build": "c9cand",
+        "round": "r8",
+        "started": "2026-10-09T06:29:05+00:00",
+        "ended": "2026-10-09T06:29:35+00:00",
+        "load_start": 2.8,
+        "load_end": 2.55
+      },
+      {
+        "build": "c9base",
+        "round": "r8",
+        "started": "2026-10-09T06:29:35+00:00",
+        "ended": "2026-10-09T06:30:06+00:00",
+        "load_start": 2.55,
+        "load_end": 2.59
+      }
+    ],
+    "paired": {
+      "nar_import/bytes-1024/1": {
+        "base_median_ns": 2821077.1708333334,
+        "candidate_median_ns": 2815873.25,
+        "median_ratio": 1.024051541401278,
+        "ratio_range": [
+          0.7538069416838912,
+          1.0608954306314142
+        ],
+        "candidate_faster_rounds": 3,
+        "rounds": 8
+      },
+      "nar_import/bytes-65536/2048": {
+        "base_median_ns": 379929563.5,
+        "candidate_median_ns": 344089723.5,
+        "median_ratio": 0.9174776351551182,
+        "ratio_range": [
+          0.7697899862798658,
+          1.1463881245890128
+        ],
+        "candidate_faster_rounds": 5,
+        "rounds": 8
+      },
+      "nar_import_sequence/15": {
+        "base_median_ns": 42500087.0,
+        "candidate_median_ns": 42678700.75,
+        "median_ratio": 1.0033354893228288,
+        "ratio_range": [
+          0.6497011310772711,
+          1.088286347112652
+        ],
+        "candidate_faster_rounds": 3,
+        "rounds": 8
+      },
+      "nar_import_sequence/16": {
+        "base_median_ns": 45218798.25,
+        "candidate_median_ns": 45852711.75,
+        "median_ratio": 1.0174293969425712,
+        "ratio_range": [
+          0.9668792894634014,
+          1.091518967865036
+        ],
+        "candidate_faster_rounds": 1,
+        "rounds": 8
+      },
+      "nar_import_sequence/17": {
+        "base_median_ns": 48075818.75,
+        "candidate_median_ns": 49587845.75,
+        "median_ratio": 1.008574380213243,
+        "ratio_range": [
+          0.9381609267325878,
+          1.086225692556584
+        ],
+        "candidate_faster_rounds": 3,
+        "rounds": 8
+      },
+      "nar_import_sequence/18": {
+        "base_median_ns": 53064140.75,
+        "candidate_median_ns": 56771174.75,
+        "median_ratio": 1.0357681055056838,
+        "ratio_range": [
+          0.9220178353774271,
+          1.0887314220435804
+        ],
+        "candidate_faster_rounds": 1,
+        "rounds": 8
+      },
+      "nar_import_sequence/19": {
+        "base_median_ns": 55881646.0,
+        "candidate_median_ns": 60420699.75,
+        "median_ratio": 1.0686807764636392,
+        "ratio_range": [
+          0.9538884635769111,
+          1.294539261661063
+        ],
+        "candidate_faster_rounds": 2,
+        "rounds": 8
+      },
+      "nar_import_sequence/32": {
+        "base_median_ns": 92483770.5,
+        "candidate_median_ns": 100521625.0,
+        "median_ratio": 1.0781351072078342,
+        "ratio_range": [
+          0.8704283406585835,
+          1.161372485765353
+        ],
+        "candidate_faster_rounds": 3,
+        "rounds": 8
+      }
+    },
+    "series": {
+      "c9base-r1": {
+        "nar_import/bytes-1024/1": {
+          "median_ns": 2591501.75,
+          "median_ci95_ns": [
+            2321435.5,
+            2753518.5
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 356798853.5,
+          "median_ci95_ns": [
+            335465672.0,
+            362318230.0
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 42433344.0,
+          "median_ci95_ns": [
+            36612234.0,
+            42558239.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45243850.5,
+          "median_ci95_ns": [
+            45005939.5,
+            45481305.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 54961316.0,
+          "median_ci95_ns": [
+            50846950.0,
+            55106033.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 56053277.0,
+          "median_ci95_ns": [
+            49863595.0,
+            60580582.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 63710748.5,
+          "median_ci95_ns": [
+            59493109.0,
+            63826772.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 93207056.0,
+          "median_ci95_ns": [
+            89435758.0,
+            106205732.5
+          ]
+        }
+      },
+      "c9base-r2": {
+        "nar_import/bytes-1024/1": {
+          "median_ns": 2928567.0,
+          "median_ci95_ns": [
+            2458015.0,
+            3238150.0
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 334303419.5,
+          "median_ci95_ns": [
+            300547843.0,
+            354704596.0
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 42548622.5,
+          "median_ci95_ns": [
+            39095344.5,
+            42749133.5
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45320123.5,
+          "median_ci95_ns": [
+            33566347.0,
+            45497466.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 47993966.5,
+          "median_ci95_ns": [
+            41784907.5,
+            48330087.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 52897637.5,
+          "median_ci95_ns": [
+            38722671.0,
+            53340709.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 56291190.5,
+          "median_ci95_ns": [
+            55768136.0,
+            56635658.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 92205259.0,
+          "median_ci95_ns": [
+            69527670.0,
+            93041740.0
+          ]
+        }
+      },
+      "c9base-r3": {
+        "nar_import/bytes-1024/1": {
+          "median_ns": 2391140.0,
+          "median_ci95_ns": [
+            2329506.0,
+            3224081.0
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 379651613.0,
+          "median_ci95_ns": [
+            366045751.5,
+            384900157.0
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 42524151.5,
+          "median_ci95_ns": [
+            42215396.0,
+            42629086.5
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45175198.0,
+          "median_ci95_ns": [
+            43346403.0,
+            45549740.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 48074179.5,
+          "median_ci95_ns": [
+            47805803.0,
+            48338838.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 52994930.0,
+          "median_ci95_ns": [
+            50029782.5,
+            53249545.5
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 55573472.5,
+          "median_ci95_ns": [
+            48058986.5,
+            55778772.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 86860777.0,
+          "median_ci95_ns": [
+            77970030.5,
+            96485383.5
+          ]
+        }
+      },
+      "c9base-r4": {
+        "nar_import/bytes-1024/1": {
+          "median_ns": 3285257.2375,
+          "median_ci95_ns": [
+            2461045.875,
+            3314282.1205357146
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 380207514.0,
+          "median_ci95_ns": [
+            375620982.0,
+            400393923.0
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 42534489.5,
+          "median_ci95_ns": [
+            42144535.0,
+            42615633.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45131820.0,
+          "median_ci95_ns": [
+            43392233.5,
+            48560647.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 52002833.0,
+          "median_ci95_ns": [
+            41595108.0,
+            55079678.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 60667962.0,
+          "median_ci95_ns": [
+            59558570.0,
+            60788842.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 62210318.0,
+          "median_ci95_ns": [
+            54867832.0,
+            63998047.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 89486135.0,
+          "median_ci95_ns": [
+            84161335.5,
+            105991055.0
+          ]
+        }
+      },
+      "c9base-r5": {
+        "nar_import/bytes-1024/1": {
+          "median_ns": 2924132.0,
+          "median_ci95_ns": [
+            2362216.0,
+            3271951.0
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 404382342.0,
+          "median_ci95_ns": [
+            397948320.5,
+            407479693.5
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 42425461.5,
+          "median_ci95_ns": [
+            42287198.0,
+            42552033.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45203862.0,
+          "median_ci95_ns": [
+            45154030.0,
+            45273507.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 47832142.0,
+          "median_ci95_ns": [
+            36715441.0,
+            48210900.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 52909491.0,
+          "median_ci95_ns": [
+            52781013.0,
+            53214783.5
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 55860161.0,
+          "median_ci95_ns": [
+            55455317.0,
+            56391956.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 92541899.0,
+          "median_ci95_ns": [
+            87120308.0,
+            96918828.0
+          ]
+        }
+      },
+      "c9base-r6": {
+        "nar_import/bytes-1024/1": {
+          "median_ns": 2924568.0,
+          "median_ci95_ns": [
+            2353386.0,
+            2945822.0
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 405544502.0,
+          "median_ci95_ns": [
+            385186144.0,
+            409836197.0
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 42476022.5,
+          "median_ci95_ns": [
+            42391496.0,
+            42747963.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45233734.5,
+          "median_ci95_ns": [
+            45068319.0,
+            45291494.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 48077458.0,
+          "median_ci95_ns": [
+            47959736.0,
+            48260060.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 53133351.5,
+          "median_ci95_ns": [
+            52944088.0,
+            53372352.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 55881532.5,
+          "median_ci95_ns": [
+            55681168.0,
+            56001411.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 93004857.0,
+          "median_ci95_ns": [
+            92660678.0,
+            93750165.0
+          ]
+        }
+      },
+      "c9base-r7": {
+        "nar_import/bytes-1024/1": {
+          "median_ns": 2718022.341666667,
+          "median_ci95_ns": [
+            2595420.4444444445,
+            2836164.5
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 385338101.0,
+          "median_ci95_ns": [
+            372342013.5,
+            401273051.0
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 42597598.0,
+          "median_ci95_ns": [
+            41116863.5,
+            42723162.5
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 47314776.0,
+          "median_ci95_ns": [
+            45803249.5,
+            47528826.25
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 50314683.5,
+          "median_ci95_ns": [
+            49942446.75,
+            50675412.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 55432821.5,
+          "median_ci95_ns": [
+            55230759.0,
+            55672523.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 46867865.5,
+          "median_ci95_ns": [
+            46787853.5,
+            50000162.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 115519109.0,
+          "median_ci95_ns": [
+            97890924.5,
+            121022029.5
+          ]
+        }
+      },
+      "c9base-r8": {
+        "nar_import/bytes-1024/1": {
+          "median_ns": 2665274.5,
+          "median_ci95_ns": [
+            2325647.0,
+            2929393.0
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 331884530.5,
+          "median_ci95_ns": [
+            318900278.0,
+            343373646.5
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 42369828.5,
+          "median_ci95_ns": [
+            39889123.0,
+            42614715.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45002627.0,
+          "median_ci95_ns": [
+            38941591.5,
+            45474980.5
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 34751853.5,
+          "median_ci95_ns": [
+            34634165.0,
+            48055490.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 52905229.5,
+          "median_ci95_ns": [
+            52350414.5,
+            53050590.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 55881759.5,
+          "median_ci95_ns": [
+            55629212.5,
+            56017845.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 92425642.0,
+          "median_ci95_ns": [
+            88924192.5,
+            92696435.0
+          ]
+        }
+      },
+      "c9cand-r1": {
+        "nar_import/bytes-1024/1": {
+          "median_ns": 2734853.5,
+          "median_ci95_ns": [
+            2483410.0,
+            3193841.0
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 321122973.0,
+          "median_ci95_ns": [
+            303778003.0,
+            337956810.5
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 39521690.0,
+          "median_ci95_ns": [
+            37060134.0,
+            43020288.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 49384521.0,
+          "median_ci95_ns": [
+            48972373.0,
+            49532470.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 52413507.0,
+          "median_ci95_ns": [
+            52162290.5,
+            52550712.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 57829131.0,
+          "median_ci95_ns": [
+            54296574.5,
+            57923638.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 60772948.0,
+          "median_ci95_ns": [
+            57207695.0,
+            60896590.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 101190316.5,
+          "median_ci95_ns": [
+            98607244.0,
+            101532652.5
+          ]
+        }
+      },
+      "c9cand-r2": {
+        "nar_import/bytes-1024/1": {
+          "median_ns": 2867230.0,
+          "median_ci95_ns": [
+            2727633.0,
+            2992842.0
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 348725049.5,
+          "median_ci95_ns": [
+            334845813.0,
+            362800494.0
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 42894110.5,
+          "median_ci95_ns": [
+            38374668.0,
+            45689452.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 49243188.5,
+          "median_ci95_ns": [
+            47344312.5,
+            49330990.5
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 52132279.5,
+          "median_ci95_ns": [
+            50694601.5,
+            52325242.5
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 57397231.5,
+          "median_ci95_ns": [
+            50782773.0,
+            57621525.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 60912581.0,
+          "median_ci95_ns": [
+            60171487.5,
+            61206425.5
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 92134507.5,
+          "median_ci95_ns": [
+            76122024.0,
+            100832750.0
+          ]
+        }
+      },
+      "c9cand-r3": {
+        "nar_import/bytes-1024/1": {
+          "median_ns": 2536749.5,
+          "median_ci95_ns": [
+            2455725.0,
+            3236036.0
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 335011031.0,
+          "median_ci95_ns": [
+            308648689.5,
+            350837620.0
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 46278453.5,
+          "median_ci95_ns": [
+            42322568.5,
+            46427081.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 48982624.0,
+          "median_ci95_ns": [
+            44043366.0,
+            49299554.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 50388665.5,
+          "median_ci95_ns": [
+            46445202.0,
+            52206424.5
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 57697245.5,
+          "median_ci95_ns": [
+            57259676.0,
+            57946686.5
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 60738800.0,
+          "median_ci95_ns": [
+            58185840.0,
+            60931615.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 100877716.5,
+          "median_ci95_ns": [
+            97226064.0,
+            101644393.5
+          ]
+        }
+      },
+      "c9cand-r4": {
+        "nar_import/bytes-1024/1": {
+          "median_ns": 2824628.0,
+          "median_ci95_ns": [
+            2498535.0,
+            3218421.0
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 380672723.5,
+          "median_ci95_ns": [
+            373866879.0,
+            400022832.0
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 42963425.0,
+          "median_ci95_ns": [
+            38356390.0,
+            43131304.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45914054.5,
+          "median_ci95_ns": [
+            44921166.0,
+            45976415.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 48787026.0,
+          "median_ci95_ns": [
+            47633682.0,
+            48811227.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 55936943.0,
+          "median_ci95_ns": [
+            48668436.5,
+            57978065.5
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 59760906.5,
+          "median_ci95_ns": [
+            51750614.5,
+            61117422.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 77891268.0,
+          "median_ci95_ns": [
+            62248406.5,
+            82333044.0
+          ]
+        }
+      },
+      "c9cand-r5": {
+        "nar_import/bytes-1024/1": {
+          "median_ns": 2204231.0,
+          "median_ci95_ns": [
+            2042988.0,
+            2318386.0
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 311289477.5,
+          "median_ci95_ns": [
+            290993484.0,
+            317928883.0
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 39360271.5,
+          "median_ci95_ns": [
+            36908648.0,
+            42887673.333333336
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45711261.0,
+          "median_ci95_ns": [
+            44062067.0,
+            45836289.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 48342567.0,
+          "median_ci95_ns": [
+            47623265.5,
+            48602604.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 53537482.0,
+          "median_ci95_ns": [
+            46677081.0,
+            53727080.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 56648882.0,
+          "median_ci95_ns": [
+            51848365.0,
+            57096737.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 100910513.0,
+          "median_ci95_ns": [
+            93286039.0,
+            101309667.5
+          ]
+        }
+      },
+      "c9cand-r6": {
+        "nar_import/bytes-1024/1": {
+          "median_ns": 2945758.0,
+          "median_ci95_ns": [
+            2469005.0,
+            3221741.0
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 379161417.5,
+          "median_ci95_ns": [
+            360928157.5,
+            402077591.0
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 42611116.0,
+          "median_ci95_ns": [
+            37681338.0,
+            42811104.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45502356.0,
+          "median_ci95_ns": [
+            45271412.5,
+            45643467.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 48388884.0,
+          "median_ci95_ns": [
+            48231737.0,
+            48618882.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 53301478.0,
+          "median_ci95_ns": [
+            46678511.0,
+            53463433.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 59270176.0,
+          "median_ci95_ns": [
+            56175741.0,
+            60666327.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 100472206.5,
+          "median_ci95_ns": [
+            91479588.0,
+            100783383.0
+          ]
+        }
+      },
+      "c9cand-r7": {
+        "nar_import/bytes-1024/1": {
+          "median_ns": 2829074.125,
+          "median_ci95_ns": [
+            2754125.1666666665,
+            2897284.583333333
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 339454397.5,
+          "median_ci95_ns": [
+            336767543.5,
+            358567378.0
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 42746285.5,
+          "median_ci95_ns": [
+            38938742.0,
+            42955057.5
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45747677.0,
+          "median_ci95_ns": [
+            43242464.0,
+            49353108.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 52092199.5,
+          "median_ci95_ns": [
+            50459796.0,
+            52373899.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 57642078.5,
+          "median_ci95_ns": [
+            57446842.5,
+            57741055.5
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 60672292.0,
+          "median_ci95_ns": [
+            55852336.0,
+            60852085.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 100571043.5,
+          "median_ci95_ns": [
+            88554454.0,
+            101062503.0
+          ]
+        }
+      },
+      "c9cand-r8": {
+        "nar_import/bytes-1024/1": {
+          "median_ns": 2807118.5,
+          "median_ci95_ns": [
+            2498005.0,
+            3196261.0
+          ]
+        },
+        "nar_import/bytes-65536/2048": {
+          "median_ns": 380468484.5,
+          "median_ci95_ns": [
+            358326271.0,
+            394769334.0
+          ]
+        },
+        "nar_import_sequence/15": {
+          "median_ns": 27527725.5,
+          "median_ci95_ns": [
+            27381426.0,
+            35060290.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45791369.0,
+          "median_ci95_ns": [
+            33469431.0,
+            48054174.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 33098479.75,
+          "median_ci95_ns": [
+            32276425.25,
+            39741072.5
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 56145118.0,
+          "median_ci95_ns": [
+            54020517.0,
+            56367673.5
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 60169107.5,
+          "median_ci95_ns": [
+            59152127.0,
+            60568936.5
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 99448172.5,
+          "median_ci95_ns": [
+            82830241.0,
+            117366094.0
+          ]
+        }
+      }
+    }
+  },
+  "pooled_probe": {
+    "rounds": "six, order rotating base/candidate/pooled",
+    "runs": [
+      {
+        "build": "c9base",
+        "round": "r1",
+        "started": "2026-10-09T06:33:15+00:00",
+        "ended": "2026-10-09T06:33:27+00:00",
+        "load_start": 3.4,
+        "load_end": 3.25
+      },
+      {
+        "build": "c9cand",
+        "round": "r1",
+        "started": "2026-10-09T06:33:27+00:00",
+        "ended": "2026-10-09T06:33:40+00:00",
+        "load_start": 3.25,
+        "load_end": 3.13
+      },
+      {
+        "build": "c9pool",
+        "round": "r1",
+        "started": "2026-10-09T06:33:40+00:00",
+        "ended": "2026-10-09T06:33:55+00:00",
+        "load_start": 3.13,
+        "load_end": 2.88
+      },
+      {
+        "build": "c9cand",
+        "round": "r2",
+        "started": "2026-10-09T06:33:55+00:00",
+        "ended": "2026-10-09T06:34:08+00:00",
+        "load_start": 2.88,
+        "load_end": 2.96
+      },
+      {
+        "build": "c9pool",
+        "round": "r2",
+        "started": "2026-10-09T06:34:08+00:00",
+        "ended": "2026-10-09T06:34:23+00:00",
+        "load_start": 2.96,
+        "load_end": 2.75
+      },
+      {
+        "build": "c9base",
+        "round": "r2",
+        "started": "2026-10-09T06:34:23+00:00",
+        "ended": "2026-10-09T06:34:34+00:00",
+        "load_start": 2.75,
+        "load_end": 2.63
+      },
+      {
+        "build": "c9pool",
+        "round": "r3",
+        "started": "2026-10-09T06:34:34+00:00",
+        "ended": "2026-10-09T06:34:49+00:00",
+        "load_start": 2.63,
+        "load_end": 2.49
+      },
+      {
+        "build": "c9base",
+        "round": "r3",
+        "started": "2026-10-09T06:34:49+00:00",
+        "ended": "2026-10-09T06:35:02+00:00",
+        "load_start": 2.49,
+        "load_end": 2.49
+      },
+      {
+        "build": "c9cand",
+        "round": "r3",
+        "started": "2026-10-09T06:35:02+00:00",
+        "ended": "2026-10-09T06:35:18+00:00",
+        "load_start": 2.49,
+        "load_end": 2.55
+      },
+      {
+        "build": "c9base",
+        "round": "r4",
+        "started": "2026-10-09T06:35:18+00:00",
+        "ended": "2026-10-09T06:35:29+00:00",
+        "load_start": 2.55,
+        "load_end": 2.46
+      },
+      {
+        "build": "c9cand",
+        "round": "r4",
+        "started": "2026-10-09T06:35:29+00:00",
+        "ended": "2026-10-09T06:35:46+00:00",
+        "load_start": 2.46,
+        "load_end": 2.51
+      },
+      {
+        "build": "c9pool",
+        "round": "r4",
+        "started": "2026-10-09T06:35:46+00:00",
+        "ended": "2026-10-09T06:36:01+00:00",
+        "load_start": 2.51,
+        "load_end": 2.47
+      },
+      {
+        "build": "c9cand",
+        "round": "r5",
+        "started": "2026-10-09T06:36:01+00:00",
+        "ended": "2026-10-09T06:36:14+00:00",
+        "load_start": 2.47,
+        "load_end": 2.36
+      },
+      {
+        "build": "c9pool",
+        "round": "r5",
+        "started": "2026-10-09T06:36:14+00:00",
+        "ended": "2026-10-09T06:36:28+00:00",
+        "load_start": 2.36,
+        "load_end": 2.43
+      },
+      {
+        "build": "c9base",
+        "round": "r5",
+        "started": "2026-10-09T06:36:28+00:00",
+        "ended": "2026-10-09T06:36:45+00:00",
+        "load_start": 2.43,
+        "load_end": 2.4
+      },
+      {
+        "build": "c9pool",
+        "round": "r6",
+        "started": "2026-10-09T06:36:45+00:00",
+        "ended": "2026-10-09T06:36:56+00:00",
+        "load_start": 2.4,
+        "load_end": 2.42
+      },
+      {
+        "build": "c9base",
+        "round": "r6",
+        "started": "2026-10-09T06:36:56+00:00",
+        "ended": "2026-10-09T06:37:08+00:00",
+        "load_start": 2.42,
+        "load_end": 2.55
+      },
+      {
+        "build": "c9cand",
+        "round": "r6",
+        "started": "2026-10-09T06:37:08+00:00",
+        "ended": "2026-10-09T06:37:26+00:00",
+        "load_start": 2.55,
+        "load_end": 2.57
+      }
+    ],
+    "sequence_32_medians_ms": {
+      "c9base": 97.196182,
+      "c9cand": 98.21409475,
+      "c9pool": 99.32679225
+    },
+    "series": {
+      "c9base-r1": {
+        "nar_import_sequence/15": {
+          "median_ns": 30529794.0,
+          "median_ci95_ns": [
+            30426740.0,
+            30588542.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 47502152.5,
+          "median_ci95_ns": [
+            47370329.0,
+            52307174.5
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 50733184.0,
+          "median_ci95_ns": [
+            50495415.5,
+            52005058.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 55467282.5,
+          "median_ci95_ns": [
+            53254160.5,
+            57508546.5
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 58617110.0,
+          "median_ci95_ns": [
+            57650116.5,
+            58841345.5
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 96723171.0,
+          "median_ci95_ns": [
+            95563215.5,
+            96824791.0
+          ]
+        }
+      },
+      "c9base-r2": {
+        "nar_import_sequence/15": {
+          "median_ns": 38821455.5,
+          "median_ci95_ns": [
+            32008678.333333332,
+            44549446.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 51008440.75,
+          "median_ci95_ns": [
+            44918052.5,
+            58329544.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 59840532.5,
+          "median_ci95_ns": [
+            59435063.5,
+            63540731.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 55836080.0,
+          "median_ci95_ns": [
+            55577071.0,
+            56174630.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 57569306.0,
+          "median_ci95_ns": [
+            55487119.5,
+            58667571.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 116548092.0,
+          "median_ci95_ns": [
+            115066903.0,
+            116944379.5
+          ]
+        }
+      },
+      "c9base-r3": {
+        "nar_import_sequence/15": {
+          "median_ns": 42578227.5,
+          "median_ci95_ns": [
+            36517598.0,
+            42784968.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 51502787.5,
+          "median_ci95_ns": [
+            45552539.0,
+            52275000.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 55213314.0,
+          "median_ci95_ns": [
+            49651157.0,
+            55350942.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 56886723.0,
+          "median_ci95_ns": [
+            56559905.0,
+            62448966.5
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 57045309.0,
+          "median_ci95_ns": [
+            54810564.0,
+            60600146.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 107229124.5,
+          "median_ci95_ns": [
+            93374603.0,
+            124583619.5
+          ]
+        }
+      },
+      "c9base-r4": {
+        "nar_import_sequence/15": {
+          "median_ns": 37834270.5,
+          "median_ci95_ns": [
+            37722319.5,
+            38020237.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 46486315.0,
+          "median_ci95_ns": [
+            42496029.0,
+            48156974.5
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 50194179.0,
+          "median_ci95_ns": [
+            50028516.5,
+            57088248.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 56144382.0,
+          "median_ci95_ns": [
+            55185792.0,
+            70214015.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 73668024.0,
+          "median_ci95_ns": [
+            52551350.0,
+            74047024.5
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 97552558.0,
+          "median_ci95_ns": [
+            97033262.5,
+            122591806.0
+          ]
+        }
+      },
+      "c9base-r5": {
+        "nar_import_sequence/15": {
+          "median_ns": 43011664.83333333,
+          "median_ci95_ns": [
+            35770580.666666664,
+            44600634.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 47526649.0,
+          "median_ci95_ns": [
+            47376379.0,
+            47676292.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 50342201.0,
+          "median_ci95_ns": [
+            50091784.0,
+            50584915.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 55630994.0,
+          "median_ci95_ns": [
+            51948531.0,
+            55847157.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 58643794.0,
+          "median_ci95_ns": [
+            57651181.0,
+            58888812.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 90683512.0,
+          "median_ci95_ns": [
+            78086324.0,
+            96916743.5
+          ]
+        }
+      },
+      "c9base-r6": {
+        "nar_import_sequence/15": {
+          "median_ns": 40611489.5,
+          "median_ci95_ns": [
+            36054647.5,
+            42841047.5
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 40494702.5,
+          "median_ci95_ns": [
+            36368515.25,
+            53052413.5
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 51588439.0,
+          "median_ci95_ns": [
+            42516506.0,
+            60596562.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 55576030.5,
+          "median_ci95_ns": [
+            51646468.5,
+            55898408.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 58646792.5,
+          "median_ci95_ns": [
+            54652095.0,
+            69203000.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 96839806.0,
+          "median_ci95_ns": [
+            83577858.0,
+            106688362.0
+          ]
+        }
+      },
+      "c9cand-r1": {
+        "nar_import_sequence/15": {
+          "median_ns": 43054424.0,
+          "median_ci95_ns": [
+            40884455.0,
+            45465416.5
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45734658.5,
+          "median_ci95_ns": [
+            39703490.0,
+            45887685.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 50629699.5,
+          "median_ci95_ns": [
+            45410159.0,
+            52186556.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 57234782.0,
+          "median_ci95_ns": [
+            54265396.0,
+            57751764.5
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 59136269.0,
+          "median_ci95_ns": [
+            56316743.0,
+            60807419.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 53712143.5,
+          "median_ci95_ns": [
+            49611254.0,
+            63225591.5
+          ]
+        }
+      },
+      "c9cand-r2": {
+        "nar_import_sequence/15": {
+          "median_ns": 42668888.0,
+          "median_ci95_ns": [
+            31841414.0,
+            42810367.5
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45723619.0,
+          "median_ci95_ns": [
+            39525189.5,
+            45881717.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 48651442.0,
+          "median_ci95_ns": [
+            40285977.0,
+            48896119.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 53589341.0,
+          "median_ci95_ns": [
+            49563776.5,
+            53877411.5
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 55628055.0,
+          "median_ci95_ns": [
+            53197079.5,
+            60771434.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 100381219.5,
+          "median_ci95_ns": [
+            98997050.0,
+            112964795.0
+          ]
+        }
+      },
+      "c9cand-r3": {
+        "nar_import_sequence/15": {
+          "median_ns": 37992312.0,
+          "median_ci95_ns": [
+            22538788.666666668,
+            43017673.666666664
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 49214187.5,
+          "median_ci95_ns": [
+            39288122.5,
+            49576747.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 52340479.5,
+          "median_ci95_ns": [
+            51947492.0,
+            52364273.5
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 57820084.5,
+          "median_ci95_ns": [
+            56996741.5,
+            57968933.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 60822468.5,
+          "median_ci95_ns": [
+            59517691.5,
+            61055487.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 100812119.5,
+          "median_ci95_ns": [
+            85829222.0,
+            101201217.5
+          ]
+        }
+      },
+      "c9cand-r4": {
+        "nar_import_sequence/15": {
+          "median_ns": 39475888.16666667,
+          "median_ci95_ns": [
+            35406244.0,
+            43083285.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45845565.5,
+          "median_ci95_ns": [
+            44576655.0,
+            49212027.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 52156267.0,
+          "median_ci95_ns": [
+            48021576.0,
+            52655322.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 56360015.5,
+          "median_ci95_ns": [
+            50585536.0,
+            57643347.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 61036715.0,
+          "median_ci95_ns": [
+            54120680.0,
+            61399228.5
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 98126721.0,
+          "median_ci95_ns": [
+            86261612.5,
+            101067867.0
+          ]
+        }
+      },
+      "c9cand-r5": {
+        "nar_import_sequence/15": {
+          "median_ns": 42512553.0,
+          "median_ci95_ns": [
+            38781804.5,
+            42834081.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45741609.0,
+          "median_ci95_ns": [
+            36366165.0,
+            45878940.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 48874886.0,
+          "median_ci95_ns": [
+            47339918.0,
+            51354976.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 48868234.5,
+          "median_ci95_ns": [
+            47574947.0,
+            50043985.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 55437366.0,
+          "median_ci95_ns": [
+            51022057.0,
+            60478264.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 62182345.5,
+          "median_ci95_ns": [
+            61598246.0,
+            64560927.5
+          ]
+        }
+      },
+      "c9cand-r6": {
+        "nar_import_sequence/15": {
+          "median_ns": 42244885.666666664,
+          "median_ci95_ns": [
+            40468116.33333333,
+            42883967.666666664
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45791848.0,
+          "median_ci95_ns": [
+            44064830.0,
+            45947967.5
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 52173395.0,
+          "median_ci95_ns": [
+            44747994.0,
+            52471978.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 57289343.0,
+          "median_ci95_ns": [
+            55461361.0,
+            57903655.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 56651238.0,
+          "median_ci95_ns": [
+            43048584.0,
+            61028857.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 98301468.5,
+          "median_ci95_ns": [
+            92546107.0,
+            101318307.0
+          ]
+        }
+      },
+      "c9pool-r1": {
+        "nar_import_sequence/15": {
+          "median_ns": 31910325.0,
+          "median_ci95_ns": [
+            28563659.75,
+            48023360.5
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 50832680.0,
+          "median_ci95_ns": [
+            43749130.0,
+            51357028.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 54002303.0,
+          "median_ci95_ns": [
+            46949458.0,
+            54254967.5
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 59721882.5,
+          "median_ci95_ns": [
+            52804137.0,
+            60236346.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 63005885.5,
+          "median_ci95_ns": [
+            59514782.5,
+            63315729.5
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 93520079.5,
+          "median_ci95_ns": [
+            91739378.5,
+            98647769.0
+          ]
+        }
+      },
+      "c9pool-r2": {
+        "nar_import_sequence/15": {
+          "median_ns": 44501140.83333333,
+          "median_ci95_ns": [
+            35790853.66666667,
+            52754589.666666664
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45184472.5,
+          "median_ci95_ns": [
+            39996432.75,
+            48041118.5
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 51095566.0,
+          "median_ci95_ns": [
+            51011157.0,
+            56043421.5
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 68736585.0,
+          "median_ci95_ns": [
+            59215916.0,
+            70766214.5
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 60185872.5,
+          "median_ci95_ns": [
+            59645326.0,
+            60670192.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 115696513.0,
+          "median_ci95_ns": [
+            99831464.0,
+            123387057.0
+          ]
+        }
+      },
+      "c9pool-r3": {
+        "nar_import_sequence/15": {
+          "median_ns": 44793334.5,
+          "median_ci95_ns": [
+            42623087.5,
+            45899805.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 48879650.0,
+          "median_ci95_ns": [
+            48330202.5,
+            49203297.5
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 51844731.0,
+          "median_ci95_ns": [
+            51492078.5,
+            52181768.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 57523755.5,
+          "median_ci95_ns": [
+            50493330.0,
+            57833331.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 59979404.0,
+          "median_ci95_ns": [
+            42843580.0,
+            60319772.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 100576516.0,
+          "median_ci95_ns": [
+            99941035.0,
+            101005372.0
+          ]
+        }
+      },
+      "c9pool-r4": {
+        "nar_import_sequence/15": {
+          "median_ns": 42527347.5,
+          "median_ci95_ns": [
+            41744353.0,
+            43377707.0
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 51432891.5,
+          "median_ci95_ns": [
+            49643165.0,
+            53764788.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 53963704.5,
+          "median_ci95_ns": [
+            50771438.0,
+            54930869.5
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 53918821.0,
+          "median_ci95_ns": [
+            53130613.0,
+            57178141.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 56795982.0,
+          "median_ci95_ns": [
+            51106083.5,
+            60846077.5
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 86363044.0,
+          "median_ci95_ns": [
+            81763031.0,
+            95156969.5
+          ]
+        }
+      },
+      "c9pool-r5": {
+        "nar_import_sequence/15": {
+          "median_ns": 30876494.75,
+          "median_ci95_ns": [
+            26800036.5,
+            46329706.25
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 44357269.0,
+          "median_ci95_ns": [
+            39404176.0,
+            49864783.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 50122392.0,
+          "median_ci95_ns": [
+            47869930.5,
+            54271328.0
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 60818394.5,
+          "median_ci95_ns": [
+            53622381.0,
+            61181617.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 59661090.0,
+          "median_ci95_ns": [
+            59381537.0,
+            60323320.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 99003089.0,
+          "median_ci95_ns": [
+            96365172.5,
+            100358130.0
+          ]
+        }
+      },
+      "c9pool-r6": {
+        "nar_import_sequence/15": {
+          "median_ns": 42032590.5,
+          "median_ci95_ns": [
+            41850808.0,
+            42585997.5
+          ]
+        },
+        "nar_import_sequence/16": {
+          "median_ns": 45464361.0,
+          "median_ci95_ns": [
+            45388150.0,
+            48657472.0
+          ]
+        },
+        "nar_import_sequence/17": {
+          "median_ns": 51844857.0,
+          "median_ci95_ns": [
+            51377209.0,
+            56321181.5
+          ]
+        },
+        "nar_import_sequence/18": {
+          "median_ns": 54760960.0,
+          "median_ci95_ns": [
+            47696963.5,
+            56970322.0
+          ]
+        },
+        "nar_import_sequence/19": {
+          "median_ns": 60086423.5,
+          "median_ci95_ns": [
+            59941596.0,
+            60409276.0
+          ]
+        },
+        "nar_import_sequence/32": {
+          "median_ns": 99650495.5,
+          "median_ci95_ns": [
+            93641479.0,
+            100384320.5
+          ]
+        }
+      }
+    }
+  }
+}

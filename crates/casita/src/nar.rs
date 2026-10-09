@@ -16,6 +16,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 
+mod decoder;
 pub(crate) mod store;
 pub(crate) mod stream;
 

@@ -2009,6 +2009,46 @@ The [hash-reuse investigation](reports/2026-09-10-hash-reuse.md) retains the
 correctness results and raw timing data. Its shared-host timings are
 inconclusive; use an isolated paired run before making a speedup claim.
 
+## NAR decoder blocking-pool capacity
+
+NAR intake runs the synchronous archive decoder on its own native thread, with
+16 process-wide admission slots shared across repositories and runtimes. It
+previously ran on Tokio's blocking pool, which the import's consumer needs for
+hashing, compression and metadata work. The `nar_import` target has two groups
+for it, registered through `core-primitives` in `manifest.json` and run by
+`benchmark all`:
+
+- `nar_decoder_pool/workers-{1,2}/{8388608,33554432}` imports one deterministic
+  regular-file NAR into a fresh durable repository on a current-thread runtime
+  limited to one or two blocking workers. With the former decoder and one
+  worker, the 8 MiB import completes and the 32 MiB import stalls. These sizes
+  bracket the observed stall; they are not a general buffer threshold.
+- `nar_decoder_admission/{16,17,32}` runs that many concurrent imports of
+  distinct 2 MiB archives into one repository, each its own task on a
+  multi-threaded runtime. 16 and 17 straddle the admission limit; at 32, half
+  of the decoders queue.
+
+Only imports are timed. Outside the timed interval, every sample checks NAR
+size and SHA-256 and scrubs each stored tree against its archive.
+
+`tests/nar_decoder_admission.rs` runs each case in a child process under a
+60-second watchdog, since a stalled decoder can block runtime shutdown. It
+covers both pool limits and sizes, two concurrent 32 MiB imports on one blocking
+worker, three and four on four blocking workers (the former decoder stalls once
+large imports are as many as the workers), and 17 concurrent 2 MiB imports on
+one blocking worker. Bound standalone benchmark runs the same way:
+
+```sh
+devenv shell cargo test --test nar_decoder_admission
+devenv shell timeout 600 cargo bench --bench nar_import -- 'nar_decoder_(pool|admission)'
+```
+
+A queued decoder can be cancelled; an active one keeps its slot until its input
+ends or its caller drops the pipes, so a stalled input holds a slot until then.
+Sixteen is a resource bound, not a measured optimum. The
+[decoder admission report](reports/2026-10-09-nar-decoder-admission/README.md)
+compares both groups and the existing `nar_import` cases with upstream.
+
 ## Repeated durable NAR imports
 
 The `nar_import` Criterion target includes `nar_import_sequence/{15,16,17,18,19,32}`,

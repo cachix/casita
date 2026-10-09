@@ -19,6 +19,12 @@ use crate::{Node, SymlinkTarget};
 /// A standalone canonical archive. EOF is required after exactly one NAR.
 /// For framed protocols pass a length-limited reader; the frame length must
 /// include only this archive. No byte outside that reader is consumed.
+///
+/// The archive is decoded on a dedicated thread, at most 16 per process
+/// across all repositories; further imports wait for a decoder. An import
+/// keeps its decoder until the archive is decoded or rejected, or the import
+/// is dropped, so a stalled reader holds one: give slow or untrusted readers
+/// a read timeout.
 pub struct NarImport<R> {
     reader: R,
     requirements: NarRequirements,
