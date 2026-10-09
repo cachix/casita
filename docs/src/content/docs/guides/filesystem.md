@@ -75,6 +75,48 @@ Successful checkout creates an `auto/checkout/...` root by default. Use
 `--no-root` only when another root already retains the graph or the restored
 copy is intentionally disposable.
 
+## Restore a runnable artifact
+
+A verified tree can still depend on files outside the imported directory.
+Casita stores a symlink's target without importing the file it points to, and
+checkout recreates that target unchanged. Build tools may also embed absolute
+workspace paths in generated files. An exact restore can therefore stop working
+when the original workspace is moved or removed.
+
+This POSIX example imports an output directory whose only file is a link to
+an external dependency:
+
+```sh
+casita_demo=$(mktemp -d)
+mkdir -p "$casita_demo/build/output" "$casita_demo/build/deps"
+printf 'runtime data\n' > "$casita_demo/build/deps/data.txt"
+ln -s "$casita_demo/build/deps/data.txt" "$casita_demo/build/output/data.txt"
+casita --repository "$casita_demo/store" import "$casita_demo/build/output" \
+  --root examples/external-link
+```
+
+Use the directory key printed by import in place of `casita.directory.v1:...`:
+
+```sh
+casita --repository "$casita_demo/store" checkout casita.directory.v1:... \
+  "$casita_demo/restored" --no-root
+mv "$casita_demo/build" "$casita_demo/retired-build"
+test -L "$casita_demo/restored/data.txt"
+test ! -e "$casita_demo/restored/data.txt"
+```
+
+Both tests succeed: the restored symlink exists, but its dependency is no longer
+at the stored path. The named root retains the imported tree, not the external
+file.
+
+For reusable application artifacts, package the required files inside the tree
+with paths that remain valid after relocation, or provision matching dependencies
+at the destination. Check out into a fresh directory, move the original workspace
+away, and exercise the restored application, including code that loads runtime
+libraries or assets. A successful checkout alone does not establish that the
+application will run. The [run guide](../run/) covers host compatibility and
+runtime dependencies.
+
 ## Release data deliberately
 
 ```console
