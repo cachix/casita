@@ -1320,7 +1320,7 @@
     {
       "id": "collection-mark",
       "suite_id": "collection-and-fsck",
-      "title": "Collection marks over shared graphs, deep chains and spill boundaries",
+      "title": "Collection marks over shared graphs, deep chains, snapshot coverage and spill boundaries",
       "kind": "module",
       "target": "benchmarks.suites.collection_mark",
       "profiles": [

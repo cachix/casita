@@ -810,7 +810,6 @@ impl TraversalQueue {
     }
 
     /// Steps still queued, in memory and storage together.
-    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.len
     }

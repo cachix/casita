@@ -13,10 +13,12 @@ from benchmarks.suites import collection_mark as mark
 class CollectionMarkTests(unittest.TestCase):
     def case(self, parents=256, shape="shared", memory_limit=256, iterations=1, strategy="current", mode="named"):
         objects = 2 * parents if shape == "distinct" else parents + 1
+        cutoff = {"snapshot-full": parents, "snapshot-partial": max(1, parents // 2), "snapshot-sparse": 1}.get(mode, 0)
+        scanned = parents if mode == "snapshot-forward" else ((2 * cutoff if shape == "distinct" else cutoff + 1) if cutoff else 0)
         return dict(parents=parents, shape=shape, memory_limit=memory_limit, iterations=iterations,
                     objects=objects, edges=parents, strategy=strategy, mode=mode, correctness=mark.CORRECTNESS,
                     samples=[dict(iteration=i, warm=i > 0, mode=mode, nanos=(i + 1) * 1000,
-                                  record_reads=objects, spill_files=0, spill_peak_bytes=0)
+                                  record_reads=objects - scanned, scanned_records=scanned, spill_files=0, spill_peak_bytes=0)
                              for i in range(iterations + 1)])
 
     def output(self, case):
@@ -36,7 +38,7 @@ class CollectionMarkTests(unittest.TestCase):
                 mark.parse_sample(output, 256, "shared", 256, 1)
 
     def test_parser_rejects_invalid_metrics_and_missing_record_reads(self):
-        for key, value in [("nanos", -1), ("nanos", True), ("record_reads", 256),
+        for key, value in [("scanned_records", 1), ("nanos", -1), ("nanos", True), ("record_reads", 256),
                            ("spill_files", 1.5), ("spill_peak_bytes", None), ("warm", 1),
                            ("iteration", True), ("mode", "unknown")]:
             case = copy.deepcopy(self.case())
@@ -77,16 +79,16 @@ class CollectionMarkTests(unittest.TestCase):
             output = self.run_fixture(pathlib.Path(temporary))
             result = json.loads(output.read_text())
             self.assertTrue(result["complete"])
-            self.assertEqual(len(result["processes"]), 96)
+            self.assertEqual(len(result["processes"]), 576)
             observations = dashboard.normalize_result(output)["observations"]
             actual = {(o["scale"]["entries"], o["scale"]["shape"], o["scale"]["spill_memory_objects"],
                        o["operation"], o["cache_policy"], o["implementation"]) for o in observations}
             expected = {(n, shape, limit, f"mark-{mode}-{phase}", phase, f"casita-{strategy}")
                         for n, shape, limit, mode, phase, strategy in itertools.product(
-                            (127, 128, 255, 256), ("shared", "distinct", "chain"), (256, 250000),
-                            ("named", "pins"), ("first", "warm"), ("legacy", "current"))}
+                            (127, 128, 255, 256, 257, 511, 512, 513), ("shared", "distinct", "chain"), (256, 250000),
+                            ("named", "pins", "snapshot-full", "snapshot-partial", "snapshot-sparse", "snapshot-forward"), ("first", "warm"), ("legacy", "current"))}
             self.assertEqual(actual, expected)
-            self.assertEqual(len(observations), 192)
+            self.assertEqual(len(observations), 1152)
             for observation in observations:
                 self.assertEqual(observation["metrics"]["wall_seconds"],
                                  1e-6 if observation["cache_policy"] == "first" else 2e-6)
@@ -100,7 +102,7 @@ class CollectionMarkTests(unittest.TestCase):
             output = self.run_fixture(pathlib.Path(temporary), extra_args=(
                 "--parents", "257", "--memory-limits", "250000", "--repetitions", "2"))
             processes = json.loads(output.read_text())["processes"]
-            self.assertEqual(len(processes), 24)
+            self.assertEqual(len(processes), 72)
             for first, second in zip(processes[::2], processes[1::2]):
                 for dimension in ("parents", "shape", "memory_limit", "mode", "repetition"):
                     self.assertEqual(first[dimension], second[dimension])
@@ -129,6 +131,18 @@ class CollectionMarkTests(unittest.TestCase):
             self.assertEqual((sample["shape"], sample["variant"], sample["objects"]),
                              ("chain", "current", 258))
             self.assertEqual(sample["operation"], "mark-named-first")
+
+    def test_snapshot_scan_counts_and_missing_coverage_are_checked(self):
+        for mode, scanned in (("snapshot-full", 257), ("snapshot-partial", 129), ("snapshot-sparse", 2), ("snapshot-forward", 256)):
+            case = self.case(mode=mode)
+            self.assertEqual(case["samples"][0]["scanned_records"], scanned)
+            self.assertEqual(mark.parse_sample(self.output(case), 256, "shared", 256, 1, "current", mode), case)
+            for key in ("record_reads", "scanned_records"):
+                invalid = copy.deepcopy(case)
+                invalid["samples"][0][key] = max(0, invalid["samples"][0][key] - 1)
+                if invalid != case:
+                    with self.assertRaises(mark.common.BenchmarkError):
+                        mark.parse_sample(self.output(invalid), 256, "shared", 256, 1, "current", mode)
 
     def test_registered_probe_build_and_all_smoke(self):
         entry = next(e for e in cli.entrypoints() if e["id"] == "collection-mark")

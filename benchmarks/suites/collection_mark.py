@@ -18,6 +18,7 @@ from benchmarks.suites.metadata_collection import CARGO_ARGUMENTS, positive_csv
 from benchmarks.suites.pack.catalog import parse_probe_binary
 
 PROBE = "repository::collection_mark_tests::benchmark_collection_mark"
+MODES = ("named", "pins", "snapshot-full", "snapshot-partial", "snapshot-sparse", "snapshot-forward")
 CORRECTNESS = "exact marked keys, cardinality, spill boundary and reopened revision"
 
 
@@ -38,6 +39,8 @@ def parse_sample(stdout, parents, shape, memory_limit, iterations, strategy="cur
                     iterations=iterations, strategy=strategy, mode=mode, correctness=CORRECTNESS)
     if not isinstance(case, dict) or any(type(case.get(k)) is not type(v) or case[k] != v for k, v in required.items()):
         raise common.BenchmarkError("wrong mark configuration or correctness gate")
+    cutoff = {"snapshot-full": parents, "snapshot-partial": max(1, parents // 2), "snapshot-sparse": 1}.get(mode, 0)
+    scanned = parents if mode == "snapshot-forward" else ((2 * cutoff if shape == "distinct" else cutoff + 1) if cutoff else 0)
     samples = case.get("samples")
     if not isinstance(samples, list) or len(samples) != iterations + 1:
         raise common.BenchmarkError("missing or duplicate mark iterations")
@@ -46,8 +49,9 @@ def parse_sample(stdout, parents, shape, memory_limit, iterations, strategy="cur
                 or sample["iteration"] != iteration or sample.get("mode") != mode
                 or sample.get("warm") is not (iteration > 0)
                 or any(type(sample.get(k)) is not int or sample[k] < 0
-                       for k in ("nanos", "record_reads", "spill_files", "spill_peak_bytes"))
-                or sample["record_reads"] < required["objects"]):
+                       for k in ("nanos", "record_reads", "scanned_records", "spill_files", "spill_peak_bytes"))
+                or sample["scanned_records"] != scanned
+                or sample["record_reads"] + scanned < required["objects"]):
             raise common.BenchmarkError("invalid mark sample")
     return case
 
@@ -59,12 +63,13 @@ def save(args, result):
              "Timing includes root/pin traversal, spill writes and queue cleanup; fixture setup, audit and returned mark-set cleanup are excluded.",
              "Each process measures one mode and strategy; pins never follows named marking. First/warm label iterations, not a cold OS cache.",
              "Legacy/current use the same executable and fixture. Matching strategies are adjacent, with reversed order on even repetitions.",
+             "Snapshot modes cover all, half, or one parent generation, or old parents with newer leaves; closure-only pins call the same unchanged function under both strategy labels.",
              "Process RSS includes setup and audits. This is a traversal probe, not full collection or ingestion timing.",
              "", f"Complete: {result['complete']}", "",
-             "| Parents | Shape | Memory keys | Strategy | Operation | Repetition | ms | Record reads |",
-             "|---:|---|---:|---|---|---:|---:|---:|"]
+             "| Parents | Shape | Memory keys | Strategy | Operation | Repetition | ms | Record reads | Scanned records |",
+             "|---:|---|---:|---|---|---:|---:|---:|---:|"]
     for sample in result["samples"]:
-        lines.append(f"| {sample['entries']} | {sample['shape']} | {sample['spill_memory_objects']} | {sample['variant']} | {sample['operation']} | {sample['repetition']} | {sample['wall_seconds'] * 1000:.3f} | {sample['metrics']['record_reads']:.0f} |")
+        lines.append(f"| {sample['entries']} | {sample['shape']} | {sample['spill_memory_objects']} | {sample['variant']} | {sample['operation']} | {sample['repetition']} | {sample['wall_seconds'] * 1000:.3f} | {sample['metrics']['record_reads']:.0f} | {sample['metrics']['scanned_records']:.0f} |")
     if "error" in result:
         lines += ["", f"Error: {result['error']}"]
     common.write_atomic(args.report or args.output.with_suffix(".md"), "\n".join(lines) + "\n")
@@ -78,20 +83,23 @@ def main(argv=None):
     parser.add_argument("--memory-limits", type=positive_csv, default=[256, 250000])
     parser.add_argument("--iterations", type=int)
     parser.add_argument("--strategy", choices=("legacy", "current"), help="default: both, in adjacent alternating pairs")
-    parser.add_argument("--mode", choices=("named", "pins"), help="default: both, in independent processes")
+    parser.add_argument("--mode", choices=MODES, action="append", help="repeat to select modes; default: all, in independent processes")
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--probe-binary", type=pathlib.Path)
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--output", type=pathlib.Path, required=True)
     parser.add_argument("--report", type=pathlib.Path)
     args = parser.parse_args(argv)
-    parents = args.parents or ([127, 128, 255, 256] if args.profile == "smoke" else [127, 128, 255, 256, 257, 8192])
+    boundaries = [127, 128, 255, 256, 257, 511, 512, 513]
+    parents = args.parents or (boundaries if args.profile == "smoke" else [*boundaries, 8192])
     iterations = args.iterations if args.iterations is not None else (1 if args.profile == "smoke" else 3)
     shapes = args.shape or ["shared", "distinct", "chain"]
     if len(shapes) != len(set(shapes)):
         parser.error("shapes must not be repeated")
     strategies = [args.strategy] if args.strategy else ["legacy", "current"]
-    modes = [args.mode] if args.mode else ["named", "pins"]
+    modes = args.mode or list(MODES)
+    if len(modes) != len(set(modes)):
+        parser.error("modes must not be repeated")
     if iterations < 1 or args.repetitions < 1:
         parser.error("iterations and repetitions must be positive")
     if args.no_build and args.probe_binary is None:
@@ -142,7 +150,7 @@ def main(argv=None):
                         variant=strategy,
                         objects=case["objects"], repetition=repetition, wall_seconds=statistics.mean(s["nanos"] for s in samples) / 1e9,
                         max_rss_bytes=timing["max_rss_bytes"], marks=samples, correctness=CORRECTNESS,
-                        metrics={k: statistics.mean(s[k] for s in samples) for k in ("record_reads", "spill_files", "spill_peak_bytes")}))
+                        metrics={k: statistics.mean(s[k] for s in samples) for k in ("record_reads", "scanned_records", "spill_files", "spill_peak_bytes")}))
                 save(args, result)
         except Exception as error:
             result["error"] = str(error)
