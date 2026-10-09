@@ -293,5 +293,11 @@ fn decoder_admission(c: &mut Criterion) {
     }
     group.finish();
 }
-criterion_group!(benches, imports, sequences, decoder_pools, decoder_admission);
+criterion_group!(
+    benches,
+    imports,
+    sequences,
+    decoder_pools,
+    decoder_admission
+);
 criterion_main!(benches);
