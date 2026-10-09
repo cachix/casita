@@ -1387,6 +1387,8 @@
         "--bench",
         "manifest_reads",
         "--bench",
+        "verified_manifest_reads",
+        "--bench",
         "nar_associations",
         "--bench",
         "nar_import",
@@ -2319,6 +2321,32 @@
             "EOF observed",
             "64 KiB read cap",
             "hint-sized production scratch for accurate hints"
+          ],
+          "included_in": "benchmark all --suites core-primitives"
+        },
+        "verified-manifest-reads": {
+          "runner": "cargo bench --features native,experimental --bench verified_manifest_reads",
+          "backends": [
+            "memory-loose",
+            "local-packed: flushed local packed store",
+            "memory-get-1ms: 1 ms per GET or HEAD"
+          ],
+          "blobs_per_iteration": 64,
+          "readers": [
+            1,
+            64
+          ],
+          "groups": {
+            "verified_manifest_reads": "0, 1, 2, 63, 64 and 65 chunks of 1 KiB; memory-get-1ms runs 0, 1 and 2",
+            "verified_bare_group_reads": "one self-addressed chunk of 1, 16383, 16384, 16385 or 32768 bytes; memory-get-1ms runs 16384 and 16385"
+          },
+          "metrics": [
+            "verified open and read latency through authenticated EOF"
+          ],
+          "correctness": [
+            "intended manifest form: empty flat, absent, flat or paged",
+            "no manifest for single-chunk blobs",
+            "exact output bytes"
           ],
           "included_in": "benchmark all --suites core-primitives"
         },

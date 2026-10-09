@@ -2420,6 +2420,32 @@ cargo bench --no-default-features --features experimental --bench metadata_verif
 The [metadata buffer report](reports/2026-10-06-metadata-buffers/README.md)
 retains both orders and build and host provenance.
 
+## Verified manifest reads
+
+`verified_manifest_reads` opens and reads 64 prepared blobs through
+authenticated EOF per iteration, one at a time and 64 at a time, on three
+backends: `memory-loose`, `local-packed` (a flushed local packed store) and
+`memory-get-1ms`, which charges 1 ms per GET or HEAD as a stand-in for a remote
+object store. Fixture construction and output comparisons are outside timing;
+authentication is inside. Two groups run in `benchmark all`:
+
+- `verified_manifest_reads` builds blobs of 0, 1, 2, 63, 64 and 65 1 KiB
+  chunks: a real empty flat manifest, a single self-addressed chunk with no
+  manifest, and both sides of the 64-entry flat/page boundary. Each case checks
+  that its manifest has the intended physical form. `memory-get-1ms` runs only
+  0, 1 and 2 chunks.
+- `verified_bare_group_reads` stores single chunks of 1, 16,383, 16,384, 16,385
+  and 32,768 bytes, crossing the 16 KiB Bao group boundary, and checks each
+  has no manifest. `memory-get-1ms` runs only 16,384 and 16,385 bytes.
+
+```sh
+cargo bench -p casita --features native,experimental --bench verified_manifest_reads
+cargo bench -p casita --features native,experimental --bench verified_manifest_reads -- --test
+```
+
+The [missing-manifest report](reports/2026-10-09-missing-manifest-probe/README.md)
+compares every case with upstream.
+
 ## Native Git import phase profiling
 
 `git-import-profile` runs the permanent `git-scale` many-object, delta-heavy,
