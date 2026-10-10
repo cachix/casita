@@ -494,6 +494,8 @@ fn publication_crash_worker() {
                 ("paged-overwrite", true) => paged_overwrite_verifier(&work, &target).await,
                 ("metadata", false) => metadata_writer(&work).await,
                 ("metadata", true) => metadata_verifier(&work, &target).await,
+                ("operation-marker", false) => operation_marker_writer(&work).await,
+                ("operation-marker", true) => operation_marker_verifier(&work, &target).await,
                 ("catalog-migration", false) => catalog_migration_writer(&work).await,
                 ("catalog-migration", true) => catalog_migration_verifier(&work).await,
                 ("batch" | "stream", false) => catalog_writer(&work, scenario == "stream").await,
@@ -898,6 +900,333 @@ fn metadata_records_survive_process_crashes_atomically_with_roots() {
         run_worker(work.path(), "metadata", event, false);
         run_worker(work.path(), "metadata", event, true);
     }
+}
+
+fn operation_marker_key() -> crate::MetadataKey {
+    crate::MetadataKey::new(
+        crate::NamespaceId::try_from("casita.spike.operations.v1").unwrap(),
+        "operation/transaction-crash",
+    )
+}
+
+fn operation_marker_payload(writer: usize) -> Vec<u8> {
+    let mut bytes = vec![0; 768 * 1024 + 9];
+    blake3::Hasher::new()
+        .update(b"operation marker shared prefix")
+        .finalize_xof()
+        .fill(&mut bytes[..256 * 1024]);
+    blake3::Hasher::new()
+        .update(format!("operation marker writer {writer}").as_bytes())
+        .finalize_xof()
+        .fill(&mut bytes[256 * 1024..]);
+    bytes
+}
+
+fn operation_marker_value(writer: usize) -> Bytes {
+    format!(
+        "operation=transaction-crash;root=head;payload={:?}",
+        key(&operation_marker_payload(writer))
+    )
+    .into()
+}
+
+fn operation_marker_checks() -> Vec<crate::MetadataCheck> {
+    vec![crate::MetadataCheck::Record {
+        key: operation_marker_key(),
+        expected: None,
+    }]
+}
+
+fn operation_marker_changes(writer: usize) -> Vec<crate::MetadataChange> {
+    vec![
+        crate::MetadataChange::SetRoot {
+            name: name("head"),
+            target: key(&operation_marker_payload(writer)),
+        },
+        crate::MetadataChange::Set {
+            key: operation_marker_key(),
+            value: operation_marker_value(writer),
+        },
+    ]
+}
+
+async fn operation_marker_writer(work: &Path) {
+    let repository = Repository::local(work.join("repository")).await.unwrap();
+    let old = operation_marker_payload(2);
+    publish_blob(&repository, "head", &old).await;
+    publish_blob(&repository, "retained", &old).await;
+    let first_session = repository.mutation_session().await.unwrap();
+    let second_session = repository.mutation_session().await.unwrap();
+    let first = first_session
+        .stage_blob(&operation_marker_payload(0))
+        .await
+        .unwrap();
+    let second = second_session
+        .stage_blob(&operation_marker_payload(1))
+        .await
+        .unwrap();
+    std::fs::write(
+        work.join("baseline-revision"),
+        repository
+            .metadata()
+            .snapshot()
+            .await
+            .unwrap()
+            .revision()
+            .to_string(),
+    )
+    .unwrap();
+    // Fixture setup is complete. Occurrence 1 now belongs to the attempted
+    // marker publication, rather than initialization or an earlier root.
+    arm(work);
+    let first_publish = first_session.publish_with_metadata(
+        vec![first],
+        operation_marker_checks(),
+        operation_marker_changes(0),
+    );
+    let second_publish = second_session.publish_with_metadata(
+        vec![second],
+        operation_marker_checks(),
+        operation_marker_changes(1),
+    );
+    let (first, second) = tokio::join!(first_publish, second_publish);
+    let results = [first, second];
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(
+                result,
+                Err(crate::repository::RepositoryError::Metadata(
+                    crate::MetadataError::CheckFailed { index: 0 }
+                ))
+            ))
+            .count(),
+        1
+    );
+    checkpoint("publication-acknowledged");
+}
+
+async fn operation_marker_verifier(work: &Path, target: &str) {
+    let repository = Repository::local(work.join("repository")).await.unwrap();
+    let committed = target == "control"
+        || target.starts_with("after-state-commit:")
+        || target.starts_with("publication-acknowledged:");
+    let snapshot = repository.metadata().snapshot().await.unwrap();
+    let root = snapshot.root(&name("head")).await.unwrap().unwrap();
+    let marker = snapshot
+        .get(&[operation_marker_key()])
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    let baseline = std::fs::read_to_string(work.join("baseline-revision")).unwrap();
+    let winner = if committed {
+        let winner = (0..2)
+            .find(|writer| root == key(&operation_marker_payload(*writer)))
+            .expect("committed root must identify one competing request");
+        assert_eq!(
+            marker,
+            Some(operation_marker_value(winner)),
+            "root and marker must commit together"
+        );
+        assert_ne!(snapshot.revision().to_string(), baseline);
+        assert!(
+            snapshot
+                .object(&key(&operation_marker_payload(1 - winner)))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        Some(winner)
+    } else {
+        assert_eq!(
+            root,
+            key(&operation_marker_payload(2)),
+            "uncommitted root must roll back"
+        );
+        assert_eq!(marker, None, "uncommitted marker must roll back");
+        assert_eq!(snapshot.revision().to_string(), baseline);
+        for writer in 0..2 {
+            assert!(
+                snapshot
+                    .object(&key(&operation_marker_payload(writer)))
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "uncommitted object insertion must roll back"
+            );
+        }
+        None
+    };
+    assert_eq!(
+        snapshot.root(&name("retained")).await.unwrap(),
+        Some(key(&operation_marker_payload(2)))
+    );
+    drop(snapshot);
+    assert_payload(
+        &repository,
+        &root,
+        &operation_marker_payload(winner.unwrap_or(2)),
+    )
+    .await;
+    assert_payload(
+        &repository,
+        &key(&operation_marker_payload(2)),
+        &operation_marker_payload(2),
+    )
+    .await;
+
+    // After rollback a fresh process can reuse the absent ID. After commit it
+    // recovers the outcome from the marker and must reject a conflicting retry.
+    let winner = match winner {
+        Some(winner) => winner,
+        None => {
+            let session = repository.mutation_session().await.unwrap();
+            let staged = session
+                .stage_blob(&operation_marker_payload(0))
+                .await
+                .unwrap();
+            session
+                .publish_with_metadata(
+                    vec![staged],
+                    operation_marker_checks(),
+                    operation_marker_changes(0),
+                )
+                .await
+                .unwrap();
+            0
+        }
+    };
+    crate::metadata::flush_repository_leases().await.unwrap();
+    let revision = repository.metadata().snapshot().await.unwrap().revision();
+    let session = repository.mutation_session().await.unwrap();
+    let loser = 1 - winner;
+    let staged = session
+        .stage_blob(&operation_marker_payload(loser))
+        .await
+        .unwrap();
+    assert!(matches!(
+        session
+            .publish_with_metadata(
+                vec![staged],
+                operation_marker_checks(),
+                operation_marker_changes(loser),
+            )
+            .await,
+        Err(crate::repository::RepositoryError::Metadata(
+            crate::MetadataError::CheckFailed { index: 0 }
+        ))
+    ));
+    drop(session);
+    crate::metadata::flush_repository_leases().await.unwrap();
+    let snapshot = repository.metadata().snapshot().await.unwrap();
+    assert_eq!(
+        snapshot.revision(),
+        revision,
+        "conflicting retry cannot advance revision"
+    );
+    assert_eq!(
+        snapshot.root(&name("head")).await.unwrap(),
+        Some(key(&operation_marker_payload(winner)))
+    );
+    assert_eq!(
+        snapshot.get(&[operation_marker_key()]).await.unwrap(),
+        vec![Some(operation_marker_value(winner))]
+    );
+    assert!(
+        snapshot
+            .object(&key(&operation_marker_payload(loser)))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    drop(snapshot);
+    repository.collect().await.unwrap();
+    let snapshot = repository.metadata().snapshot().await.unwrap();
+    assert_eq!(
+        snapshot.root(&name("head")).await.unwrap(),
+        Some(key(&operation_marker_payload(winner)))
+    );
+    assert_eq!(
+        snapshot.root(&name("retained")).await.unwrap(),
+        Some(key(&operation_marker_payload(2)))
+    );
+    assert_eq!(
+        snapshot.get(&[operation_marker_key()]).await.unwrap(),
+        vec![Some(operation_marker_value(winner))]
+    );
+    drop(snapshot);
+    assert_payload(
+        &repository,
+        &key(&operation_marker_payload(winner)),
+        &operation_marker_payload(winner),
+    )
+    .await;
+    assert_payload(
+        &repository,
+        &key(&operation_marker_payload(2)),
+        &operation_marker_payload(2),
+    )
+    .await;
+    assert!(repository.fsck().await.unwrap().is_healthy());
+}
+
+#[test]
+fn operation_marker_survives_transaction_crash_boundaries() {
+    let control = tempfile::tempdir().unwrap();
+    run_worker(control.path(), "operation-marker", "control", false);
+    run_worker(control.path(), "operation-marker", "control", true);
+    let trace = std::fs::read_to_string(control.path().join("trace")).unwrap();
+    for target in [
+        "state-object-inserted:1",
+        "state-root-changed:1",
+        "state-metadata-changed:1",
+        "before-state-commit:1",
+        "after-state-commit:1",
+        "publication-acknowledged:1",
+    ] {
+        assert!(
+            trace.lines().any(|event| event == target),
+            "control missed {target}"
+        );
+        let work = tempfile::tempdir().unwrap();
+        run_worker(work.path(), "operation-marker", target, false);
+        run_worker(work.path(), "operation-marker", target, true);
+        eprintln!("operation marker SIGKILL and fresh-process audit passed: {target}");
+    }
+}
+
+#[test]
+fn operation_marker_checker_rejects_wrong_commit_outcome() {
+    let work = tempfile::tempdir().unwrap();
+    run_worker(
+        work.path(),
+        "operation-marker",
+        "before-state-commit:1",
+        false,
+    );
+    // Lie to the independent reader about the crash phase. Its repository
+    // audit must reject this even though opening the rolled-back file succeeds.
+    let rejected = std::panic::catch_unwind(|| {
+        run_worker(
+            work.path(),
+            "operation-marker",
+            "after-state-commit:1",
+            true,
+        );
+    });
+    assert!(
+        rejected.is_err(),
+        "checker accepted the wrong commit outcome"
+    );
+    assert!(
+        std::fs::read_to_string(work.path().join("verify.log"))
+            .unwrap()
+            .contains("committed root must identify one competing request"),
+        "negative control must fail its graph audit rather than worker setup"
+    );
+    assert!(!work.path().join("verified").exists());
 }
 
 fn paged_contents() -> Vec<u8> {
