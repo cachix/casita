@@ -48,6 +48,27 @@ file-by-file copy may combine incompatible state and payload revisions. Treat
 the restored copy as a separate repository; its revision tokens cannot order
 changes against the original.
 
+## Inspect the database
+
+Do not point SQLite tools such as `sqlite3` or DB Browser for SQLite at the
+`casita.sqlite` of a running repository. Such a tool does not see Casita's
+multi-process coordination, and when it closes it would fold what it read into
+the database file and delete the write-ahead log Casita is still writing,
+silently undoing later commits. On Linux and macOS Casita holds SQLite's own
+locks against this, so the tool fails with `database is locked` or `locking
+protocol`, and a tool that was already holding the database exclusively makes
+Casita report the repository busy until it closes. Windows has no such
+protection: commits made while the tool was open can be lost when it closes.
+Casita detects the deleted log the next time it commits or deletes a payload,
+and from then on refuses commits, deletions and reads with a
+`restart_required` error until every process using the repository restarts.
+
+To inspect the state, copy `casita.sqlite` together with `casita.sqlite-wal`
+to another directory and open the copy. Take the copy with every Casita
+process using the repository stopped, or from a consistent filesystem
+snapshot: files copied one after the other while Casita commits may not form
+a database SQLite can read.
+
 ## Respond to a failed integrity check
 
 Preserve the affected repository before attempting recovery. A normal `fsck`

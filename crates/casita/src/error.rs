@@ -129,16 +129,7 @@ pub(crate) fn wrapped_retry_disposition(
             return error.retry_disposition();
         }
         if let Some(error) = error.downcast_ref::<crate::metadata::MetadataError>() {
-            use crate::metadata::MetadataError;
-            return match error {
-                MetadataError::Busy(_)
-                | MetadataError::MaintenanceFenced
-                | MetadataError::Transient(_)
-                | MetadataError::StaleRevision { .. }
-                | MetadataError::StorageFull => RetryDisposition::Retry,
-                MetadataError::Backend(_) | MetadataError::Poisoned => RetryDisposition::Unknown,
-                _ => RetryDisposition::Never,
-            };
+            return error.retry_disposition();
         }
     }
     if let Some(error) = error.downcast_ref::<std::io::Error>() {

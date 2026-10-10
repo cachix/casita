@@ -83,7 +83,7 @@ pub struct TursoMetadataStore {
     validated: ValidationCounter,
     pins: Arc<std::sync::OnceLock<Arc<super::FilePinStore>>>,
     /// Shared by clones so each deletion batch reaches the same database.
-    commits: Option<crate::blob::CommitDurability>,
+    commits: crate::blob::CommitDurability,
 }
 
 impl TursoMetadataStore {
@@ -133,7 +133,7 @@ impl TursoMetadataStore {
             .map_err(from_database_error)?;
         }
         Ok(Self {
-            commits: crate::blob::CommitDurability::for_database(db.path()),
+            commits: crate::blob::CommitDurability::for_turso(&db),
             db,
             validated: ValidationCounter::default(),
             pins: Default::default(),
@@ -158,6 +158,8 @@ impl TursoSnapshot {
         T: Send + 'static,
     {
         let guard = self.connection.clone().lock_owned().await;
+        // A retained snapshot may outlive this process's hold on its files.
+        guard.before_read()?;
         tokio::task::spawn_blocking(move || futures::executor::block_on(operation(&guard)))
             .await
             .map_err(|error| MetadataError::Backend(error.to_string()))?
@@ -834,7 +836,7 @@ impl MetadataStore for TursoMetadataStore {
         }))
     }
     fn commit_durability(&self) -> Option<crate::blob::CommitDurability> {
-        self.commits.clone()
+        Some(self.commits.clone())
     }
     async fn commit_checked(
         &self,
