@@ -1,0 +1,26 @@
+[package]
+name = "casita-turmoil-pins-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+default-run = "casita-turmoil-pins-spike"
+
+# Keep this investigation outside the production workspace and dependency graph.
+[workspace]
+
+[features]
+default = ["explicit-entropy"]
+explicit-entropy = []
+
+[dependencies]
+casita = { path = "../../crates/casita", default-features = false, features = ["native", "experimental"] }
+turmoil = "=0.7.2"
+tokio = { version = "1", features = ["io-util", "macros", "rt", "sync", "time"] }
+async-trait = "0.1"
+bytes = "1"
+chrono = { version = "0.4", default-features = false }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+
