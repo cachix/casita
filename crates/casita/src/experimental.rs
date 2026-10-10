@@ -149,7 +149,7 @@ pub fn decode_object_record(encoded: &[u8]) -> Result<ObjectRecord, LogicalEncod
 
 #[cfg(feature = "native")]
 pub use crate::metadata::{
-    BackendWriteScope, CommitResult, DataPin, DataPinLease, FactsEdit, FilePinStore,
+    BackendWriteScope, CommitResult, DataPin, DataPinLease, EntropySource, FactsEdit, FilePinStore,
     MemoryMetadataStore, MemoryPinStore, MemoryVerificationFacts, MetadataError, MetadataMutation,
     MetadataSnapshot, MetadataStore, ObjectPinStore, PinInventory, PinResource, PinScope, PinStore,
     PinToken, RepositoryLease, RetainedObjects, RootChange, TursoMetadataStore, VerificationFacts,

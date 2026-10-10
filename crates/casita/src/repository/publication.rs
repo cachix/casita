@@ -32,13 +32,15 @@ pub(super) type Protection = Arc<dyn Send + Sync>;
 /// One budget shared by stale-revision and pre-append maintenance retries.
 /// Check deadlines between attempts, never by cancelling a submitted commit.
 pub(super) struct PublicationRetry {
+    entropy: Arc<dyn crate::metadata::EntropySource>,
     attempts: u32,
     deadline: tokio::time::Instant,
 }
 
 impl PublicationRetry {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(entropy: Arc<dyn crate::metadata::EntropySource>) -> Self {
         Self {
+            entropy,
             attempts: 1,
             deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(30),
         }
@@ -50,7 +52,7 @@ impl PublicationRetry {
         }
         let cap = (10_u64 << self.attempts.min(5)).min(250);
         let mut entropy = [0; 2];
-        let _ = getrandom::fill(&mut entropy);
+        let _ = self.entropy.fill(&mut entropy);
         let delay =
             std::time::Duration::from_millis(1 + u64::from(u16::from_le_bytes(entropy)) % cap);
         tokio::time::sleep_until((tokio::time::Instant::now() + delay).min(self.deadline)).await;
@@ -435,7 +437,7 @@ impl Publication {
         }
         let _guard = self.lock().await;
         let result = async {
-            let mut retry = PublicationRetry::new();
+            let mut retry = PublicationRetry::new(self.metadata.entropy_source());
             loop {
                 let snapshot = self.metadata.snapshot().await?;
                 self.payloads

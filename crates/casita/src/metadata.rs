@@ -16,6 +16,9 @@ use crate::format::VerifiedObject;
 use crate::object::{ObjectKey, ObjectRecord, RepositoryRevision, RootName, RootRecord};
 
 mod closure;
+mod entropy;
+pub use entropy::EntropySource;
+pub(crate) use entropy::system_entropy;
 pub(crate) mod records;
 pub use records::{
     MetadataChange, MetadataCheck, MetadataCommitResult, MetadataCursor, MetadataKey, MetadataPage,
@@ -636,6 +639,12 @@ impl VerificationFacts for MemoryVerificationFacts {
 #[async_trait]
 #[auto_impl(&, Arc, Box)]
 pub trait MetadataStore: Send + Sync {
+    /// Entropy for repository retry jitter. Simulation-aware wrappers must
+    /// forward this along with the backend's pin and revision sources.
+    fn entropy_source(&self) -> Arc<dyn EntropySource> {
+        system_entropy()
+    }
+
     /// Whether this store atomically preserves opaque records and checks.
     fn supports_metadata_records(&self) -> bool {
         false
@@ -909,6 +918,7 @@ struct MemoryState {
 /// In-process implementation of the complete revisioned state contract.
 #[derive(Clone)]
 pub struct MemoryMetadataStore {
+    entropy: Arc<dyn EntropySource>,
     state: Arc<Mutex<MemoryState>>,
     pins: Arc<MemoryPinStore>,
     facts: Arc<MemoryVerificationFacts>,
@@ -917,12 +927,17 @@ pub struct MemoryMetadataStore {
 impl MemoryMetadataStore {
     /// Create an empty repository with a fresh initial revision.
     pub fn new() -> Result<Self, MetadataError> {
+        Self::new_with_entropy(system_entropy())
+    }
+
+    /// Create empty state and its pin ledger using one scoped entropy source.
+    pub fn new_with_entropy(entropy: Arc<dyn EntropySource>) -> Result<Self, MetadataError> {
         Ok(Self {
-            pins: Arc::new(MemoryPinStore::default()),
+            pins: Arc::new(MemoryPinStore::new_with_entropy(entropy.clone())),
             facts: Arc::default(),
             state: Arc::new(Mutex::new(MemoryState {
                 records: OrdMap::new(),
-                revision: fresh_revision(None)?,
+                revision: fresh_revision_with_entropy(None, entropy.as_ref())?,
                 generation: 0,
                 births: OrdMap::new(),
                 objects: OrdMap::new(),
@@ -930,12 +945,17 @@ impl MemoryMetadataStore {
                 validated: OrdSet::new(),
                 payload_catalog: None,
             })),
+            entropy,
         })
     }
 }
 
 #[async_trait]
 impl MetadataStore for MemoryMetadataStore {
+    fn entropy_source(&self) -> Arc<dyn EntropySource> {
+        self.entropy.clone()
+    }
+
     async fn try_collection_lease(&self) -> Result<Option<RepositoryLease>, MetadataError> {
         Ok(Some(RepositoryLease::process_local()))
     }
@@ -1147,7 +1167,7 @@ impl MemoryMetadataStore {
 
         drop(applying);
         let _publishing = tracing::debug_span!("state.memory.publish").entered();
-        let revision = fresh_revision(Some(state.revision))?;
+        let revision = fresh_revision_with_entropy(Some(state.revision), self.entropy.as_ref())?;
         for (key, value) in mutation.records {
             match value {
                 Some(value) => {
@@ -1258,15 +1278,24 @@ fn validate_retained_set(
 fn fresh_revision(
     different_from: Option<RepositoryRevision>,
 ) -> Result<RepositoryRevision, MetadataError> {
-    loop {
+    fresh_revision_with_entropy(different_from, system_entropy().as_ref())
+}
+
+fn fresh_revision_with_entropy(
+    different_from: Option<RepositoryRevision>,
+    entropy: &dyn EntropySource,
+) -> Result<RepositoryRevision, MetadataError> {
+    for _ in 0..32 {
         let mut bytes = [0u8; 32];
-        getrandom::fill(&mut bytes)
-            .map_err(|error| MetadataError::RevisionEntropy(error.to_string()))?;
+        entropy.fill(&mut bytes)?;
         let revision = RepositoryRevision::from_bytes(bytes);
         if Some(revision) != different_from {
             return Ok(revision);
         }
     }
+    Err(MetadataError::RevisionEntropy(
+        "entropy source repeated the current revision 32 times".into(),
+    ))
 }
 
 #[cfg(test)]

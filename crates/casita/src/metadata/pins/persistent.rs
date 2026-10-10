@@ -25,6 +25,9 @@ use timing::LedgerPhase;
 #[async_trait]
 trait Backend: Send + Sync {
     type Version: Send;
+    fn entropy_source(&self) -> Arc<dyn EntropySource> {
+        system_entropy()
+    }
     async fn edit(&self, operation: Operation) -> Result<Outcome, MetadataError> {
         optimistic_edit(self, None, operation).await
     }
@@ -49,13 +52,27 @@ trait Backend: Send + Sync {
 /// existing protection.
 #[derive(Clone)]
 pub struct ObjectPinStore {
+    entropy: Arc<dyn EntropySource>,
     store: Arc<dyn ObjectStore>,
     path: Path,
 }
 
 impl ObjectPinStore {
     pub fn new(store: Arc<dyn ObjectStore>, path: Path) -> Self {
-        Self { store, path }
+        Self::new_with_entropy(store, path, system_entropy())
+    }
+
+    /// Compose conditional storage with a scoped ownership-token source.
+    pub fn new_with_entropy(
+        store: Arc<dyn ObjectStore>,
+        path: Path,
+        entropy: Arc<dyn EntropySource>,
+    ) -> Self {
+        Self {
+            store,
+            path,
+            entropy,
+        }
     }
 }
 
@@ -66,6 +83,9 @@ fn backend(error: impl std::fmt::Display) -> MetadataError {
 #[async_trait]
 impl Backend for ObjectPinStore {
     type Version = Option<UpdateVersion>;
+    fn entropy_source(&self) -> Arc<dyn EntropySource> {
+        self.entropy.clone()
+    }
 
     async fn load(&self) -> Result<(PinInventory, Self::Version), MetadataError> {
         let object = match self.store.get(&self.path).await {
@@ -607,6 +627,7 @@ async fn attempt_edit(
     let revision = before.revision;
     let memory = MemoryPinStore {
         state: Arc::new(tokio::sync::Mutex::new(before)),
+        entropy: store.entropy_source(),
     };
     let result = operation.apply(&memory).await?;
     let after = memory.inventory().await?;
