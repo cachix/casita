@@ -1,0 +1,56 @@
+name: Deterministic simulation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: 2
+
+jobs:
+  simulation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      # Match the repository's pinned devenv toolchain. Default features use
+      # explicit entropy injection, with no symbol-interception runtime.
+      - uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: experiments/turmoil-pins -> target
+      - name: Check the standalone harness
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/dst
+          cargo fmt --manifest-path experiments/turmoil-pins/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path experiments/turmoil-pins/Cargo.toml --all-targets -- -D warnings 2>&1 | tee target/dst/clippy.log
+          cargo test --locked --manifest-path experiments/turmoil-pins/Cargo.toml 2>&1 | tee target/dst/tests.log
+          grep -Eq 'test result: ok\. [1-9][0-9]* passed' target/dst/tests.log
+      - name: Replay the bounded corpus in independent processes
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          for replay in 1 2; do
+            cargo run --locked --manifest-path experiments/turmoil-pins/Cargo.toml --bin dst-ci -- 4 "target/dst/reports-$replay.jsonl" 2>&1 | tee "target/dst/replay-$replay.log"
+          done
+          cmp target/dst/reports-1.jsonl target/dst/reports-2.jsonl
+      - name: Retain reports and failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deterministic-simulation-${{ github.run_id }}
+          path: target/dst
+          if-no-files-found: ignore
+          retention-days: 14

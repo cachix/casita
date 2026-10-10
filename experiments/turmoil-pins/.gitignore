@@ -1,0 +1,3 @@
+/target/
+# The standalone harness must resolve the same dependencies in CI.
+!Cargo.lock
