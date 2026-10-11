@@ -841,6 +841,13 @@ def normalize_result(path: pathlib.Path) -> dict[str, Any]:
     if result.get("result_schema") == "casita.casitar-scaling.v1" and result.get("complete") is False:
         raise ValueError(f"incomplete Casitar benchmark: {path}")
     result_schema = str(result.get("result_schema", ""))
+    if result_schema == "casita.collection-inventory.v1":
+        if result.get("complete") is not True:
+            raise ValueError("incomplete collection inventory matrix cannot be compared")
+        normalized = normalize_lifecycle_result(path, result)
+        for observation in normalized["observations"]:
+            observation["cache_policy"] = "first"
+        return normalized
     if result_schema == "casita.filesystem-outputs.v1":
         return normalize_filesystem_outputs(path, result)
     if result_schema in {"casita.git-import-profile.v1", "casita.pin-growth.v1"}:

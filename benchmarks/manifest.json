@@ -1318,6 +1318,17 @@
       ]
     },
     {
+      "id": "collection-inventory",
+      "suite_id": "collection-and-fsck",
+      "title": "Full collection planning across physical inventory and spill boundaries",
+      "kind": "module",
+      "target": "benchmarks.suites.collection_inventory",
+      "profiles": [
+        "smoke",
+        "standard"
+      ]
+    },
+    {
       "id": "repository",
       "suite_id": "repository-e2e",
       "title": "Repository workflow comparison",
