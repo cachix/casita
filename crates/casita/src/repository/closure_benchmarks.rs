@@ -162,6 +162,7 @@ async fn measure<PS: BlobStore, SS: MetadataStore>(
     );
 }
 
+#[cfg(feature = "s3")]
 fn directory_bytes(path: &Path) -> u64 {
     let mut total = 0;
     let mut pending = vec![path.to_path_buf()];
