@@ -181,7 +181,7 @@ async fn maintenance_and_stale_revision_share_one_attempt_budget() {
 
 #[tokio::test(start_paused = true)]
 async fn retry_window_does_not_start_an_attempt_after_its_deadline() {
-    let mut budget = publication::PublicationRetry::new();
+    let mut budget = publication::PublicationRetry::new(crate::metadata::system_entropy());
     tokio::time::advance(std::time::Duration::from_secs(30)).await;
     assert!(!budget.wait().await);
 }
@@ -321,4 +321,29 @@ async fn collection_preserves_staged_payload_during_maintenance_refusal() {
     let mut bytes = Vec::new();
     read.read_to_end(&mut bytes).await.unwrap();
     assert_eq!(bytes, b"concurrent collection");
+}
+
+#[tokio::test(start_paused = true)]
+async fn retry_jitter_uses_scoped_entropy_and_preserves_failure_fallback() {
+    struct Jitter(bool);
+    impl crate::metadata::EntropySource for Jitter {
+        fn fill(&self, bytes: &mut [u8]) -> Result<(), MetadataError> {
+            assert_eq!(bytes.len(), 2);
+            if self.0 {
+                bytes.copy_from_slice(&19_u16.to_le_bytes());
+                Ok(())
+            } else {
+                Err(MetadataError::RevisionEntropy("injected failure".into()))
+            }
+        }
+    }
+    for (succeeds, expected_ms) in [(true, 20), (false, 1)] {
+        let mut budget = publication::PublicationRetry::new(Arc::new(Jitter(succeeds)));
+        let start = tokio::time::Instant::now();
+        assert!(budget.wait().await);
+        assert_eq!(
+            start.elapsed(),
+            std::time::Duration::from_millis(expected_ms)
+        );
+    }
 }

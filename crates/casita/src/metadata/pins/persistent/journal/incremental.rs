@@ -643,6 +643,7 @@ mod tests {
         let before = state.clone();
         let reference = MemoryPinStore {
             state: Arc::new(tokio::sync::Mutex::new(before.clone())),
+            entropy: system_entropy(),
         };
         let expected = operation.apply(&reference).await;
         let mut touched = Touched::default();
