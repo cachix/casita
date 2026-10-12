@@ -5,7 +5,7 @@ use tokio::io::AsyncWriteExt;
 
 use super::{Error, parse_blob_or_exact_key, parse_directory_key};
 
-fn require_complete(key: &ObjectKey, status: ClosureStatus) -> Result<(), Error> {
+pub(super) fn require_complete(key: &ObjectKey, status: ClosureStatus) -> Result<(), Error> {
     if matches!(status, ClosureStatus::Complete { .. }) {
         Ok(())
     } else {
