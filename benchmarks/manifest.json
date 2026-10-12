@@ -1771,6 +1771,20 @@
       ]
     },
     {
+      "id": "wal3-publication-checkpoints",
+      "suite_id": "state-and-publication",
+      "title": "WAL3 publication after checkpoints of 511/512/513 blobs and of 8,192- and 131,072-blob corpora",
+      "kind": "module",
+      "target": "benchmarks.suites.native_probes",
+      "default_arguments": [
+        "--probe",
+        "wal3-publication-checkpoints"
+      ],
+      "profiles": [
+        "custom"
+      ]
+    },
+    {
       "id": "raw-blob-closures",
       "suite_id": "state-and-publication",
       "title": "Raw blob publication without stored closure witnesses",
