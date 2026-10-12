@@ -1,0 +1,60 @@
+{
+  "base": "cachix/casita 1407672, MAX_GIT_SOURCE_MAPPING_WINDOW_BYTES = 128 MiB",
+  "candidate": "this change, MAX_GIT_SOURCE_MAPPING_WINDOW_BYTES = 32 MiB",
+  "cli": {
+    "base": {
+      "crates_casita_tree": "dbb21e518940fa829ce922c6a2b9d457af4d5ff4",
+      "command": "cargo build --release --features cli,git --bin casita",
+      "binary_sha256": "cc436cf3500d61574aac0d4851f073d8de70d4a44913adf1f7497014afd62d3f"
+    },
+    "candidate": {
+      "crates_casita_tree": "ef5bd251823c186e80b7a1a31d9660ce3aa365c0",
+      "command": "cargo build --release --features cli,git --bin casita",
+      "binary_sha256": "1278395fb9eab54eecbd839f0c898e93026cc38c74121da2fdc0f53079483cfd"
+    }
+  },
+  "closure_probe": {
+    "base": {
+      "crates_casita_tree": "dbb21e518940fa829ce922c6a2b9d457af4d5ff4",
+      "command": "cargo test --release -p casita --no-default-features --features native,git,experimental --test git_closure_import --no-run",
+      "features": "native,git,experimental",
+      "default_features": false,
+      "rustc_version": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+      "rustflags": "",
+      "lockfile_sha256": "6d53fd6e7d4836f70c740024695f3d11a106e71f074157b442da08194e2673f3",
+      "executable_sha256": "730f9561dfe03195f744f00e37a035a8f29a281102c126f865b1d675567da898"
+    },
+    "candidate": {
+      "crates_casita_tree": "ef5bd251823c186e80b7a1a31d9660ce3aa365c0",
+      "command": "cargo test --release -p casita --no-default-features --features native,git,experimental --test git_closure_import --no-run",
+      "features": "native,git,experimental",
+      "default_features": false,
+      "rustc_version": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+      "rustflags": "",
+      "lockfile_sha256": "6d53fd6e7d4836f70c740024695f3d11a106e71f074157b442da08194e2673f3",
+      "executable_sha256": "33bd227c385bb51a7706dd5360b95aefb675dcdb788f019add228202e0bfcbb7"
+    }
+  },
+  "profile": "Cargo release profile defaults",
+  "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+  "lockfile": {
+    "sha256": "6d53fd6e7d4836f70c740024695f3d11a106e71f074157b442da08194e2673f3",
+    "note": "Cargo.lock is untracked; the same file built every binary."
+  },
+  "host": {
+    "cpu": "AMD EPYC 9454P 48-Core Processor, 96 hardware threads",
+    "kernel": "Linux 6.18.42",
+    "filesystem": "ZFS",
+    "pinning": "taskset -c 36-41 (one L3 cache domain)",
+    "note": "Shared host; other users' load was present. Runs were serial and no builds from this investigation ran during timing.",
+    "temporary_files": "TMPDIR=/dev/shm (tmpfs): sources, repositories and probe fixtures",
+    "load_average_1m": [
+      2.23,
+      6.52
+    ],
+    "measured_utc": [
+      "2026-10-09T02:32:57+00:00",
+      "2026-10-09T03:27:18+00:00"
+    ]
+  }
+}
