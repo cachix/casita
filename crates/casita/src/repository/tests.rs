@@ -355,6 +355,58 @@ fn storage_full_detection_preserves_typed_nested_errors() {
     )));
 }
 
+#[test]
+fn state_failures_stay_typed_whichever_layer_carried_them() {
+    let replaced = || MetadataError::DatabaseReplaced {
+        path: "casita.sqlite-wal".into(),
+    };
+    for carried in [
+        RepositoryError::from(crate::error::Error::Backend(Box::new(replaced()))),
+        RepositoryError::from(crate::error::Error::Io(std::io::Error::other(replaced()))),
+        RepositoryError::from(std::io::Error::other(replaced())),
+    ] {
+        assert!(
+            matches!(
+                carried,
+                RepositoryError::Metadata(MetadataError::DatabaseReplaced { .. })
+            ),
+            "{carried:?}"
+        );
+        assert_eq!(carried.category(), RepositoryErrorCategory::RestartRequired);
+        assert_eq!(carried.retry_disposition(), crate::RetryDisposition::Never);
+        assert_eq!(carried.to_string(), replaced().to_string());
+    }
+
+    // Anything else keeps its envelope, kind and message.
+    let io = RepositoryError::from(std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        "slow disk",
+    ));
+    assert!(
+        matches!(&io, RepositoryError::Io(error) if error.kind() == std::io::ErrorKind::TimedOut),
+        "{io:?}"
+    );
+    assert_eq!(io.to_string(), "slow disk");
+    let payload = RepositoryError::from(crate::error::Error::Backend("backend".into()));
+    assert!(
+        matches!(
+            payload,
+            RepositoryError::Payload(crate::error::Error::Backend(_))
+        ),
+        "{payload:?}"
+    );
+
+    // A state failure nested deeper than the lifted layers still classifies
+    // by what it is.
+    let nested = object_store::Error::Generic {
+        store: "test",
+        source: Box::new(std::io::Error::other(replaced())),
+    };
+    let deep = RepositoryError::Payload(crate::error::Error::Backend(Box::new(nested)));
+    assert_eq!(deep.category(), RepositoryErrorCategory::RestartRequired);
+    assert_eq!(deep.retry_disposition(), crate::RetryDisposition::Never);
+}
+
 #[tokio::test]
 async fn object_reader_handoff_preserves_requested_roots_without_blocking_unrelated_gc() {
     for local in [false, true] {
