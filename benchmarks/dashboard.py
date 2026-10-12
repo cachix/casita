@@ -865,13 +865,13 @@ def normalize_result(path: pathlib.Path) -> dict[str, Any]:
         if result.get("complete") is not True:
             raise ValueError("incomplete primitive matrix cannot be compared")
         return normalize_lifecycle_result(path, result)
-    if result_schema in {"casita.metadata-collection.v1", "casita.metadata-scan.v1", "casita.metadata-batch.v1"}:
+    if result_schema in {"casita.metadata-collection.v1", "casita.metadata-scan.v1", "casita.metadata-batch.v1", "casita.collection-mark.v1"}:
         if result.get("complete") is not True:
             raise ValueError("incomplete metadata collection matrix cannot be compared")
         normalized = normalize_lifecycle_result(path, result)
         for observation in normalized["observations"]:
             observation["cache_policy"] = "first" if observation["operation"].endswith("-first") else "warm"
-            if result_schema == "casita.metadata-batch.v1":
+            if result_schema in {"casita.metadata-batch.v1", "casita.collection-mark.v1"}:
                 variant = observation["scale"].pop("variant")
                 observation["implementation"] = f"casita-{variant}"
                 observation["workload"] = observation["operation"] + ":" + json.dumps(observation["scale"], sort_keys=True)
