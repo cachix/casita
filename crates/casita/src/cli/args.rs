@@ -642,6 +642,12 @@ pub(super) enum RootCommand {
         /// Retention policy for this root. Existing policy is kept when omitted.
         #[arg(long, value_enum)]
         retention: Option<RootRetentionArg>,
+        /// Replace the root only if it still points to this full object key.
+        #[arg(long, conflicts_with = "if_absent")]
+        if_target: Option<String>,
+        /// Create the root only if its name is not registered.
+        #[arg(long)]
+        if_absent: bool,
     },
     /// Change an existing root's retention policy.
     Retention {
