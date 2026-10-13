@@ -1,0 +1,11 @@
+{
+  "name": "casita-site-build",
+  "private": true,
+  "scripts": {
+    "build": "npm --prefix docs ci && npm --prefix docs run build",
+    "validate": "npm run build && npm --prefix docs run check:links"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

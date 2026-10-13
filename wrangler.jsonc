@@ -1,12 +1,13 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
+  "$schema": "https://unpkg.com/wrangler@4.141.0/config-schema.json",
   "name": "casita",
   "compatibility_date": "2026-08-17",
-  "main": "./worker.js",
+  "main": "./docs/worker.js",
   "assets": {
-    "directory": "./dist",
+    "directory": "./docs/dist",
     "binding": "ASSETS",
     "not_found_handling": "404-page",
     "run_worker_first": true
-  }
+  },
+  "previews": {}
 }
