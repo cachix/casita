@@ -43,6 +43,15 @@ pub struct FilesystemImport {
 /// repository.import(UnrootedFilesystemImport::new("./tree")).await.unwrap();
 /// # }
 /// ```
+/// Wrapping the request in a sequence does not make a temporary session safe:
+///
+/// ```compile_fail
+/// # async fn example() {
+/// use casita::{experimental::Repository, import::{ImportSequence, UnrootedFilesystemImport}};
+/// let repository = Repository::memory().unwrap();
+/// repository.import(ImportSequence::new([UnrootedFilesystemImport::new("./tree")])).await.unwrap();
+/// # }
+/// ```
 ///
 /// ```compile_fail
 /// # async fn example() {
@@ -190,24 +199,6 @@ where
 #[cfg(feature = "experimental")]
 repository_importer!(FilesystemImport, [], ObjectKey, RepositoryError);
 
-#[cfg(feature = "experimental")]
-#[async_trait]
-impl<'session, PS, SS> Importer<crate::MutationSession<'session, PS, SS>> for FilesystemImport
-where
-    PS: BlobStore,
-    SS: MetadataStore,
-{
-    type Report = ObjectKey;
-    type Error = RepositoryError;
-
-    async fn import(
-        self,
-        repository: &crate::MutationSession<'session, PS, SS>,
-    ) -> Result<Self::Report, Self::Error> {
-        self.import_into(repository).await
-    }
-}
-
 /// Import separate filesystem trees through shared bounded pages and checkpoints.
 ///
 /// Root names must be unique. The traversal limit applies to the whole request.
@@ -284,3 +275,5 @@ impl<PS: BlobStore, SS: MetadataStore> Importer<Repository<PS, SS>> for MultiRoo
         self.import(&repository.mutation_session().await?).await
     }
 }
+
+session_importer!(FilesystemImport, [], ObjectKey, RepositoryError);
