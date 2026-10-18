@@ -13,7 +13,10 @@ $ npm install
 $ npm run dev
 ```
 
-Production builds use `npm run build`.
+Production builds use `npm run build` from this directory. From the repository
+root, `npm run build` installs and builds the docs using their existing lockfile.
+Run `npm run validate` from the root to also check
+the generated site's links.
 
 Rust code blocks in the library, guide, concept, and API pages are included in
 Casita's doctests. Check them against the current public API with:
@@ -33,16 +36,19 @@ Workers Builds and these settings:
 | Setting | Value |
 | --- | --- |
 | Production branch | `main` |
-| Root directory | `docs` |
+| Root directory | `/` |
 | Build command | `npm run build` |
 | Deploy command | `npx wrangler deploy` |
+| Preview command | `npx wrangler preview` |
 
 Pushes to `main` then publish the site. After the Worker deploys, add
 `casita.rs` under **Settings > Domains & Routes > Add > Custom Domain**.
 
-`wrangler.jsonc` configures `dist` as static assets and `worker.js` as the
-request handler. The handler serves `/api/github` and responds to Markdown
+The repository's root [`wrangler.jsonc`](../wrangler.jsonc) configures `docs/dist`
+as static assets and `docs/worker.js` as the request handler. The handler serves
+`/api/github` and responds to Markdown
 requests through the site-kit middleware. For a local preview, run
-`npx wrangler dev` from `docs` after building the site.
+`npx wrangler dev` from the repository root after building the site. Wrangler
+also discovers the root configuration when invoked from `docs`.
 
 The Worker does not require a `BASIC_AUTH_PASSWORD` secret.
