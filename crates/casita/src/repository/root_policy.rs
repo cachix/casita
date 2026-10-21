@@ -12,7 +12,8 @@ use crate::metadata::{MetadataChange, MetadataCheck, MetadataKey, MetadataMutati
 use crate::{NamespaceId, RootName};
 
 use super::{
-    BlobGc, BlobStore, MetadataError, MetadataStore, ObjectKey, Repository, RepositoryError,
+    BlobGc, BlobStore, ConditionalPublishResult, MetadataError, MetadataStore, ObjectKey,
+    Repository, RepositoryError, RootChange, RootExpectation, mutation::ClosurePublication,
 };
 
 /// Whether disk-pressure collection may release a named root.
@@ -180,6 +181,47 @@ where
     PS: BlobStore,
     SS: MetadataStore + 'static,
 {
+    /// Set a root only while its target matches `expected`, including absence.
+    ///
+    /// A mismatch publishes nothing and returns the observed value. Unrelated
+    /// revision changes are retried under the normal publication budget. The
+    /// target closure is verified before publication. An optional retention
+    /// policy changes in the same commit and requires a local metadata backend;
+    /// omitting it preserves the existing policy.
+    ///
+    /// This compares the current target, not its history: removing and
+    /// recreating a name with the same target can satisfy the expectation.
+    pub async fn set_root_if_matches(
+        &self,
+        name: RootName,
+        target: ObjectKey,
+        expected: Option<ObjectKey>,
+        retention: Option<RootRetention>,
+    ) -> Result<ConditionalPublishResult, RepositoryError> {
+        if retention.is_some() && !self.state.supports_root_retention() {
+            return Err(MetadataError::UnsupportedMetadata.into());
+        }
+        let metadata = retention
+            .map(|retention| {
+                MetadataMutation::with_metadata(Vec::new(), vec![policy_change(&name, retention)])
+            })
+            .transpose()?;
+        self.mutation_session()
+            .await?
+            .publish_inner_with_metadata(
+                Vec::new(),
+                vec![RootExpectation {
+                    name: name.clone(),
+                    target: expected,
+                }],
+                vec![RootChange::Set { name, target }],
+                None,
+                ClosurePublication::default(),
+                metadata,
+            )
+            .await
+    }
+
     /// Set a root and its retention policy in one local publication.
     pub async fn set_root_with_retention(
         &self,

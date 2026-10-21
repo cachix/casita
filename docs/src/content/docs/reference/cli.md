@@ -277,6 +277,8 @@ Roots retain the complete forward closure of one exact object.
 
 ```text
 casita [--repository PATH] root set NAME TARGET [--retention permanent|evictable]
+casita [--repository PATH] root set NAME TARGET --if-absent [--retention permanent|evictable]
+casita [--repository PATH] root set NAME TARGET --if-target KEY [--retention permanent|evictable]
 ```
 
 Atomically sets or replaces `NAME`. `TARGET` may be a full object key or a
@@ -285,6 +287,25 @@ blob and directory records both exist. The target closure must be complete and
 valid. Roots are permanent by default. `--retention` sets the policy in the
 same commit as the root. Without it, replacing a root keeps its existing policy.
 Evictable retention requires the local metadata backend.
+
+`--if-absent` creates the root only while its name is unregistered.
+`--if-target KEY` replaces it only while its current target equals the supplied
+full object key. These flags are mutually exclusive. The condition is checked
+atomically with publication; a concurrent change to another root is retried,
+while a mismatch exits with status 1 and `error[destination_conflict]`, reports
+the expected and observed values, and publishes neither the root nor its
+retention policy. Success exits with status 0 and prints no output.
+
+For example, promote a build only if the release still has the value you read:
+
+```sh
+casita --repository ./cache root set releases/current "$new_key" --if-target "$old_key"
+```
+
+On a conflict, read the current root and decide whether to rebuild or retry.
+The condition compares the current target, not the root's history: removing
+and recreating a name with the same target satisfies `--if-target`; a removed
+name satisfies `--if-absent` again. Workspace root scoping applies as usual.
 
 ### `root retention`
 
