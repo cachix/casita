@@ -7,6 +7,11 @@
 //! deletion while losing the commit behind it, and the repository would
 //! reopen referencing payloads that no longer exist. Commits keep their plain
 //! sync; a deletion first makes them durable instead.
+//!
+//! A commit is equally lost when the WAL it went to is unlinked, as an
+//! ordinary SQLite client does on close (see `sqlite::DatabaseFiles`). So
+//! before every deletion batch, on every platform, a local database also
+//! holds the locks that keep such clients out and checks its files.
 
 use std::fs::File;
 use std::io;
@@ -15,7 +20,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 /// How to make a metadata store's acknowledged commits durable: flush the
 /// drive cache holding its database (`F_FULLFSYNC`, which `File::sync_all`
-/// issues on Apple platforms) before each deletion batch. A WAL writer can
+/// issues on Apple platforms) before each deletion batch, and check that a
+/// new process would read the files the commits went to. A WAL writer can
 /// finish its commit sync without changing file size or mtime, so file stamps
 /// cannot prove that a previous flush covered an acknowledged commit.
 #[doc(hidden)]
@@ -25,28 +31,29 @@ pub struct CommitDurability(Arc<Database>);
 #[derive(Debug)]
 struct Database {
     directory: PathBuf,
+    /// Whether a commit's sync can stop short of stable storage: Apple
+    /// platforms. Unix test builds flush everywhere so every CI platform
+    /// exercises the ordering.
+    flush: bool,
+    files: Option<Arc<crate::sqlite::DatabaseFiles>>,
     #[cfg(test)]
     flushes: std::sync::atomic::AtomicUsize,
 }
 
 impl CommitDurability {
-    /// For the SQLite-format database at `database` where a commit's sync can
-    /// stop short of stable storage: Apple platforms. Unix test builds use it
-    /// everywhere so every CI platform exercises the ordering.
-    pub(crate) fn for_database(database: &Path) -> Option<Self> {
-        cfg!(any(target_vendor = "apple", all(test, unix))).then(|| Self::new(database))
+    /// For the local Turso database `db` commits through.
+    pub(crate) fn for_turso(db: &crate::sqlite::TursoDb) -> Self {
+        let mut database = Database::in_directory_of(db.path());
+        database.flush = cfg!(any(target_vendor = "apple", all(test, unix)));
+        database.files = Some(db.files().clone());
+        Self(Arc::new(database))
     }
 
-    fn new(database: &Path) -> Self {
-        let directory = match database.parent() {
-            Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
-            _ => PathBuf::from("."),
-        };
-        Self(Arc::new(Database {
-            directory,
-            #[cfg(test)]
-            flushes: Default::default(),
-        }))
+    /// Flush the drive cache holding the database file at `database` before
+    /// every deletion batch, with no further checks.
+    #[cfg(all(test, unix))]
+    pub(crate) fn new(database: &Path) -> Self {
+        Self(Arc::new(Database::in_directory_of(database)))
     }
 
     /// Make every commit already written to the database durable.
@@ -57,14 +64,37 @@ impl CommitDurability {
             .map_err(io::Error::other)?
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn flushes(&self) -> usize {
         self.0.flushes.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
 impl Database {
+    fn in_directory_of(database: &Path) -> Self {
+        let directory = match database.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+            _ => PathBuf::from("."),
+        };
+        Self {
+            directory,
+            flush: true,
+            files: None,
+            #[cfg(test)]
+            flushes: Default::default(),
+        }
+    }
+
     fn ensure(&self) -> io::Result<()> {
+        // A deletion is only as durable as the commit that allowed it: refuse
+        // while that commit may have gone to an unlinked WAL, or while a SQLite
+        // client could roll it back on close.
+        if let Some(files) = &self.files {
+            files.before_change()?;
+        }
+        if !self.flush {
+            return Ok(());
+        }
         // Opening the directory, not the database, leaves the engine's
         // process-scoped file locks alone: closing any descriptor of a locked
         // file would release them.

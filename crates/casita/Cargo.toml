@@ -109,6 +109,14 @@ fs4 = { version = "1.1", default-features = false, optional = true }
 [target.'cfg(unix)'.dependencies]
 libc = { version = "0.2", optional = true }
 rustix = { version = "1.1", features = ["fs"], optional = true }
+# byte-range and open-file-description locks, which rustix does not offer:
+# the SQLite locks a Turso database holds against ordinary SQLite clients.
+nix = { version = "0.31", default-features = false, features = ["fs"], optional = true }
+
+# windows-only: a file's volume serial number and index, which std does not
+# expose on stable, so a Turso database can tell its WAL was replaced.
+[target.'cfg(windows)'.dependencies]
+winapi-util = { version = "0.1", optional = true }
 
 [features]
 default = ["cli"]
@@ -137,6 +145,8 @@ native = [
   "dep:astral-tokio-tar",
   "dep:libc",
   "dep:rustix",
+  "dep:nix",
+  "dep:winapi-util",
   "dep:getrandom",
   "dep:imbl",
   "dep:fs4",
@@ -220,6 +230,11 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util", "
 # default features (plotters/rayon HTML report) are dropped so benches build
 # without pulling the whole plotting stack; async_tokio drives the async paths.
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support", "async_tokio"] }
+
+# a stock SQLite client for `tests/foreign_sqlite_client.rs`, which keeps it
+# from damaging a live repository through SQLite's unix locks.
+[target.'cfg(unix)'.dev-dependencies]
+rusqlite = { version = "0.37", features = ["bundled"] }
 
 # Both benches measure the local payload store, so they only exist in the
 # native profile; without this the portable profile fails to build its targets.
