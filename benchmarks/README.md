@@ -603,6 +603,43 @@ retained. This isolates metadata collection, not graph traversal or payload
 reclamation. The first collection follows seeding and does not imply a cold OS
 cache. The paging investigation's paired results remain in the report above.
 
+### Collection graph marking
+
+The [named-root and snapshot-pin marking comparison](reports/2026-10-06-collection-mark/README.md)
+records the paired results and their limits.
+
+```console
+$ benchmark run collection-mark --profile smoke --repetitions 1 --output benchmarks/results/collection-mark.json
+```
+
+Named-root and pin marking run over reopened Turso metadata in which each
+parent has one edge: to a shared leaf, to its own leaf, or, for a single-root
+chain, to the next directory. Smoke uses 127, 128, 255, 256, 257, 511, 512 and
+513 parents; standard adds 8,192. Both use 256- and 250,000-key (default) spill
+limits, so the small cases straddle the spill limit and the 256-key traversal
+frontier, and 511 to 513 parents bracket two full frontiers. `--shape`,
+`--parents`, `--memory-limits`, `--iterations`, `--repetitions` and
+`--strategy legacy|current` select dimensions; repeat `--mode` to select
+traversal modes.
+
+- `named` marks named roots; `pins` protects every parent through closure pins.
+- `snapshot-full` pins the final generation without closure pins.
+  `snapshot-partial` and `snapshot-sparse` combine closure pins with a snapshot
+  pin covering half the parents or only the first one.
+- `snapshot-forward` publishes unrooted parents before their leaves and pins
+  only the parents' generation, so dependencies of the scanned records are
+  newer than the pin. With distinct leaves every marked-set probe misses.
+
+The previous named-root and pin traversals are compiled into the probe as
+`legacy`. Each process runs one strategy and mode; matching legacy/current
+processes run adjacently, in reversed order on even repetitions. `pins` runs
+the same code under both labels and serves as a control. Every process checks
+the exact marked set, its cardinality, whether it spilled, the number of
+snapshot records scanned and the reopened revision. Timing excludes fixture
+construction, audits and returned mark-set cleanup; record reads, scanned
+records, spill files and bytes, and process RSS are retained. The suite is
+registered in `benchmark all`, revision comparisons and the dashboard.
+
 ### Ordered metadata inventory
 
 The [2026-09-08 ordered-scan investigation](reports/2026-09-08-ordered-scan.md)

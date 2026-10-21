@@ -80,6 +80,8 @@ use retention::{DataProtection, HeldReader, pin_metadata_snapshot_kind};
 pub use retention::{OwnedRetentionHold, RetentionHold};
 pub use root_policy::RootRetention;
 
+#[cfg(test)]
+mod collection_mark_tests;
 mod collection_timing;
 #[cfg(test)]
 mod mutation_catalog_tests;

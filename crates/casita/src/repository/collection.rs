@@ -1346,14 +1346,31 @@ pub(super) async fn mark_named_roots(
         if frontier.is_empty() {
             break;
         }
+        // Mark before fetching so repeated edges are read once; insert already
+        // tests membership. Any missing record fails the whole pass, so these
+        // provisional marks never reach pruning.
+        let mut visited = marked.len();
+        let mut pending = Vec::new();
+        for (from, key) in frontier {
+            if marked.insert(key.clone()).await? {
+                pending.push((from, key));
+                // Stop at the first key past the limit. The loop below reports it
+                // only after any earlier missing record, as before.
+                if marked.len() > max_objects {
+                    break;
+                }
+            }
+        }
+        let frontier = pending;
+        if frontier.is_empty() {
+            continue;
+        }
         let keys: Vec<_> = frontier.iter().map(|(_, key)| key.clone()).collect();
         let found = snapshot.object_batch(&keys).await?;
 
         for ((from, key), record) in frontier.into_iter().zip(found) {
-            if !marked.insert(key.clone()).await? {
-                continue;
-            }
-            if marked.len() > max_objects {
+            visited += 1;
+            if visited > max_objects {
                 return Err(RepositoryError::LimitExceeded(format!(
                     "collection mark exceeded {max_objects} objects"
                 )));
@@ -1412,6 +1429,11 @@ pub(super) async fn mark_pin_scopes(
         }
     }
 
+    // FIFO order keeps these scan dependencies ahead of pin roots/resources
+    // and any descendants discovered later. Filter only this initial prefix:
+    // probing every later key penalizes mostly-new closures with sparse pins.
+    let mut snapshot_dependencies = queue.len();
+    let mut previous_prefix_all_missing = false;
     for pin in pins.pins.values() {
         if let PinScope::Closures(roots) = &pin.scope {
             for root in roots {
@@ -1434,6 +1456,26 @@ pub(super) async fn mark_pin_scopes(
         }
         if keys.is_empty() {
             return Ok(());
+        }
+        let scan_prefix = snapshot_dependencies.min(keys.len());
+        snapshot_dependencies -= scan_prefix;
+        if scan_prefix > 0 {
+            // Snapshot marking has already expanded every scanned record.
+            // Only dependencies outside that marked set need metadata reads.
+            // Leave absent unpublished inputs unmarked until a record exists.
+            let present = marked.contains_batch(&keys[..scan_prefix]).await?;
+            let all_missing = !present.iter().any(|present| *present);
+            if all_missing && previous_prefix_all_missing {
+                // Stop paying for probes that avoid no reads. Give shared new
+                // targets a second frontier: the first fetch marks them.
+                snapshot_dependencies = 0;
+            }
+            previous_prefix_all_missing = all_missing;
+            let mut present = present.into_iter();
+            keys.retain(|_| !present.next().unwrap_or(false));
+            if keys.is_empty() {
+                continue;
+            }
         }
         let records = snapshot.object_batch(&keys).await?;
         for (key, record) in keys.into_iter().zip(records) {
