@@ -584,10 +584,14 @@ fn claim(database: &std::fs::File, previous: Option<u64>) -> io::Result<Option<u
 /// locks, which belong to this descriptor, so neither closing another
 /// descriptor of the file nor another handle in this process releases them.
 #[cfg(unix)]
-fn set_lock(file: &std::fs::File, kind: libc::c_int, range: (u64, u64)) -> io::Result<bool> {
+fn set_lock(
+    file: &std::fs::File,
+    kind: impl Into<libc::c_int>,
+    range: (u64, u64),
+) -> io::Result<bool> {
     use nix::fcntl::FcntlArg;
 
-    let lock = byte_range(kind, range)?;
+    let lock = byte_range(kind.into(), range)?;
     #[cfg(target_os = "linux")]
     let request = FcntlArg::F_OFD_SETLK(&lock);
     #[cfg(not(target_os = "linux"))]
