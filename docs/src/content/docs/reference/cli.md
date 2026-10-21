@@ -9,7 +9,7 @@ For a first walkthrough, start with the [CLI guide](../../cli/).
 
 | Task | Commands |
 | --- | --- |
-| Store and read | [`import`](#import), [`object show`](#object-show), [`tree list`](#tree-list), [`cat`](#cat), [`checkout`](#checkout) |
+| Store and read | [`import`](#import), [`object show`](#object-show), [`tree list`](#tree-list), [`tree diff`](#tree-diff), [`cat`](#cat), [`checkout`](#checkout) |
 | Retain and maintain | [`root`](#named-roots), [`gc`](#gc), [`vacuum`](#vacuum), [`fsck`](#fsck), [`holds`](#holds) |
 | Move data | [`sync`](#synchronization), [`archive`](#portable-casitar-archives) |
 | Integrate | [`run`](#run), [`ipc`](#ipc), [`git`](#native-git) |
@@ -161,6 +161,40 @@ command requires a complete valid closure.
 
 Entry output identifies directories (`d`), regular files (`f`), executable
 files (`x`), and symlinks (`l`).
+
+### `tree diff`
+
+```text
+casita [--repository PATH] tree diff OLD NEW [--json]
+```
+
+Recursively compares two complete canonical filesystem trees without checking
+them out. Both arguments accept a full `casita.directory.v1` key or a short
+`blake3-...` directory digest. The comparison retains one repository snapshot
+until it finishes and validates both closures before emitting changes.
+
+Each text line contains a status, a tab, and a quoted, byte-escaped relative
+path. Statuses are `A` (added), `D` (deleted), `M` (file contents, executable
+bit, or symlink target modified), and `T` (entry kind changed). Entries appear
+in depth-first raw-name order. Added and removed directories include their
+descendants, including empty directories; changed directories present on both
+sides report their changed descendants. Identical subtrees produce no rows.
+Symlinks are compared by their stored targets and never followed. Renames
+appear as a deletion and an addition.
+
+`--json` emits NDJSON: one object per change with `schema` set to
+`casita.tree-diff.v1`, `status`, `path`, `path_bytes`, `before`, and `after`.
+`path_bytes` is the exact relative path as an array of byte values; `path` is
+its UTF-8 string, or `null` when the bytes are not valid UTF-8. An absent side
+is `null`. Present sides include `kind` and, for files and directories, `key`
+and `size`; files also include `executable`. Directory `size` counts recursive
+descendants, while file `size` counts bytes. Symlinks include `target` and
+`target_bytes` with the same UTF-8 and byte-array rules as paths.
+
+A successful comparison exits zero, including when differences exist. Equal
+trees emit no output. Errors exit nonzero; because output is streamed, discard
+any preceding rows on failure. Recursive expansion is bounded by the
+repository's traversal entry limit, including repeated paths to shared objects.
 
 ### `run`
 

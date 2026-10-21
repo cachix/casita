@@ -22,6 +22,7 @@ mod roots;
 mod run;
 mod stats;
 mod transfer;
+mod tree_diff;
 mod workspace;
 
 use archive::{archive_create, archive_import, archive_inspect, archive_verify, import_casitar};
@@ -427,6 +428,11 @@ async fn run_inner(cli: Cli) -> Result<(), Error> {
         Command::Git { command } => on_heap(|| run_native_git(&repository, command)).await?,
         Command::Tree { command } => match command {
             TreeCommand::List { key } => on_heap(|| tree_list(&repository, &key)).await?,
+            TreeCommand::Diff { old, new, json } => {
+                let mut stdout = tokio::io::BufWriter::new(tokio::io::stdout());
+                on_heap(|| tree_diff::write_diff(&repository, &old, &new, json, &mut stdout))
+                    .await?;
+            }
         },
         Command::Checkout { key, dir, no_root } => {
             let key = parse_directory_key(&key)?;
