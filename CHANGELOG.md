@@ -121,6 +121,9 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Changed
 
+- Verified reads of a blob without a manifest, such as one stored as a single
+  chunk, take one manifest request instead of two: when the manifest read finds
+  nothing, the reader no longer checks for it again before using the bare chunk.
 - Bounded metadata reads during verification size their scratch buffer from
   the payload's length hint instead of always allocating 64 KiB.
 - Chunk hashing batches up to four chunks and 1 MiB per blocking job;

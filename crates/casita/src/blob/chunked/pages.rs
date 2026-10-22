@@ -585,20 +585,42 @@ pub(super) async fn loose_descriptor(
     path: &Path,
     kind: u8,
 ) -> io::Result<Option<Root>> {
+    Ok(match probe_loose_descriptor(store, path, kind).await? {
+        LooseDescriptor::Paged(root) => Some(root),
+        LooseDescriptor::Missing | LooseDescriptor::Flat => None,
+    })
+}
+
+/// One bounded observation of loose metadata. A nonpaged prefix still needs
+/// flat-manifest validation; only an actual NotFound permits the bare fallback.
+pub(super) enum LooseDescriptor {
+    Missing,
+    Flat,
+    Paged(Root),
+}
+
+pub(super) async fn probe_loose_descriptor(
+    store: &ChunkedBlobStore,
+    path: &Path,
+    kind: u8,
+) -> io::Result<LooseDescriptor> {
     let bytes = match store
         .object_store
         .get_range(path, 0..(DESCRIPTOR_BYTES + 1) as u64)
         .await
     {
         Ok(bytes) => bytes,
-        Err(object_store::Error::NotFound { .. }) => return Ok(None),
+        Err(object_store::Error::NotFound { .. }) => return Ok(LooseDescriptor::Missing),
         Err(e) => return Err(io::Error::other(e)),
     };
     let root = Root::decode(&bytes)?;
     if root.is_some_and(|root| root.kind != kind) {
         return Err(invalid());
     }
-    Ok(root)
+    Ok(match root {
+        Some(root) => LooseDescriptor::Paged(root),
+        None => LooseDescriptor::Flat,
+    })
 }
 
 /// Random-access plaintext through the indexed chunk tree, retaining one chunk.

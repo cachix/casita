@@ -255,20 +255,31 @@ impl ChunkedBlobStore {
         size: u64,
     ) -> Result<Option<Box<dyn BlobStreamReader>>, Error> {
         let path = self.blob_path(digest);
-        let paged = match super::pages::descriptor(self, &path, super::pages::CHUNKS).await? {
-            Some(root) => {
-                if root.span != size {
-                    return Err(io::Error::other("manifest size mismatch").into());
+        use super::pages::LooseDescriptor;
+        // Absence is observed once per open and never cached: an open
+        // overlapping first publication may miss the manifest, and a fresh
+        // open probes again.
+        let (paged, metadata) =
+            match super::pages::probe_loose_descriptor(self, &path, super::pages::CHUNKS).await? {
+                LooseDescriptor::Paged(root) => {
+                    if root.span != size {
+                        return Err(io::Error::other("manifest size mismatch").into());
+                    }
+                    (Some(super::pages::Data::new(self, root).await?), None)
                 }
-                Some(super::pages::Data::new(self, root).await?)
-            }
-            None => None,
-        };
+                LooseDescriptor::Missing => (None, None),
+                // Flat metadata needs its length, and may be removed meanwhile.
+                LooseDescriptor::Flat => match self.object_store.head(&path).await {
+                    Ok(meta) => (None, Some(meta)),
+                    Err(object_store::Error::NotFound { .. }) => (None, None),
+                    Err(error) => return Err(io::Error::other(error).into()),
+                },
+            };
         let (count, bare) = if paged.is_some() {
             (0, None)
         } else {
-            match self.object_store.head(&path).await {
-                Ok(meta) => {
+            match metadata {
+                Some(meta) => {
                     if meta.size < 8 || (meta.size - 8) % 40 != 0 {
                         return Err(io::Error::other("invalid manifest length").into());
                     }
@@ -284,7 +295,7 @@ impl ChunkedBlobStore {
                     }
                     (count, None)
                 }
-                Err(object_store::Error::NotFound { .. }) => {
+                None => {
                     if !self.chunk_present(super::single_chunk_id(*digest)).await? {
                         return Ok(None);
                     }
@@ -296,7 +307,6 @@ impl ChunkedBlobStore {
                         }),
                     )
                 }
-                Err(error) => return Err(io::Error::other(error).into()),
             }
         };
         let tree = BaoTree::new(size, crate::verified::BLOCK_SIZE);
