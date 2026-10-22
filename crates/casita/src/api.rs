@@ -512,6 +512,29 @@ pub struct Repository {
     pub(crate) inner: BuiltinRepository,
 }
 
+/// A bounded group of imports sharing one staging pin lifetime.
+///
+/// Blob and filesystem requests publish independently. Dropping the session
+/// releases its staging protection; successfully published roots remain live.
+/// Keep sessions bounded because their staged resources remain pinned until drop.
+pub struct ImportSession<'repository> {
+    pub(crate) inner: crate::repository::MutationSession<
+        'repository,
+        Arc<dyn crate::blob::BlobGc>,
+        Arc<dyn MetadataStore>,
+    >,
+}
+
+impl ImportSession<'_> {
+    /// Import one request using this session's existing staging protection.
+    pub async fn import<I: crate::import::Importer<Self>>(
+        &self,
+        input: I,
+    ) -> Result<I::Report, I::Error> {
+        self.inner.write_scope().run(input.import(self)).await
+    }
+}
+
 impl Repository {
     /// Create a new raw blob by replacing bytes at `offset` without changing
     /// its length, then atomically create or replace `name`. The original blob
@@ -596,6 +619,10 @@ impl Repository {
     }
 
     /// Import an external input through its format-specific request.
+    /// Single blobs use [`crate::import::BlobImport::new`], atomic blob groups
+    /// use [`crate::import::BlobImport::batch`], and independently published
+    /// sequences use [`crate::import::ImportSequence`]. These requests work
+    /// through the same entry point on a repository or an existing import session.
     ///
     /// Format-specific repository entry points are intentionally private:
     ///
@@ -620,6 +647,14 @@ impl Repository {
         input: I,
     ) -> Result<I::Report, I::Error> {
         input.import(self).await
+    }
+
+    /// Acquire staging protection once for a bounded group of blob or
+    /// filesystem imports. Each request still publishes its own root atomically.
+    pub async fn import_session(&self) -> Result<ImportSession<'_>, Error> {
+        Ok(ImportSession {
+            inner: self.inner.mutation_session().await.app()?,
+        })
     }
 
     /// Restore a filesystem graph into an empty or absent destination directory.
@@ -968,6 +1003,96 @@ impl Repository {
 mod tests {
     use super::*;
     use crate::{BlobId, Digest, Directory, Node, PathComponent};
+
+    #[tokio::test]
+    async fn batch_imports_publish_in_order_and_stop_on_error() {
+        let repository = Repository::memory().unwrap();
+        let name: RootName = "batch/blob".parse().unwrap();
+        let reports = repository
+            .import(crate::import::ImportSequence::new(
+                [b"first".as_slice(), b"second".as_slice()].map(|bytes| {
+                    crate::import::BlobImport::new(std::io::Cursor::new(bytes), name.clone())
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(reports.len(), 2);
+        assert_ne!(reports[0], reports[1]);
+        assert_eq!(
+            repository
+                .metadata_reader()
+                .await
+                .unwrap()
+                .root(&name)
+                .await
+                .unwrap(),
+            Some(reports[1].clone())
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        let present = directory.path().join("present");
+        std::fs::create_dir(&present).unwrap();
+        std::fs::write(present.join("file"), b"payload").unwrap();
+        let first: RootName = "batch/first".parse().unwrap();
+        let last: RootName = "batch/last".parse().unwrap();
+        let result = repository
+            .import(crate::import::ImportSequence::new([
+                crate::import::FilesystemImport::new(&present, first.clone()),
+                crate::import::FilesystemImport::new(
+                    directory.path().join("missing"),
+                    "batch/missing".parse().unwrap(),
+                ),
+                crate::import::FilesystemImport::new(&present, last.clone()),
+            ]))
+            .await;
+        assert!(result.is_err());
+        let reader = repository.retained_reader().await.unwrap();
+        assert!(reader.root(&first).await.unwrap().is_some());
+        assert!(reader.root(&last).await.unwrap().is_none());
+        let report = repository.fsck().await.unwrap();
+        assert!(report.is_healthy(), "{:?}", report.issues);
+        // Replacing the blob root deliberately leaves its old value collectible.
+        drop(reader);
+        repository.collect().await.unwrap();
+        assert!(repository.fsck().await.unwrap().is_clean());
+    }
+
+    #[tokio::test]
+    async fn import_session_accepts_mixed_requests_and_roots_survive_release() {
+        let storage = tempfile::tempdir().unwrap();
+        let repository = Repository::local(storage.path()).await.unwrap();
+        let session = repository.import_session().await.unwrap();
+        let blob = session
+            .import(crate::import::BlobImport::new(
+                std::io::Cursor::new(b"blob"),
+                "batch/blob".parse().unwrap(),
+            ))
+            .await
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("file"), b"file").unwrap();
+        let tree = session
+            .import(crate::import::FilesystemImport::new(
+                directory.path(),
+                "batch/tree".parse().unwrap(),
+            ))
+            .await
+            .unwrap();
+        drop(session);
+        repository.flush().await.unwrap();
+        repository.collect().await.unwrap();
+        assert!(repository.open(&blob).await.unwrap().is_some());
+        assert!(repository.open(&tree).await.unwrap().is_some());
+        assert!(repository.fsck().await.unwrap().is_clean());
+        let empty: Vec<crate::import::FilesystemImport> = Vec::new();
+        assert!(
+            repository
+                .import(crate::import::ImportSequence::new(empty))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     struct NoGenerations;
 

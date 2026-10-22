@@ -69,19 +69,17 @@ async fn flush_with_live_snapshot(repository: &Repository, local: bool) {
 }
 
 async fn publish_streaming_batch(repository: &Repository) -> Vec<ObjectKey> {
-    let mut keys = Vec::new();
-    for index in 0..48u8 {
-        keys.push(
-            repository
-                .import(casita::import::BlobImport::new(
-                    &vec![index; 4096][..],
+    repository
+        .import(casita::import::ImportSequence::new((0..48u8).map(
+            |index| {
+                casita::import::BlobImport::new(
+                    std::io::Cursor::new(vec![index; 4096]),
                     name(&format!("stream/{index}")),
-                ))
-                .await
-                .unwrap(),
-        );
-    }
-    keys
+                )
+            },
+        )))
+        .await
+        .unwrap()
 }
 
 fn wal_bytes(root: &std::path::Path) -> u64 {
