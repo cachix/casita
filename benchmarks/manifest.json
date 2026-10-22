@@ -1637,6 +1637,17 @@
       ]
     },
     {
+      "id": "physical-fsck",
+      "suite_id": "collection-and-fsck",
+      "title": "Full-byte physical fsck under bounded storage latency",
+      "kind": "module",
+      "target": "benchmarks.suites.physical_fsck",
+      "profiles": [
+        "smoke",
+        "standard"
+      ]
+    },
+    {
       "id": "fsck",
       "suite_id": "collection-and-fsck",
       "title": "Full repository fsck under sustained spill and at the metadata-cache cutoff",
