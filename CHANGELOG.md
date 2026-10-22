@@ -121,6 +121,8 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Changed
 
+- Native Git imports reopen their source after decoding 32 MiB instead of
+  128 MiB, releasing pack mappings and caches sooner.
 - Bounded metadata reads during verification size their scratch buffer from
   the payload's length hint instead of always allocating 64 KiB.
 - Chunk hashing batches up to four chunks and 1 MiB per blocking job;
