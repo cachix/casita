@@ -40,6 +40,24 @@ full; the smoke profile uses exactly that. The suite runs in
 supply an existing `casita-lib-test` executable, which must be built with the
 `s3` feature so the WAL3 cases run.
 
+## WAL3 publication after checkpoints
+
+`benchmark run wal3-publication-checkpoints --output /tmp/wal3-publication.json`
+publishes raw blobs to a local-storage WAL3 repository, commits empty edits
+until the next object-shard checkpoint, and times one more publication with a
+warm and a reopened handle. Staging is untimed. The batch cases checkpoint one
+batch of 511, 512 or 513 blobs, both sides of the 512-record shard block, and
+publish a second batch of the same size. The corpus cases checkpoint each
+`--checkpoint-corpora` count, by default 8,192 blobs (one shard of 16 blocks)
+and 131,072 (12 shards of 265 blocks), and publish 512 more, which spread over
+most of its blocks; the smoke profile keeps 8,192. Each case reports the
+checkpoint's shards and blocks and the timed publication's shard, fragment and
+manifest work, and gates the records it looks up, that no blob gained a
+closure witness, and an fsck reporting only the unrooted blobs. The local
+transport isolates checkpoint CPU and I/O costs, not network latency. The suite runs in `benchmark all --suites wal3-publication-checkpoints`;
+`--bin-dir` or `--probe-binary` may supply a `casita-lib-test` executable built
+with the `s3` feature.
+
 ## Concurrent publication
 
 `benchmark run concurrent-publication --depth 64 --files 16 --output /tmp/concurrent-publication.json`
