@@ -284,6 +284,74 @@ where
             // memory independent of repository size and makes repeated reads
             // of a pack adjacent.
             batch.sort_unstable_by_key(|(pack, payload, _)| (pack.is_none(), *pack, *payload));
+            if dry_run && replica.is_none() {
+                // Read-only checks are independent, but waiting for every
+                // payload and Bao proof in sequence amplifies storage latency.
+                // Keep complete checks in a bounded window, consuming reports
+                // in the original pack order. Repairs retain the serial path.
+                let mut checks = Vec::with_capacity(batch.len());
+                for (_, payload, payload_size) in batch {
+                    let outboard_present = physical_outboards.contains(&payload).await?;
+                    checks.push((payload, payload_size, outboard_present));
+                }
+                let revision = report.revision.clone();
+                let checks = futures::stream::iter(checks)
+                    .map(|(payload, payload_size, outboard_present)| {
+                        let mut checked = FsckRepairReport {
+                            revision: revision.clone(),
+                            payloads_checked: 1,
+                            bytes_checked: 0,
+                            outboards_checked: 0,
+                            actions: Vec::new(),
+                            findings: Vec::new(),
+                            spill: SpillMetrics::default(),
+                        };
+                        async move {
+                            self.fsck_repair_payload(
+                                None,
+                                true,
+                                payload,
+                                payload_size,
+                                outboard_present,
+                                &mut checked,
+                            )
+                            .await?;
+                            Ok::<_, RepositoryError>(checked)
+                        }
+                    })
+                    .buffered(FSCK_READ_ONLY_CONCURRENCY);
+                futures::pin_mut!(checks);
+                while let Some(checked) = checks.next().await {
+                    let mut checked = checked?;
+                    report.payloads_checked = report
+                        .payloads_checked
+                        .checked_add(checked.payloads_checked)
+                        .ok_or_else(|| {
+                            RepositoryError::LimitExceeded(
+                                "fsck repair payload count overflowed".to_owned(),
+                            )
+                        })?;
+                    report.bytes_checked = report
+                        .bytes_checked
+                        .checked_add(checked.bytes_checked)
+                        .ok_or_else(|| {
+                            RepositoryError::LimitExceeded(
+                                "fsck repair byte count overflowed".to_owned(),
+                            )
+                        })?;
+                    report.outboards_checked = report
+                        .outboards_checked
+                        .checked_add(checked.outboards_checked)
+                        .ok_or_else(|| {
+                            RepositoryError::LimitExceeded(
+                                "fsck repair outboard count overflowed".to_owned(),
+                            )
+                        })?;
+                    report.actions.append(&mut checked.actions);
+                    report.findings.append(&mut checked.findings);
+                }
+                continue;
+            }
             for (_, payload, payload_size) in batch {
                 report.payloads_checked =
                     report.payloads_checked.checked_add(1).ok_or_else(|| {
@@ -1057,6 +1125,8 @@ where
 /// The tuple stored for each record is small, and this bound remains constant
 /// even when the repository is much larger than memory.
 const FSCK_SCAN_WINDOW: usize = 65_536;
+// Complete read-only payload checks, not repository-sized reader buffering.
+const FSCK_READ_ONLY_CONCURRENCY: usize = 8;
 
 /// Bound temporary key buffers used to check each physical scan window.
 const FSCK_MEMBERSHIP_BATCH: usize = 1024;
