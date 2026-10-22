@@ -475,6 +475,7 @@ impl FilePinStore {
         let revision = before.revision;
         let memory = MemoryPinStore {
             state: Arc::new(tokio::sync::Mutex::new(before)),
+            entropy: system_entropy(),
         };
         let (result, mut after) = futures::executor::block_on(async {
             let result = operation.apply(&memory).await?;
