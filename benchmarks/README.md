@@ -256,6 +256,15 @@ for results and limits.
 It gates active catalog bytes and complete release, covering both sides of the
 former cumulative 64 MiB history limit. It is included in `benchmark all`.
 
+`benchmark run mutation-pin-admission --profile smoke --output results.json`
+measures admission with empty and populated catalog witnesses through the real
+file pin ledger. It checks that the current catalog is protected, that released
+inventory is empty, and that warmed admission uses one ledger operation per
+session on Linux and macOS. Smoke covers 0 and 56 byte witnesses, where one
+journal sync per session is required. Standard also covers 512 KiB and 1 MiB
+witnesses around the journal checkpoint window and records their sync counts.
+It is included in `benchmark all`.
+
 `benchmark run output-import --profile smoke --output results.json` measures the
 same raw output staging path used by Obrador. It compares a mutation session and
 metadata publication for every output with one session and one atomic publication

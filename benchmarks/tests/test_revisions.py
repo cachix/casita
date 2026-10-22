@@ -60,7 +60,7 @@ class RevisionArgumentTests(unittest.TestCase):
             set(revisions.SUPPORTED_SUITES),
             {
                 "metadata-collection", "output-import", "filesystem-outputs", "filesystem-reuse",
-                "mutation-catalog", "catalog-wal", "cleanup-batches", "catalog-marking", "held-catalog-gc",
+                "mutation-catalog", "mutation-pin-admission", "catalog-wal", "cleanup-batches", "catalog-marking", "held-catalog-gc",
                 "memory-snapshots",
                 "memory-publication",
                 "memory-index-lifecycle",
