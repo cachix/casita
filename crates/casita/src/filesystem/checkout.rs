@@ -175,7 +175,7 @@ async fn prepare_directories<DS: DirectorySource>(
 /// `AlreadyExists` result while creating a stored entry means that the target
 /// filesystem equates two distinct Casita names (for example by case folding
 /// or Unicode normalization), rather than that checkout may overwrite data.
-fn checkout_path_error(path: &Path, error: Error) -> Error {
+pub(crate) fn checkout_path_error(path: &Path, error: Error) -> Error {
     match error {
         Error::Io(error) if error.kind() == io::ErrorKind::AlreadyExists => {
             Error::TargetNameConflict {
@@ -193,7 +193,7 @@ fn checkout_path_error(path: &Path, error: Error) -> Error {
 /// both guarantees the same target filesystem semantics and gives the normal
 /// rename operation a single complete tree to publish. The target itself may
 /// already exist, but must remain an empty real directory.
-struct CheckoutStage {
+pub(crate) struct CheckoutStage {
     temporary: Option<PathBuf>,
     destination: PathBuf,
 }
@@ -202,7 +202,7 @@ static NEXT_CHECKOUT_STAGE: AtomicU64 = AtomicU64::new(0);
 
 impl CheckoutStage {
     #[tracing::instrument(name = "filesystem.checkout.stage", level = "debug", skip_all)]
-    async fn create(destination: &Path) -> Result<Self, Error> {
+    pub(crate) async fn create(destination: &Path) -> Result<Self, Error> {
         // Preserve the public "empty target" contract while avoiding creation
         // of an absent target before the staged checkout has succeeded.
         match tokio::fs::symlink_metadata(destination).await {
@@ -256,7 +256,7 @@ impl CheckoutStage {
         .into())
     }
 
-    fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         self.temporary
             .as_deref()
             .expect("staging path exists until publication")
@@ -265,7 +265,7 @@ impl CheckoutStage {
     /// The blocking task owns cleanup as well as the rename. Dropping its
     /// join handle cannot remove the stage while publication is still running.
     #[tracing::instrument(name = "filesystem.checkout.publish", level = "debug", skip_all)]
-    fn publish(mut self) -> tokio::task::JoinHandle<Result<(), Error>> {
+    pub(crate) fn publish(mut self) -> tokio::task::JoinHandle<Result<(), Error>> {
         tokio::task::spawn_blocking(move || {
             let result = std::fs::rename(self.path(), &self.destination).map_err(Error::from);
             #[cfg(windows)]
@@ -359,17 +359,7 @@ fn check_windows_directory_names(
 ) -> Result<(), Error> {
     let mut seen = std::collections::HashMap::<String, &str>::new();
     for (name, _) in directory.nodes() {
-        let name = std::str::from_utf8(name.as_bytes()).map_err(|_| -> Error {
-            format!("stored name {name} is not valid UTF-8, which Windows cannot materialize")
-                .into()
-        })?;
-        names::check_windows_name(name).map_err(|reason| -> Error {
-            format!(
-                "cannot materialize `{name}` under {}: {reason}",
-                directory_path.display()
-            )
-            .into()
-        })?;
+        let name = names::check_windows_stored_name(name.as_bytes(), directory_path)?;
         if let Some(prior) = seen.insert(name.to_lowercase(), name) {
             return Err(format!(
                 "cannot materialize {}: `{prior}` and `{name}` differ only by case",
