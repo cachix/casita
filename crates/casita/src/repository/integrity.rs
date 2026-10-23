@@ -362,14 +362,16 @@ where
                         )
                     })?;
                 let outboard_present = physical_outboards.contains(&payload).await?;
-                self.fsck_repair_payload(
+                // Keep the serial repair state out of the scan future too:
+                // outboard and replica checks carry their own async buffers.
+                Box::pin(self.fsck_repair_payload(
                     replica,
                     dry_run,
                     payload,
                     payload_size,
                     outboard_present,
                     &mut report,
-                )
+                ))
                 .await?;
             }
         }
@@ -609,7 +611,9 @@ async fn verify_stored_blob(
     };
     let mut hasher = blake3::Hasher::new();
     let mut bytes = 0u64;
-    let mut buffer = [0u8; 64 * 1024];
+    // This buffer lives across reads. Keep it out of the scan future's inline
+    // state so constructing and polling a debug scan fits ordinary stacks.
+    let mut buffer = vec![0u8; 64 * 1024].into_boxed_slice();
     loop {
         match AsyncReadExt::read(&mut reader, &mut buffer).await {
             Ok(0) => break,

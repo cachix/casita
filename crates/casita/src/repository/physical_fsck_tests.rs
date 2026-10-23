@@ -12,6 +12,22 @@ use std::{
     },
     time::Duration,
 };
+
+#[test]
+fn physical_fsck_scan_future_keeps_verification_buffer_off_stack() {
+    fn future_bytes<F: std::future::Future>(_: impl FnOnce() -> F) -> usize {
+        std::mem::size_of::<F>()
+    }
+
+    let (store, _dir) = crate::test_util::native::small_chunked_store();
+    let repository = Repository::new(store, MemoryMetadataStore::new().unwrap());
+    let bytes = future_bytes(|| repository.fsck_repair_inner(None, true));
+    assert!(
+        bytes < 16 * 1024,
+        "physical scan future embeds a full verification buffer: {bytes} bytes"
+    );
+}
+
 #[derive(Debug)]
 struct Delayed {
     inner: Arc<dyn ObjectStore>,
