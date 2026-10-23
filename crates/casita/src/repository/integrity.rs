@@ -199,7 +199,9 @@ where
         &self,
         replica: Option<&Self>,
     ) -> Result<FsckRepairReport, RepositoryError> {
-        self.fsck_repair_inner(replica, false).await
+        // Keep the scan's buffers and async state out of callers' futures.
+        // Nested inline copies can overflow ordinary Windows debug stacks.
+        Box::pin(self.fsck_repair_inner(replica, false)).await
     }
 
     /// Report the safe repairs [`fsck_repair`](Self::fsck_repair) would perform without
@@ -208,7 +210,7 @@ where
         &self,
         replica: Option<&Self>,
     ) -> Result<FsckRepairReport, RepositoryError> {
-        self.fsck_repair_inner(replica, true).await
+        Box::pin(self.fsck_repair_inner(replica, true)).await
     }
 
     #[tracing::instrument(
@@ -294,11 +296,11 @@ where
                     let outboard_present = physical_outboards.contains(&payload).await?;
                     checks.push((payload, payload_size, outboard_present));
                 }
-                let revision = report.revision.clone();
+                let revision = report.revision;
                 let checks = futures::stream::iter(checks)
                     .map(|(payload, payload_size, outboard_present)| {
                         let mut checked = FsckRepairReport {
-                            revision: revision.clone(),
+                            revision,
                             payloads_checked: 1,
                             bytes_checked: 0,
                             outboards_checked: 0,
