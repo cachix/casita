@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use aws_smithy_http_client::tls::{self, TlsContext, TrustStore};
 use object_store::ObjectStore;
-use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
+use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, KeyPair};
 
 struct Endpoint {
     url: String,
@@ -20,12 +20,20 @@ impl Endpoint {
         let ca_key = KeyPair::generate().unwrap();
         let mut ca_params = CertificateParams::new(Vec::new()).unwrap();
         ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        ca_params
+            .distinguished_name
+            .push(DnType::CommonName, "Casita test CA");
         let ca = ca_params.self_signed(&ca_key).unwrap();
         let key = KeyPair::generate().unwrap();
         let leaf = CertificateParams::new(vec![hostname.into()])
             .unwrap()
             .signed_by(&key, &ca, &ca_key)
             .unwrap();
+        assert_ne!(
+            ca.params().distinguished_name,
+            leaf.params().distinguished_name,
+            "the server leaf must not appear self-issued to platform verifiers"
+        );
         let config = rustls::ServerConfig::builder_with_provider(
             rustls::crypto::aws_lc_rs::default_provider().into(),
         )
