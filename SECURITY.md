@@ -40,6 +40,11 @@ publishes an incomplete closure, escapes a selected filesystem root, discloses
 repository data across a view or transfer boundary, corrupts committed state,
 or exceeds a documented hostile-input resource limit.
 
+The [reliability contract](docs/src/content/docs/reference/reliability.md)
+lists the durability and crash-safety guarantees, where each applies, and their
+known limits. A report that shows a clause violated outside its listed limits
+is a bug; report it privately when it also crosses a boundary above.
+
 Deployment authentication and secret management remain outside the generic
 repository:
 
