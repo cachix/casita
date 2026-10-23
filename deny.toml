@@ -7,14 +7,7 @@ all-features = true
 [advisories]
 yanked = "deny"
 unmaintained = "workspace"
-# Chroma enables the AWS SDK's legacy Hyper/Rustls connector even though the
-# SDK now uses its Hyper 1 connector by default. The legacy connector is not
-# selected by Casita, but Cargo still includes it in the feature-unified graph.
 ignore = [
-  "RUSTSEC-2026-0098", # legacy rustls-webpki certificate name constraints
-  "RUSTSEC-2026-0099", # legacy rustls-webpki wildcard name constraints
-  "RUSTSEC-2026-0104", # legacy rustls-webpki CRL parser (Casita does not use CRLs)
-  "RUSTSEC-2026-0258", # legacy Hyper 0.14 h2 client
   # Chroma pins object_store 0.12.5. Its quick-xml path is not used by Casita's
   # S3 integration; remove these when the pinned Chroma revision reaches
   # object_store 0.14 / quick-xml 0.41.
