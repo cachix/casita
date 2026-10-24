@@ -50,6 +50,7 @@ pub(super) struct CachedReaders {
     // Keep the inode alive so replacement cannot recycle its identity.
     _file: std::fs::File,
     identity: ReaderFileIdentity,
+    content_hash: blake3::Hash,
     state: ReaderState,
 }
 
@@ -152,6 +153,7 @@ impl FilePinStore {
                     state.valid_reader_records().then(|| CachedReaders {
                         _file: published,
                         identity,
+                        content_hash: blake3::hash(&bytes),
                         state: state.clone(),
                     })
                 });
@@ -174,15 +176,6 @@ impl FilePinStore {
         let file = std::fs::File::open(self.reader_path()).map_err(backend)?;
         #[cfg(unix)]
         let identity = ReaderFileIdentity::of(&file)?;
-        #[cfg(unix)]
-        {
-            if let Ok(local) = self.local()
-                && let Ok(cache) = local.reader_cache.lock()
-                && let Some(cached) = cache.as_ref().filter(|cached| cached.identity == identity)
-            {
-                return Ok(cached.state.clone());
-            }
-        }
         if file.metadata().map_err(backend)?.len() > codec::MAX_BYTES as u64 {
             return Err(backend("oversized reader inventory"));
         }
@@ -191,6 +184,21 @@ impl FilePinStore {
             .take(codec::MAX_BYTES as u64 + 1)
             .read_to_end(&mut bytes)
             .map_err(backend)?;
+        // Metadata is an invalidation hint, not proof of unchanged contents:
+        // in-place writes can share timestamps on coarse-grained filesystems.
+        #[cfg(unix)]
+        let content_hash = blake3::hash(&bytes);
+        #[cfg(unix)]
+        {
+            if let Ok(local) = self.local()
+                && let Ok(cache) = local.reader_cache.lock()
+                && let Some(cached) = cache.as_ref().filter(|cached| {
+                    cached.identity == identity && cached.content_hash == content_hash
+                })
+            {
+                return Ok(cached.state.clone());
+            }
+        }
         let state = ReaderState::decode(&bytes)?;
         #[cfg(unix)]
         {
@@ -200,6 +208,7 @@ impl FilePinStore {
                 *cache = Some(CachedReaders {
                     _file: file,
                     identity,
+                    content_hash,
                     state: state.clone(),
                 });
             }
@@ -610,6 +619,135 @@ mod tests {
         assert!(inventory.pins.contains_key(&b));
         second.release(&b).await.unwrap();
         assert!(first.inventory().await.unwrap().pins.is_empty());
+    }
+
+    // Model a filesystem whose timestamp granularity leaves an in-place
+    // modification indistinguishable from the cached metadata identity.
+    #[cfg(unix)]
+    fn match_cached_identity_to_file(store: &FilePinStore) {
+        let identity =
+            ReaderFileIdentity::of(&std::fs::File::open(store.reader_path()).unwrap()).unwrap();
+        let local = store.local().unwrap();
+        let mut cache = local.reader_cache.lock().unwrap();
+        cache.as_mut().unwrap().identity = identity;
+    }
+
+    #[cfg(unix)]
+    fn corrupt_with_cached_identity(store: &FilePinStore, checksum: bool) -> (Vec<u8>, Vec<u8>) {
+        use std::io::{Seek, SeekFrom};
+        let valid = std::fs::read(store.reader_path()).unwrap();
+        let offset = if checksum { valid.len() - 1 } else { 8 };
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(store.reader_path())
+            .unwrap();
+        file.seek(SeekFrom::Start(offset as u64)).unwrap();
+        file.write_all(&[valid[offset] ^ 1]).unwrap();
+        let corrupt = std::fs::read(store.reader_path()).unwrap();
+        assert_eq!(corrupt.len(), valid.len());
+        assert_ne!(corrupt, valid);
+        match_cached_identity_to_file(store);
+        (valid, corrupt)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reader_cache_metadata_collision_rejects_body_and_checksum_corruption() {
+        for checksum in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = FilePinStore::new(dir.path().join("pins"));
+            let token = store.register_reader(snapshot()).await.unwrap().unwrap();
+            assert!(store.inventory().await.unwrap().pins.contains_key(&token));
+            let (valid, corrupt) = corrupt_with_cached_identity(&store, checksum);
+            assert!(store.inventory().await.is_err());
+            assert_eq!(std::fs::read(store.reader_path()).unwrap(), corrupt);
+            std::fs::write(store.reader_path(), valid).unwrap();
+            assert!(store.inventory().await.unwrap().pins.contains_key(&token));
+            store.release(&token).await.unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reader_cache_metadata_collision_blocks_reader_admission() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FilePinStore::new(dir.path().join("pins"));
+        let token = store.register_reader(snapshot()).await.unwrap().unwrap();
+        assert!(store.inventory().await.unwrap().pins.contains_key(&token));
+        let (valid, corrupt) = corrupt_with_cached_identity(&store, false);
+        assert!(store.register_reader(snapshot()).await.is_err());
+        assert_eq!(std::fs::read(store.reader_path()).unwrap(), corrupt);
+        std::fs::write(store.reader_path(), valid).unwrap();
+        let admitted = store.register_reader(snapshot()).await.unwrap().unwrap();
+        let inventory = store.inventory().await.unwrap();
+        assert_eq!(inventory.pins.len(), 2);
+        assert!(inventory.pins.contains_key(&token));
+        assert!(inventory.pins.contains_key(&admitted));
+        store.release(&admitted).await.unwrap();
+        store.release(&token).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reader_cache_metadata_collision_blocks_deletion_claims() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FilePinStore::new(dir.path().join("pins"));
+        let mut pin = snapshot();
+        pin.resources = resource("reader-data");
+        let token = store.register_reader(pin.clone()).await.unwrap().unwrap();
+        let before = store.inventory().await.unwrap();
+        let (valid, corrupt) = corrupt_with_cached_identity(&store, false);
+        assert!(
+            store
+                .claim_deletions(before.revision, resource("unrelated"))
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read(store.reader_path()).unwrap(), corrupt);
+        std::fs::write(store.reader_path(), valid).unwrap();
+        let restored = store.inventory().await.unwrap();
+        assert_eq!(restored.pins[&token], pin);
+        assert!(restored.deletions.is_empty());
+        assert!(
+            store
+                .claim_deletions(restored.revision, resource("reader-data"))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let claim = store
+            .claim_deletions(restored.revision, resource("unrelated"))
+            .await
+            .unwrap()
+            .unwrap();
+        store.finish_deletions(&claim).await.unwrap();
+        store.release(&token).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reader_cache_metadata_collision_observes_valid_in_place_updates() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FilePinStore::new(dir.path().join("pins"));
+        let token = store.register_reader(snapshot()).await.unwrap().unwrap();
+        let before = store.inventory().await.unwrap();
+        let valid = std::fs::read(store.reader_path()).unwrap();
+        let mut replacement = ReaderState::decode(&valid).unwrap();
+        replacement.revision += 1;
+        for owner in replacement.owners.values_mut() {
+            owner.pins.get_mut(&token).unwrap().scope = PinScope::Snapshot { generation: 43 };
+        }
+        let replacement_bytes = replacement.encode().unwrap();
+        assert_eq!(replacement_bytes.len(), valid.len());
+        std::fs::write(store.reader_path(), replacement_bytes).unwrap();
+        match_cached_identity_to_file(&store);
+        let observed = store.inventory().await.unwrap();
+        assert_eq!(observed.revision, before.revision + 1);
+        assert_eq!(
+            observed.pins[&token].scope,
+            PinScope::Snapshot { generation: 43 }
+        );
+        store.release(&token).await.unwrap();
     }
 
     #[tokio::test]
