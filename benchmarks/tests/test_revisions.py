@@ -70,6 +70,7 @@ class RevisionArgumentTests(unittest.TestCase):
                 "metadata-batch",
                 "decoded-seek-replay", "object-reads", "snapshot-connections", "reader-coordination", "durable-ledger", "ledger-boundaries",
                 "fsck",
+                "physical-fsck",
                 "repository",
                 "ingest-concurrency",
                 "ingest-scheduling",
