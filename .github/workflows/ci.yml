@@ -127,6 +127,9 @@ jobs:
           cargo test --all-features
           cargo check --features s3 --example s3_sync --test s3_application_api --test s3_multi_owner
           cargo check --manifest-path crates/casita/examples/s3_sync/Cargo.toml
+          CARGO_TARGET_DIR=target cargo test --manifest-path tests/tls_connectors/Cargo.toml
+          cargo fmt --manifest-path tests/tls_connectors/Cargo.toml --check
+          cargo clippy --manifest-path tests/tls_connectors/Cargo.toml --all-targets -- -D warnings
           cargo test
           cargo build --no-default-features
           cargo test --no-default-features
@@ -203,6 +206,7 @@ jobs:
         with:
           cache-on-failure: true
       - run: cargo test --all-features
+      - run: cargo test --manifest-path tests/tls_connectors/Cargo.toml --target-dir target
       - run: cargo build --no-default-features
       - run: cargo test --no-default-features
       - run: cargo test --no-default-features --features experimental
