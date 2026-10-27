@@ -188,6 +188,14 @@ SUITE_BUILD_SPECS["git-ingest-concurrency"] = SuiteBuildSpec(
     ("build", "--release", "--features", "cli,git", "--bin", "casita"),
     "--casita-bin", "casita", relative_artifact="release/casita",
 )
+SUITE_BUILD_SPECS["git-closure-source-window-32"] = SUITE_BUILD_SPECS["git-closure-import"]
+SUITE_BUILD_SPECS["git-closure-source-window-128"] = SUITE_BUILD_SPECS["git-closure-import"]
+SUITE_BUILD_SPECS["git-closure-source-window-oversized-32"] = SUITE_BUILD_SPECS["git-closure-import"]
+SUITE_BUILD_SPECS["git-closure-source-window-oversized-128"] = SUITE_BUILD_SPECS["git-closure-import"]
+SUITE_BUILD_SPECS["git-view-source-window-32"] = SUITE_BUILD_SPECS["git-ingest-concurrency"]
+SUITE_BUILD_SPECS["git-view-source-window-128"] = SUITE_BUILD_SPECS["git-ingest-concurrency"]
+SUITE_BUILD_SPECS["git-view-source-window-oversized-32"] = SUITE_BUILD_SPECS["git-ingest-concurrency"]
+SUITE_BUILD_SPECS["git-view-source-window-oversized-128"] = SUITE_BUILD_SPECS["git-ingest-concurrency"]
 SUITE_BUILD_SPECS["metadata-scan"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["memory-snapshots"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["memory-publication"] = SUITE_BUILD_SPECS["metadata-collection"]
