@@ -211,6 +211,7 @@ SUITE_BUILD_SPECS["filesystem-outputs"] = SUITE_BUILD_SPECS["metadata-collection
 SUITE_BUILD_SPECS["filesystem-reuse"] = dataclasses.replace(SUITE_BUILD_SPECS["repository"], records_revision=False)
 SUITE_BUILD_SPECS["output-import"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["catalog-wal"] = SUITE_BUILD_SPECS["metadata-collection"]
+SUITE_BUILD_SPECS["physical-fsck"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["scoped-catalog"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["pack-fragmentation"] = SUITE_BUILD_SPECS["metadata-collection"]
 SUITE_BUILD_SPECS["ingest-concurrency"] = SUITE_BUILD_SPECS["pack-gc"]
