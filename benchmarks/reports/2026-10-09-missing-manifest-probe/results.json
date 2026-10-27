@@ -1,0 +1,3764 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-09",
+  "builds": {
+    "upstream": {
+      "commit": "1407672f4b235609ae7fff0f87a30e06183f941f",
+      "crates_casita_tree": "dbb21e518940fa829ce922c6a2b9d457af4d5ff4",
+      "harness_from_candidate": {
+        "crates/casita/benches/verified_manifest_reads.rs": "cbdd7df236a699675f309aa8a3212fb889a34b19",
+        "crates/casita/Cargo.toml": "defd0d3f74024ec6ec9bbc0e85f4ce0085de73c7",
+        "crates/casita/src/blob/chunked/tests.rs": "384bee02b530891ee3c7c43e224d56ef08774e82"
+      },
+      "bench_sha256": "692b7dbf6ad00d0a2b77ca9cb28d3ad25fbbf7412b64e9fc906027ba9abface9",
+      "library_test_sha256": "d01a8aeccf273a95589f560bf43ed38b975ba74d027c41f6eabecec565174dc9"
+    },
+    "candidate": {
+      "crates_casita_tree": "e9e9d4a91104a63db5421a0f76f61ecafb342933",
+      "bench_sha256": "b1afa0b5a02042a019ed35fa581d58fe94193d034af3a1eda1c488b6616abcf0",
+      "library_test_sha256": "aab1a23be8d7063c8752e7c635f95ac56bb9250b802c77b48af57ea82af2dde1"
+    },
+    "bench_command": "cargo bench -p casita --features native,experimental --bench verified_manifest_reads --no-run",
+    "test_command": "cargo test -p casita --features native,experimental --lib --no-run",
+    "profile": "Cargo bench profile defaults; library tests in the test profile",
+    "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+    "lockfile": {
+      "sha256": "6d53fd6e7d4836f70c740024695f3d11a106e71f074157b442da08194e2673f3",
+      "note": "Cargo.lock is untracked; generated at cachix/casita 84ec292 and shared by every build."
+    }
+  },
+  "host": {
+    "cpu": "AMD EPYC 9454P 48-Core Processor, 96 hardware threads",
+    "kernel": "Linux 6.18.42",
+    "filesystem": "ZFS",
+    "pinning": "taskset -c 36-41 (one L3 domain)",
+    "note": "Shared host; other users' load was present. Runs were serial and nothing else from this work ran during timing."
+  },
+  "command": "CRITERION_HOME=<run> taskset -c 36-41 <verified_manifest_reads executable> --bench --noplot",
+  "rounds": "four, alternating which build ran first: upstream first in rounds 1 and 3",
+  "runs": [
+    {
+      "build": "c10base",
+      "round": "r1",
+      "started": "2026-10-09T05:07:40+00:00",
+      "ended": "2026-10-09T05:10:34+00:00",
+      "load_start": 1.77,
+      "load_end": 3.11
+    },
+    {
+      "build": "c10cand",
+      "round": "r1",
+      "started": "2026-10-09T05:10:34+00:00",
+      "ended": "2026-10-09T05:13:24+00:00",
+      "load_start": 3.11,
+      "load_end": 3.01
+    },
+    {
+      "build": "c10cand",
+      "round": "r2",
+      "started": "2026-10-09T05:13:24+00:00",
+      "ended": "2026-10-09T05:16:15+00:00",
+      "load_start": 3.01,
+      "load_end": 2.37
+    },
+    {
+      "build": "c10base",
+      "round": "r2",
+      "started": "2026-10-09T05:16:15+00:00",
+      "ended": "2026-10-09T05:19:08+00:00",
+      "load_start": 2.37,
+      "load_end": 2.77
+    },
+    {
+      "build": "c10base",
+      "round": "r3",
+      "started": "2026-10-09T05:19:08+00:00",
+      "ended": "2026-10-09T05:22:02+00:00",
+      "load_start": 2.77,
+      "load_end": 2.92
+    },
+    {
+      "build": "c10cand",
+      "round": "r3",
+      "started": "2026-10-09T05:22:02+00:00",
+      "ended": "2026-10-09T05:24:55+00:00",
+      "load_start": 2.92,
+      "load_end": 2.0
+    },
+    {
+      "build": "c10cand",
+      "round": "r4",
+      "started": "2026-10-09T05:24:55+00:00",
+      "ended": "2026-10-09T05:27:44+00:00",
+      "load_start": 2.0,
+      "load_end": 2.31
+    },
+    {
+      "build": "c10base",
+      "round": "r4",
+      "started": "2026-10-09T05:27:44+00:00",
+      "ended": "2026-10-09T05:30:40+00:00",
+      "load_start": 2.31,
+      "load_end": 2.63
+    }
+  ],
+  "tests": {
+    "upstream": {
+      "passed": 105,
+      "failed": 3,
+      "ignored": 1,
+      "failures": [
+        "blob::chunked::tests::manifest_probe::bare_with_outboard_uses_one_manifest_probe",
+        "blob::chunked::tests::verified_bare_blob_does_not_repeat_a_missing_manifest_probe",
+        "blob::chunked::tests::verified_missing_blob_does_not_repeat_a_missing_manifest_probe"
+      ],
+      "extra_head_failures": 3
+    },
+    "candidate": {
+      "passed": 108,
+      "failed": 0,
+      "ignored": 1,
+      "failures": [],
+      "extra_head_failures": 0
+    }
+  },
+  "throttled_request_ms": 2.097,
+  "paired": {
+    "verified_bare_group_reads/local-packed/readers_1/1": {
+      "base_median_ns": 6047894.9921875,
+      "candidate_median_ns": 4269665.526666666,
+      "median_ratio": 0.7020732960026789,
+      "ratio_range": [
+        0.5719343560134587,
+        0.712541795615645
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/local-packed/readers_1/16383": {
+      "base_median_ns": 4791520.228125,
+      "candidate_median_ns": 4194339.25,
+      "median_ratio": 0.8511033768027483,
+      "ratio_range": [
+        0.7954988699556695,
+        0.879335045799101
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/local-packed/readers_1/16384": {
+      "base_median_ns": 4575329.282242063,
+      "candidate_median_ns": 3165037.23396164,
+      "median_ratio": 0.7239358523259845,
+      "ratio_range": [
+        0.43613404314305115,
+        0.8300839350044773
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/local-packed/readers_1/16385": {
+      "base_median_ns": 14713222.194791667,
+      "candidate_median_ns": 12936827.475,
+      "median_ratio": 0.8832390578257121,
+      "ratio_range": [
+        0.7334633801747011,
+        1.0075689247159993
+      ],
+      "candidate_faster_rounds": 3,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/local-packed/readers_1/32768": {
+      "base_median_ns": 13900724.90625,
+      "candidate_median_ns": 12368007.148214284,
+      "median_ratio": 0.8905048657155727,
+      "ratio_range": [
+        0.6545459549197893,
+        1.251243198591104
+      ],
+      "candidate_faster_rounds": 3,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/local-packed/readers_64/1": {
+      "base_median_ns": 850644.4006944445,
+      "candidate_median_ns": 670921.0698302469,
+      "median_ratio": 0.7899184555427896,
+      "ratio_range": [
+        0.7770551200165048,
+        0.7953495153561462
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/local-packed/readers_64/16383": {
+      "base_median_ns": 2262252.3369791666,
+      "candidate_median_ns": 2149066.654320988,
+      "median_ratio": 0.9450675109128146,
+      "ratio_range": [
+        0.8788786385427089,
+        0.9511906017613311
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/local-packed/readers_64/16384": {
+      "base_median_ns": 1637181.7892045453,
+      "candidate_median_ns": 1520479.2368055556,
+      "median_ratio": 0.9312028904748497,
+      "ratio_range": [
+        0.7832503348010231,
+        1.0234095839908006
+      ],
+      "candidate_faster_rounds": 3,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/local-packed/readers_64/16385": {
+      "base_median_ns": 2366104.728819445,
+      "candidate_median_ns": 2210097.194940476,
+      "median_ratio": 0.9340620946154672,
+      "ratio_range": [
+        0.912767112318731,
+        0.953093209644909
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/local-packed/readers_64/32768": {
+      "base_median_ns": 3053472.71875,
+      "candidate_median_ns": 2845520.5909863943,
+      "median_ratio": 0.9317396390089301,
+      "ratio_range": [
+        0.9071280368452207,
+        0.986330813181553
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/memory-get-1ms/readers_1/16384": {
+      "base_median_ns": 408576257.75,
+      "candidate_median_ns": 273372630.25,
+      "median_ratio": 0.6690803595736861,
+      "ratio_range": [
+        0.6640453161290144,
+        0.6732558276888002
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/memory-get-1ms/readers_1/16385": {
+      "base_median_ns": 679455688.0,
+      "candidate_median_ns": 544494458.0,
+      "median_ratio": 0.8020795525417597,
+      "ratio_range": [
+        0.7986354940483376,
+        0.8064559337434898
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/memory-get-1ms/readers_64/16384": {
+      "base_median_ns": 8308044.402777778,
+      "candidate_median_ns": 6200953.89484127,
+      "median_ratio": 0.7475512327064169,
+      "ratio_range": [
+        0.7425135374847935,
+        0.7499174165953245
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/memory-get-1ms/readers_64/16385": {
+      "base_median_ns": 12726956.675,
+      "candidate_median_ns": 10629282.32638889,
+      "median_ratio": 0.8352349046088963,
+      "ratio_range": [
+        0.8333220358924048,
+        0.8357117357222295
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/memory-loose/readers_1/1": {
+      "base_median_ns": 244581.4202450806,
+      "candidate_median_ns": 225527.16156767204,
+      "median_ratio": 0.9335213005226826,
+      "ratio_range": [
+        0.9037170688616852,
+        0.9467007741330034
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/memory-loose/readers_1/16383": {
+      "base_median_ns": 1465955.3894230768,
+      "candidate_median_ns": 1451089.2737179487,
+      "median_ratio": 0.9885228288803156,
+      "ratio_range": [
+        0.986912994841045,
+        0.9956128306567005
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/memory-loose/readers_1/16384": {
+      "base_median_ns": 841653.2205687831,
+      "candidate_median_ns": 827608.6665764791,
+      "median_ratio": 0.9833981213313319,
+      "ratio_range": [
+        0.9780259634614108,
+        0.9924013465968886
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/memory-loose/readers_1/16385": {
+      "base_median_ns": 1000654.1313492063,
+      "candidate_median_ns": 984006.3258771929,
+      "median_ratio": 0.986290668277211,
+      "ratio_range": [
+        0.9711176124360675,
+        0.989317190592645
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/memory-loose/readers_1/32768": {
+      "base_median_ns": 1630985.3552489178,
+      "candidate_median_ns": 1615821.0285714285,
+      "median_ratio": 0.9903761702781415,
+      "ratio_range": [
+        0.9783271529847101,
+        1.0055981408477477
+      ],
+      "candidate_faster_rounds": 3,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/memory-loose/readers_64/1": {
+      "base_median_ns": 255848.58611002436,
+      "candidate_median_ns": 238056.2917093871,
+      "median_ratio": 0.9314657791792168,
+      "ratio_range": [
+        0.9184040497049161,
+        0.9431980096146473
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/memory-loose/readers_64/16383": {
+      "base_median_ns": 1477810.971978022,
+      "candidate_median_ns": 1463848.6522435897,
+      "median_ratio": 0.9905237844732497,
+      "ratio_range": [
+        0.9882485786679811,
+        0.9926640042754794
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/memory-loose/readers_64/16384": {
+      "base_median_ns": 854252.7329506803,
+      "candidate_median_ns": 840495.5420274171,
+      "median_ratio": 0.9854098084931627,
+      "ratio_range": [
+        0.9789937772142551,
+        0.995182007795156
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/memory-loose/readers_64/16385": {
+      "base_median_ns": 1021768.2388888889,
+      "candidate_median_ns": 1002502.725,
+      "median_ratio": 0.9800433174864612,
+      "ratio_range": [
+        0.9731952861727655,
+        0.9894256308772496
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_bare_group_reads/memory-loose/readers_64/32768": {
+      "base_median_ns": 1647567.901948052,
+      "candidate_median_ns": 1634477.048088023,
+      "median_ratio": 0.9919891274782427,
+      "ratio_range": [
+        0.9847797326810517,
+        1.0017632159694883
+      ],
+      "candidate_faster_rounds": 3,
+      "rounds": 4
+    },
+    "verified_manifest_reads/local-packed/readers_1/0": {
+      "base_median_ns": 8645030.25,
+      "candidate_median_ns": 8452377.031349206,
+      "median_ratio": 0.9801782860180616,
+      "ratio_range": [
+        0.734877030210145,
+        1.014436163455102
+      ],
+      "candidate_faster_rounds": 3,
+      "rounds": 4
+    },
+    "verified_manifest_reads/local-packed/readers_1/1": {
+      "base_median_ns": 5792127.6935416665,
+      "candidate_median_ns": 3163944.7135416665,
+      "median_ratio": 0.5868053065448291,
+      "ratio_range": [
+        0.42029600738457384,
+        0.748327545915995
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_manifest_reads/local-packed/readers_1/2": {
+      "base_median_ns": 14531375.577380951,
+      "candidate_median_ns": 14288786.392857142,
+      "median_ratio": 0.9866839612994003,
+      "ratio_range": [
+        0.9007125584893817,
+        0.988798789172333
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_manifest_reads/local-packed/readers_1/63": {
+      "base_median_ns": 34491403.49047619,
+      "candidate_median_ns": 34493020.55803572,
+      "median_ratio": 0.9953102033492367,
+      "ratio_range": [
+        0.9873341408708258,
+        1.0105289221609095
+      ],
+      "candidate_faster_rounds": 3,
+      "rounds": 4
+    },
+    "verified_manifest_reads/local-packed/readers_1/64": {
+      "base_median_ns": 34483742.840277776,
+      "candidate_median_ns": 34212220.03333333,
+      "median_ratio": 0.990954457565761,
+      "ratio_range": [
+        0.985767781701265,
+        0.9985167883211113
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_manifest_reads/local-packed/readers_1/65": {
+      "base_median_ns": 38937429.66666667,
+      "candidate_median_ns": 38884670.833333336,
+      "median_ratio": 0.9993037912016346,
+      "ratio_range": [
+        0.9771517454860201,
+        1.0120344408687454
+      ],
+      "candidate_faster_rounds": 2,
+      "rounds": 4
+    },
+    "verified_manifest_reads/local-packed/readers_64/0": {
+      "base_median_ns": 1102052.409281994,
+      "candidate_median_ns": 1109808.4756944445,
+      "median_ratio": 1.0002334930420695,
+      "ratio_range": [
+        0.9948415537026589,
+        1.0259892108779316
+      ],
+      "candidate_faster_rounds": 2,
+      "rounds": 4
+    },
+    "verified_manifest_reads/local-packed/readers_64/1": {
+      "base_median_ns": 1255218.4600765307,
+      "candidate_median_ns": 1159953.282421875,
+      "median_ratio": 0.9199277255785439,
+      "ratio_range": [
+        0.819431549799899,
+        0.9962671428571498
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_manifest_reads/local-packed/readers_64/2": {
+      "base_median_ns": 2254596.1790123456,
+      "candidate_median_ns": 2267037.814236111,
+      "median_ratio": 1.0118602143671322,
+      "ratio_range": [
+        1.000112445692538,
+        1.0220502492584949
+      ],
+      "candidate_faster_rounds": 0,
+      "rounds": 4
+    },
+    "verified_manifest_reads/local-packed/readers_64/63": {
+      "base_median_ns": 20570810.59375,
+      "candidate_median_ns": 20524534.944444444,
+      "median_ratio": 1.0019646515190321,
+      "ratio_range": [
+        0.9949992187156123,
+        1.0059040631425127
+      ],
+      "candidate_faster_rounds": 2,
+      "rounds": 4
+    },
+    "verified_manifest_reads/local-packed/readers_64/64": {
+      "base_median_ns": 20232312.297619045,
+      "candidate_median_ns": 20388776.59563492,
+      "median_ratio": 1.007214268024803,
+      "ratio_range": [
+        0.9940628690923886,
+        1.0177141562804133
+      ],
+      "candidate_faster_rounds": 1,
+      "rounds": 4
+    },
+    "verified_manifest_reads/local-packed/readers_64/65": {
+      "base_median_ns": 22642569.960317463,
+      "candidate_median_ns": 22778210.125,
+      "median_ratio": 1.0120812648604325,
+      "ratio_range": [
+        0.9811711817974768,
+        1.034215086257937
+      ],
+      "candidate_faster_rounds": 1,
+      "rounds": 4
+    },
+    "verified_manifest_reads/memory-get-1ms/readers_1/0": {
+      "base_median_ns": 405782211.75,
+      "candidate_median_ns": 406082009.5,
+      "median_ratio": 1.0022033822719727,
+      "ratio_range": [
+        0.9992416950426166,
+        1.0031948612624182
+      ],
+      "candidate_faster_rounds": 1,
+      "rounds": 4
+    },
+    "verified_manifest_reads/memory-get-1ms/readers_1/1": {
+      "base_median_ns": 407505545.0,
+      "candidate_median_ns": 273274779.0,
+      "median_ratio": 0.6704094460988618,
+      "ratio_range": [
+        0.6691541002946155,
+        0.672945424005349
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_manifest_reads/memory-get-1ms/readers_1/2": {
+      "base_median_ns": 814776749.25,
+      "candidate_median_ns": 815396044.75,
+      "median_ratio": 1.000762631367527,
+      "ratio_range": [
+        0.9919435469992333,
+        1.0053763474192672
+      ],
+      "candidate_faster_rounds": 2,
+      "rounds": 4
+    },
+    "verified_manifest_reads/memory-get-1ms/readers_64/0": {
+      "base_median_ns": 6771356.447222222,
+      "candidate_median_ns": 6811810.8125,
+      "median_ratio": 1.0064345449757996,
+      "ratio_range": [
+        1.0025252106513098,
+        1.0121529683279895
+      ],
+      "candidate_faster_rounds": 0,
+      "rounds": 4
+    },
+    "verified_manifest_reads/memory-get-1ms/readers_64/1": {
+      "base_median_ns": 7536292.154166667,
+      "candidate_median_ns": 5333490.964583334,
+      "median_ratio": 0.7085096858471969,
+      "ratio_range": [
+        0.7030310950881368,
+        0.7157331637065633
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_manifest_reads/memory-get-1ms/readers_64/2": {
+      "base_median_ns": 14056319.598958334,
+      "candidate_median_ns": 14053233.55,
+      "median_ratio": 1.0000059100019576,
+      "ratio_range": [
+        0.9976552796437037,
+        1.0007047729154048
+      ],
+      "candidate_faster_rounds": 2,
+      "rounds": 4
+    },
+    "verified_manifest_reads/memory-loose/readers_1/0": {
+      "base_median_ns": 180893.798019802,
+      "candidate_median_ns": 179401.31909476663,
+      "median_ratio": 1.0037793661944638,
+      "ratio_range": [
+        0.9798288925018508,
+        1.0383691068430372
+      ],
+      "candidate_faster_rounds": 2,
+      "rounds": 4
+    },
+    "verified_manifest_reads/memory-loose/readers_1/1": {
+      "base_median_ns": 485752.5946637427,
+      "candidate_median_ns": 468627.9064102564,
+      "median_ratio": 0.9670146598660125,
+      "ratio_range": [
+        0.9550751740073212,
+        0.9795922468471024
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_manifest_reads/memory-loose/readers_1/2": {
+      "base_median_ns": 779649.9369047619,
+      "candidate_median_ns": 772698.2223958333,
+      "median_ratio": 0.9879984127479615,
+      "ratio_range": [
+        0.9844061808480957,
+        1.0182809602305634
+      ],
+      "candidate_faster_rounds": 3,
+      "rounds": 4
+    },
+    "verified_manifest_reads/memory-loose/readers_1/63": {
+      "base_median_ns": 15261560.535714287,
+      "candidate_median_ns": 15420862.321924603,
+      "median_ratio": 1.0095003573486152,
+      "ratio_range": [
+        0.9946004519800024,
+        1.0201470871067448
+      ],
+      "candidate_faster_rounds": 1,
+      "rounds": 4
+    },
+    "verified_manifest_reads/memory-loose/readers_1/64": {
+      "base_median_ns": 15305622.904017858,
+      "candidate_median_ns": 15372117.781746032,
+      "median_ratio": 1.003851207291128,
+      "ratio_range": [
+        0.9985539786422373,
+        1.0075679847816381
+      ],
+      "candidate_faster_rounds": 1,
+      "rounds": 4
+    },
+    "verified_manifest_reads/memory-loose/readers_1/65": {
+      "base_median_ns": 16495130.39722222,
+      "candidate_median_ns": 16605523.788690476,
+      "median_ratio": 1.0080612498344679,
+      "ratio_range": [
+        0.9878462354269144,
+        1.008955923544706
+      ],
+      "candidate_faster_rounds": 1,
+      "rounds": 4
+    },
+    "verified_manifest_reads/memory-loose/readers_64/0": {
+      "base_median_ns": 184381.7376040696,
+      "candidate_median_ns": 185050.6356915296,
+      "median_ratio": 1.0130297955119125,
+      "ratio_range": [
+        0.9686682031749736,
+        1.0363045503478068
+      ],
+      "candidate_faster_rounds": 1,
+      "rounds": 4
+    },
+    "verified_manifest_reads/memory-loose/readers_64/1": {
+      "base_median_ns": 502180.6517272481,
+      "candidate_median_ns": 485167.7947368421,
+      "median_ratio": 0.966121924471558,
+      "ratio_range": [
+        0.9611341038064537,
+        0.9817195157715397
+      ],
+      "candidate_faster_rounds": 4,
+      "rounds": 4
+    },
+    "verified_manifest_reads/memory-loose/readers_64/2": {
+      "base_median_ns": 802203.4171195653,
+      "candidate_median_ns": 803694.2947722567,
+      "median_ratio": 1.00398502239676,
+      "ratio_range": [
+        0.9974165277200072,
+        1.0104662695012736
+      ],
+      "candidate_faster_rounds": 1,
+      "rounds": 4
+    },
+    "verified_manifest_reads/memory-loose/readers_64/63": {
+      "base_median_ns": 15581958.30580357,
+      "candidate_median_ns": 15592153.491220238,
+      "median_ratio": 1.000586845736861,
+      "ratio_range": [
+        0.9983910723743605,
+        1.0056685522254851
+      ],
+      "candidate_faster_rounds": 2,
+      "rounds": 4
+    },
+    "verified_manifest_reads/memory-loose/readers_64/64": {
+      "base_median_ns": 15484203.230902778,
+      "candidate_median_ns": 15493585.47767857,
+      "median_ratio": 1.0021758919145425,
+      "ratio_range": [
+        0.998325697401167,
+        1.004093214410516
+      ],
+      "candidate_faster_rounds": 1,
+      "rounds": 4
+    },
+    "verified_manifest_reads/memory-loose/readers_64/65": {
+      "base_median_ns": 17110019.145833332,
+      "candidate_median_ns": 17197433.070833333,
+      "median_ratio": 1.0091143335519484,
+      "ratio_range": [
+        0.9948507037808353,
+        1.012072541864471
+      ],
+      "candidate_faster_rounds": 1,
+      "rounds": 4
+    }
+  },
+  "series": {
+    "c10base-r1": {
+      "verified_bare_group_reads/local-packed/readers_1/1": {
+        "median_ns": 6057387.484375,
+        "median_ci95_ns": [
+          6045859.4375,
+          6065035.428571428
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16383": {
+        "median_ns": 5284088.425,
+        "median_ci95_ns": [
+          5241427.8125,
+          5338240.25
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16384": {
+        "median_ns": 4873384.876984127,
+        "median_ci95_ns": [
+          4218609.0,
+          4878741.75625
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16385": {
+        "median_ns": 14732725.108333334,
+        "median_ci95_ns": [
+          14626846.833333332,
+          14766672.0
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/32768": {
+        "median_ns": 14119029.875,
+        "median_ci95_ns": [
+          14080089.9,
+          14132334.635416668
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/1": {
+        "median_ns": 840807.8477272728,
+        "median_ci95_ns": [
+          839742.7424242424,
+          843214.8011363636
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16383": {
+        "median_ns": 2445551.25,
+        "median_ci95_ns": [
+          2436211.359375,
+          2453245.4732142854
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16384": {
+        "median_ns": 1797617.5265151516,
+        "median_ci95_ns": [
+          1712697.5727272728,
+          1812922.987012987
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16385": {
+        "median_ns": 2346534.59375,
+        "median_ci95_ns": [
+          2335741.7109375,
+          2352360.160714286
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/32768": {
+        "median_ns": 2972758.875,
+        "median_ci95_ns": [
+          2967278.7333333334,
+          2989554.8583333334
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_1/16384": {
+        "median_ns": 407242640.5,
+        "median_ci95_ns": [
+          406798916.0,
+          408419505.0
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_1/16385": {
+        "median_ns": 675749686.0,
+        "median_ci95_ns": [
+          674651940.0,
+          678685656.0
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_64/16384": {
+        "median_ns": 8340707.605820106,
+        "median_ci95_ns": [
+          8318972.366666667,
+          8371912.508333333
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_64/16385": {
+        "median_ns": 12715359.375,
+        "median_ci95_ns": [
+          12690836.722222222,
+          12771292.625
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/1": {
+        "median_ns": 239463.13486842107,
+        "median_ci95_ns": [
+          239195.13486842104,
+          239669.36469298246
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16383": {
+        "median_ns": 1459630.3474358974,
+        "median_ci95_ns": [
+          1459351.1071428573,
+          1461109.044871795
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16384": {
+        "median_ns": 841815.121031746,
+        "median_ci95_ns": [
+          841461.0476190476,
+          842754.6160714286
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16385": {
+        "median_ns": 999076.9312169312,
+        "median_ci95_ns": [
+          998755.3888888889,
+          999508.3965277778
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/32768": {
+        "median_ns": 1631024.875,
+        "median_ci95_ns": [
+          1630702.1090909091,
+          1631740.0505050505
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/1": {
+        "median_ns": 252910.934375,
+        "median_ci95_ns": [
+          252671.9623015873,
+          253127.06805555554
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16383": {
+        "median_ns": 1475652.3214285714,
+        "median_ci95_ns": [
+          1474981.923076923,
+          1482681.1682692308
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16384": {
+        "median_ns": 851985.9124149659,
+        "median_ci95_ns": [
+          851045.0714285714,
+          860493.0333333333
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16385": {
+        "median_ns": 1019909.687962963,
+        "median_ci95_ns": [
+          1018652.1666666666,
+          1024501.1472222223
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/32768": {
+        "median_ns": 1646664.5340909092,
+        "median_ci95_ns": [
+          1645280.8181818181,
+          1653582.4090909092
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/0": {
+        "median_ns": 8653952.25,
+        "median_ci95_ns": [
+          7530814.216666667,
+          8682143.083333334
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/1": {
+        "median_ns": 4833849.013333334,
+        "median_ci95_ns": [
+          4503908.733333333,
+          6083913.626388889
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/2": {
+        "median_ns": 14583773.042857144,
+        "median_ci95_ns": [
+          14542834.7125,
+          15025382.0
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/63": {
+        "median_ns": 34948311.0,
+        "median_ci95_ns": [
+          34710279.33333333,
+          35091507.571428575
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/64": {
+        "median_ns": 34745895.0,
+        "median_ci95_ns": [
+          34691557.375,
+          34907666.83333333
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/65": {
+        "median_ns": 39759083.833333336,
+        "median_ci95_ns": [
+          39270951.666666664,
+          40033104.0
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/0": {
+        "median_ns": 1093743.3354166667,
+        "median_ci95_ns": [
+          1085528.9375,
+          1119647.84375
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/1": {
+        "median_ns": 1267123.5464285715,
+        "median_ci95_ns": [
+          1262679.3035714286,
+          1271938.0183673468
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/2": {
+        "median_ns": 2215461.3819444445,
+        "median_ci95_ns": [
+          2164781.203125,
+          2263384.7267857143
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/63": {
+        "median_ns": 20610506.133333333,
+        "median_ci95_ns": [
+          20515856.103174604,
+          20665928.925
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/64": {
+        "median_ns": 20499224.233333334,
+        "median_ci95_ns": [
+          20422755.166666668,
+          20724740.14285714
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/65": {
+        "median_ns": 22926498.75,
+        "median_ci95_ns": [
+          22693967.433333334,
+          23961107.833333332
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/0": {
+        "median_ns": 404754352.0,
+        "median_ci95_ns": [
+          402893284.0,
+          405868749.0
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/1": {
+        "median_ns": 407109352.0,
+        "median_ci95_ns": [
+          405081386.0,
+          409208666.0
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/2": {
+        "median_ns": 817667216.5,
+        "median_ci95_ns": [
+          814390515.0,
+          819609427.5
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/0": {
+        "median_ns": 6783713.880952381,
+        "median_ci95_ns": [
+          6732653.166666667,
+          6869079.833333334
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/1": {
+        "median_ns": 7494548.294444444,
+        "median_ci95_ns": [
+          7406248.523809524,
+          7585818.2
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/2": {
+        "median_ns": 14057802.5,
+        "median_ci95_ns": [
+          13999894.833333334,
+          14102408.21875
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/0": {
+        "median_ns": 176159.70028877887,
+        "median_ci95_ns": [
+          175972.39686468645,
+          176407.14455445544
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/1": {
+        "median_ns": 479242.0164473684,
+        "median_ci95_ns": [
+          479110.76242690056,
+          481615.6403508772
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/2": {
+        "median_ns": 759277.10625,
+        "median_ci95_ns": [
+          758982.0625,
+          760373.4479166667
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/63": {
+        "median_ns": 15306466.611111112,
+        "median_ci95_ns": [
+          15277411.75,
+          15426687.035714285
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/64": {
+        "median_ns": 15320527.107142858,
+        "median_ci95_ns": [
+          15310821.5,
+          15351650.555555556
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/65": {
+        "median_ns": 16528483.444444444,
+        "median_ci95_ns": [
+          16512403.125,
+          16585291.267857142
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/0": {
+        "median_ns": 180629.44759450172,
+        "median_ci95_ns": [
+          180467.46185567012,
+          181059.40206185568
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/1": {
+        "median_ns": 496896.8918918919,
+        "median_ci95_ns": [
+          496503.6891891892,
+          497912.98986486485
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/2": {
+        "median_ns": 793057.0989130435,
+        "median_ci95_ns": [
+          791740.661231884,
+          793613.6732919255
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/63": {
+        "median_ns": 15596633.458333332,
+        "median_ci95_ns": [
+          15580083.641666666,
+          15633550.59375
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/64": {
+        "median_ns": 15482109.805555556,
+        "median_ci95_ns": [
+          15449016.75,
+          15534451.833333332
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/65": {
+        "median_ns": 17177353.604166664,
+        "median_ci95_ns": [
+          17162053.708333336,
+          17208228.916666664
+        ]
+      }
+    },
+    "c10base-r2": {
+      "verified_bare_group_reads/local-packed/readers_1/1": {
+        "median_ns": 6031591.919047618,
+        "median_ci95_ns": [
+          6017334.18,
+          6041526.68
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16383": {
+        "median_ns": 4748553.895833334,
+        "median_ci95_ns": [
+          4722144.875,
+          4810273.8125
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16384": {
+        "median_ns": 3985501.263888889,
+        "median_ci95_ns": [
+          3970905.7,
+          4015514.0959821427
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16385": {
+        "median_ns": 14789099.236607142,
+        "median_ci95_ns": [
+          13740971.0,
+          14819144.916666668
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/32768": {
+        "median_ns": 9866445.895833332,
+        "median_ci95_ns": [
+          9821145.9,
+          10064252.825
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/1": {
+        "median_ns": 859523.1233766234,
+        "median_ci95_ns": [
+          850422.3125,
+          864684.7772727272
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16383": {
+        "median_ns": 2154804.409722222,
+        "median_ci95_ns": [
+          2152261.3571428573,
+          2156806.28125
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16384": {
+        "median_ns": 1641418.4045454545,
+        "median_ci95_ns": [
+          1638569.0727272728,
+          1648772.2424242424
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16385": {
+        "median_ns": 2371189.15625,
+        "median_ci95_ns": [
+          2358849.75625,
+          2417970.119047619
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/32768": {
+        "median_ns": 3011296.2416666667,
+        "median_ci95_ns": [
+          2984233.6166666667,
+          3034474.847222222
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_1/16384": {
+        "median_ns": 408762145.0,
+        "median_ci95_ns": [
+          404701654.0,
+          410427216.5
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_1/16385": {
+        "median_ns": 678749490.0,
+        "median_ci95_ns": [
+          675321657.5,
+          682057794.0
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_64/16384": {
+        "median_ns": 8319113.527777778,
+        "median_ci95_ns": [
+          8265007.466666667,
+          8356114.833333333
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_64/16385": {
+        "median_ns": 12729031.25,
+        "median_ci95_ns": [
+          12714524.5,
+          12760383.5
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/1": {
+        "median_ns": 246530.92820945947,
+        "median_ci95_ns": [
+          246284.07432432432,
+          248469.4054054054
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16383": {
+        "median_ns": 1465797.0096153845,
+        "median_ci95_ns": [
+          1465140.217948718,
+          1472027.7983516483
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16384": {
+        "median_ns": 841491.3201058201,
+        "median_ci95_ns": [
+          841398.7619047619,
+          842002.074829932
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16385": {
+        "median_ns": 1008527.4490740742,
+        "median_ci95_ns": [
+          1007851.2555555556,
+          1009793.088888889
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/32768": {
+        "median_ns": 1644743.7590909093,
+        "median_ci95_ns": [
+          1644041.6363636365,
+          1648046.8863636362
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/1": {
+        "median_ns": 257957.0517605634,
+        "median_ci95_ns": [
+          257262.6103286385,
+          258155.9020344288
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16383": {
+        "median_ns": 1478546.3505494506,
+        "median_ci95_ns": [
+          1477809.8461538462,
+          1479375.7064102564
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16384": {
+        "median_ns": 855693.8244047619,
+        "median_ci95_ns": [
+          854843.9387755102,
+          858933.7936507936
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16385": {
+        "median_ns": 1029075.4317129629,
+        "median_ci95_ns": [
+          1028591.6638888889,
+          1029587.2142857143
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/32768": {
+        "median_ns": 1648702.451298701,
+        "median_ci95_ns": [
+          1647697.4065656564,
+          1650401.9356060605
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/0": {
+        "median_ns": 8656619.083333332,
+        "median_ci95_ns": [
+          8644636.485714287,
+          8692963.185185187
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/1": {
+        "median_ns": 5854874.09375,
+        "median_ci95_ns": [
+          5640044.978125,
+          5865903.9375
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/2": {
+        "median_ns": 14379647.483333334,
+        "median_ci95_ns": [
+          14282971.125,
+          14516878.5625
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/63": {
+        "median_ns": 34489142.26428571,
+        "median_ci95_ns": [
+          34423786.80555555,
+          34633411.0
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/64": {
+        "median_ns": 34042177.21666667,
+        "median_ci95_ns": [
+          33914262.0,
+          34520840.8
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/65": {
+        "median_ns": 38815513.333333336,
+        "median_ci95_ns": [
+          38618520.833333336,
+          39015897.0
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/0": {
+        "median_ns": 1098580.0776785715,
+        "median_ci95_ns": [
+          1088301.4375,
+          1129780.5416666667
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/1": {
+        "median_ns": 1279086.1098901099,
+        "median_ci95_ns": [
+          1222250.1367521368,
+          1281777.9487179487
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/2": {
+        "median_ns": 2251696.4135802467,
+        "median_ci95_ns": [
+          2225168.5888888887,
+          2274195.787698413
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/63": {
+        "median_ns": 20564144.854166664,
+        "median_ci95_ns": [
+          20463032.933333334,
+          20749631.416666664
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/64": {
+        "median_ns": 20269431.57142857,
+        "median_ci95_ns": [
+          20173911.0,
+          20301391.5
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/65": {
+        "median_ns": 22449508.819444444,
+        "median_ci95_ns": [
+          22334333.27142857,
+          24086749.333333332
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/0": {
+        "median_ns": 405963353.5,
+        "median_ci95_ns": [
+          405149834.0,
+          407449220.0
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/1": {
+        "median_ns": 406565242.5,
+        "median_ci95_ns": [
+          405425588.0,
+          408093764.5
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/2": {
+        "median_ns": 812924586.0,
+        "median_ci95_ns": [
+          809703361.5,
+          815664514.0
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/0": {
+        "median_ns": 6777451.561111111,
+        "median_ci95_ns": [
+          6695047.833333333,
+          6872978.958333333
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/1": {
+        "median_ns": 7561049.833333334,
+        "median_ci95_ns": [
+          7500696.48888889,
+          7622018.166666667
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/2": {
+        "median_ns": 14054836.697916668,
+        "median_ci95_ns": [
+          14002302.916666666,
+          14093641.5
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/0": {
+        "median_ns": 183058.37589285715,
+        "median_ci95_ns": [
+          182905.7361516035,
+          183117.6843537415
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/1": {
+        "median_ns": 487508.1552631579,
+        "median_ci95_ns": [
+          487061.384868421,
+          487684.92631578946
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/2": {
+        "median_ns": 785498.1014492754,
+        "median_ci95_ns": [
+          784811.2888198758,
+          790753.0862318841
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/63": {
+        "median_ns": 15247500.863095239,
+        "median_ci95_ns": [
+          15239373.95,
+          15318643.75
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/64": {
+        "median_ns": 15305467.4375,
+        "median_ci95_ns": [
+          15270817.666666666,
+          15381808.114285715
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/65": {
+        "median_ns": 16460535.81875,
+        "median_ci95_ns": [
+          16434304.0,
+          16558197.083333334
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/0": {
+        "median_ns": 189810.1956140351,
+        "median_ci95_ns": [
+          189682.73567251462,
+          190177.69981203007
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/1": {
+        "median_ns": 503560.9417438272,
+        "median_ci95_ns": [
+          502726.44212962966,
+          503775.2795138889
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/2": {
+        "median_ns": 804757.5869565217,
+        "median_ci95_ns": [
+          803189.3739130435,
+          809229.4758454107
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/63": {
+        "median_ns": 15569426.3125,
+        "median_ci95_ns": [
+          15537421.63095238,
+          15603764.166666666
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/64": {
+        "median_ns": 15436469.166666668,
+        "median_ci95_ns": [
+          15385285.95,
+          15594895.819444444
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/65": {
+        "median_ns": 17042684.6875,
+        "median_ci95_ns": [
+          17011619.8,
+          17052885.479166664
+        ]
+      }
+    },
+    "c10base-r3": {
+      "verified_bare_group_reads/local-packed/readers_1/1": {
+        "median_ns": 6131862.09375,
+        "median_ci95_ns": [
+          6103528.861111111,
+          6402172.833333333
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16383": {
+        "median_ns": 4819470.78125,
+        "median_ci95_ns": [
+          4615655.986111111,
+          4849245.0
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16384": {
+        "median_ns": 4277273.6875,
+        "median_ci95_ns": [
+          4207424.5,
+          4447497.0
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16385": {
+        "median_ns": 12926547.1875,
+        "median_ci95_ns": [
+          12906733.410714285,
+          13178100.309027778
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/32768": {
+        "median_ns": 13761960.75,
+        "median_ci95_ns": [
+          13436044.5625,
+          13821566.25
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/1": {
+        "median_ns": 850062.5763888889,
+        "median_ci95_ns": [
+          848965.2780303031,
+          857010.3560606061
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16383": {
+        "median_ns": 2262307.29375,
+        "median_ci95_ns": [
+          2257936.0,
+          2268249.520833333
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16384": {
+        "median_ns": 1632945.1738636363,
+        "median_ci95_ns": [
+          1627673.1515151516,
+          1635427.2424242424
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16385": {
+        "median_ns": 2361020.301388889,
+        "median_ci95_ns": [
+          2346517.734375,
+          2384121.447916667
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/32768": {
+        "median_ns": 3097328.779761905,
+        "median_ci95_ns": [
+          2985789.0,
+          3146533.433333333
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_1/16384": {
+        "median_ns": 408390370.5,
+        "median_ci95_ns": [
+          407936728.0,
+          410451944.0
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_1/16385": {
+        "median_ns": 680161886.0,
+        "median_ci95_ns": [
+          675979958.0,
+          681924035.0
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_64/16384": {
+        "median_ns": 8296975.277777778,
+        "median_ci95_ns": [
+          8286346.458333333,
+          8309292.508333333
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_64/16385": {
+        "median_ns": 12724882.1,
+        "median_ci95_ns": [
+          12705666.125,
+          12760838.785714285
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/1": {
+        "median_ns": 250554.81018518517,
+        "median_ci95_ns": [
+          250112.29340277775,
+          253567.92824074073
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16383": {
+        "median_ns": 1470077.053846154,
+        "median_ci95_ns": [
+          1469417.2846153846,
+          1470493.0515109892
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16384": {
+        "median_ns": 845212.1026077098,
+        "median_ci95_ns": [
+          844293.2619047619,
+          847859.130952381
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16385": {
+        "median_ns": 1002231.3314814814,
+        "median_ci95_ns": [
+          1001867.71875,
+          1002811.7111111111
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/32768": {
+        "median_ns": 1630945.8354978357,
+        "median_ci95_ns": [
+          1630037.9828282828,
+          1631891.8409090908
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/1": {
+        "median_ns": 257817.49706572772,
+        "median_ci95_ns": [
+          257460.39084507042,
+          258021.1097026604
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16383": {
+        "median_ns": 1480024.1007326008,
+        "median_ci95_ns": [
+          1479438.0865384615,
+          1480349.2572649573
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16384": {
+        "median_ns": 856407.9166666667,
+        "median_ci95_ns": [
+          855484.7777777778,
+          858628.8095238095
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16385": {
+        "median_ns": 1023080.4722222222,
+        "median_ci95_ns": [
+          1020935.3580246913,
+          1027011.7361111111
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/32768": {
+        "median_ns": 1648262.1038961038,
+        "median_ci95_ns": [
+          1647497.8147727272,
+          1649619.6363636365
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/0": {
+        "median_ns": 8636108.25,
+        "median_ci95_ns": [
+          8566454.817460317,
+          8649002.78888889
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/1": {
+        "median_ns": 6855426.1,
+        "median_ci95_ns": [
+          5909593.266666667,
+          6860412.0507936515
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/2": {
+        "median_ns": 14511712.654761905,
+        "median_ci95_ns": [
+          14392638.638888888,
+          14595030.925
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/63": {
+        "median_ns": 34493664.71666667,
+        "median_ci95_ns": [
+          34426028.5,
+          34592591.16428571
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/64": {
+        "median_ns": 34395989.5,
+        "median_ci95_ns": [
+          34251212.222222224,
+          34523220.93571429
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/65": {
+        "median_ns": 39059346.0,
+        "median_ci95_ns": [
+          38863216.83333333,
+          39274748.33333333
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/0": {
+        "median_ns": 1113541.046875,
+        "median_ci95_ns": [
+          1094979.4930555555,
+          1121438.1666666667
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/1": {
+        "median_ns": 1168202.5540816328,
+        "median_ci95_ns": [
+          1167101.6452380952,
+          1170310.9761904762
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/2": {
+        "median_ns": 2261229.2314814813,
+        "median_ci95_ns": [
+          2225045.587301587,
+          2333800.2
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/63": {
+        "median_ns": 20577476.333333336,
+        "median_ci95_ns": [
+          20433022.444444444,
+          20743144.625
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/64": {
+        "median_ns": 20184597.333333336,
+        "median_ci95_ns": [
+          20108550.7,
+          20298610.4375
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/65": {
+        "median_ns": 22721812.476190478,
+        "median_ci95_ns": [
+          22390775.777777776,
+          23766509.333333332
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/0": {
+        "median_ns": 406017390.5,
+        "median_ci95_ns": [
+          403211682.0,
+          407139499.0
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/1": {
+        "median_ns": 407901738.0,
+        "median_ci95_ns": [
+          406063908.5,
+          409587723.0
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/2": {
+        "median_ns": 816351362.5,
+        "median_ci95_ns": [
+          815095127.0,
+          817999787.0
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/0": {
+        "median_ns": 6756748.033333333,
+        "median_ci95_ns": [
+          6686154.75,
+          6796417.027777778
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/1": {
+        "median_ns": 7523969.625,
+        "median_ci95_ns": [
+          7489927.416666667,
+          7565621.833333333
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/2": {
+        "median_ns": 14042430.95,
+        "median_ci95_ns": [
+          13933148.651785715,
+          14084637.5
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/0": {
+        "median_ns": 181278.2,
+        "median_ci95_ns": [
+          181018.744,
+          182882.303125
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/1": {
+        "median_ns": 486592.7616959064,
+        "median_ci95_ns": [
+          485910.18026315793,
+          490816.1744360902
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/2": {
+        "median_ns": 779792.9508928572,
+        "median_ci95_ns": [
+          777781.6333333333,
+          782465.8296875
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/63": {
+        "median_ns": 15275620.208333334,
+        "median_ci95_ns": [
+          15243614.0,
+          15361914.7
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/64": {
+        "median_ns": 15284251.541666668,
+        "median_ci95_ns": [
+          15273047.5,
+          15301865.866666667
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/65": {
+        "median_ns": 16461777.35,
+        "median_ci95_ns": [
+          16436443.145833332,
+          16574293.7125
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/0": {
+        "median_ns": 184759.19896907217,
+        "median_ci95_ns": [
+          184388.0294243986,
+          184897.36655211914
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/1": {
+        "median_ns": 501906.15142746916,
+        "median_ci95_ns": [
+          500683.9944444444,
+          507661.4064814815
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/2": {
+        "median_ns": 801075.2173913044,
+        "median_ci95_ns": [
+          800388.9789510006,
+          804685.3565217392
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/63": {
+        "median_ns": 15528466.058333334,
+        "median_ci95_ns": [
+          15514109.322916668,
+          15564292.5
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/64": {
+        "median_ns": 15486296.65625,
+        "median_ci95_ns": [
+          15452214.125,
+          15580676.767857142
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/65": {
+        "median_ns": 17006401.645833336,
+        "median_ci95_ns": [
+          16979358.275,
+          17020290.5
+        ]
+      }
+    },
+    "c10base-r4": {
+      "verified_bare_group_reads/local-packed/readers_1/1": {
+        "median_ns": 6038402.5,
+        "median_ci95_ns": [
+          5470378.107142857,
+          6059625.175
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16383": {
+        "median_ns": 4763569.675,
+        "median_ci95_ns": [
+          4501953.53125,
+          4777205.875
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16384": {
+        "median_ns": 6586771.982142857,
+        "median_ci95_ns": [
+          6581380.85,
+          6603308.694444444
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16385": {
+        "median_ns": 14693719.28125,
+        "median_ci95_ns": [
+          14253520.5,
+          14732683.9
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/32768": {
+        "median_ns": 14039489.0625,
+        "median_ci95_ns": [
+          14014024.875,
+          14080244.40625
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/1": {
+        "median_ns": 851226.2250000001,
+        "median_ci95_ns": [
+          849584.3560606061,
+          852772.7012987013
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16383": {
+        "median_ns": 2262197.380208333,
+        "median_ci95_ns": [
+          2258722.8526785714,
+          2268684.8
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16384": {
+        "median_ns": 1481761.5317460317,
+        "median_ci95_ns": [
+          1479248.7916666667,
+          1483292.6666666667
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16385": {
+        "median_ns": 2403952.5625,
+        "median_ci95_ns": [
+          2390893.375,
+          2431399.1430555554
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/32768": {
+        "median_ns": 3095649.1958333333,
+        "median_ci95_ns": [
+          3050624.074074074,
+          3103518.3333333335
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_1/16384": {
+        "median_ns": 410635339.0,
+        "median_ci95_ns": [
+          408708205.0,
+          411591048.0
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_1/16385": {
+        "median_ns": 680559728.5,
+        "median_ci95_ns": [
+          679710573.0,
+          682500012.5
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_64/16384": {
+        "median_ns": 8233417.518518519,
+        "median_ci95_ns": [
+          8187310.933333334,
+          8279965.233333333
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_64/16385": {
+        "median_ns": 12759157.958333332,
+        "median_ci95_ns": [
+          12709208.1,
+          12793985.7
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/1": {
+        "median_ns": 242631.91228070174,
+        "median_ci95_ns": [
+          242338.4822368421,
+          243623.1342105263
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16383": {
+        "median_ns": 1466113.769230769,
+        "median_ci95_ns": [
+          1465453.5384615385,
+          1472306.473076923
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16384": {
+        "median_ns": 841344.3926136363,
+        "median_ci95_ns": [
+          841127.2207792208,
+          841877.8939393939
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16385": {
+        "median_ns": 996283.1805555555,
+        "median_ci95_ns": [
+          995610.0333333333,
+          997022.6111111111
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/32768": {
+        "median_ns": 1628152.235858586,
+        "median_ci95_ns": [
+          1627118.446969697,
+          1637495.2556818181
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/1": {
+        "median_ns": 253879.675154321,
+        "median_ci95_ns": [
+          253689.77517361112,
+          254429.12152777778
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16383": {
+        "median_ns": 1477075.5934065934,
+        "median_ci95_ns": [
+          1476366.9631410257,
+          1477985.3769230768
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16384": {
+        "median_ns": 852811.6414965987,
+        "median_ci95_ns": [
+          852367.5396825396,
+          853678.369047619
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16385": {
+        "median_ns": 1020456.0055555555,
+        "median_ci95_ns": [
+          1019755.6930555555,
+          1027558.111111111
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/32768": {
+        "median_ns": 1646873.7,
+        "median_ci95_ns": [
+          1646428.5606060605,
+          1647234.4545454546
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/0": {
+        "median_ns": 8591425.477777777,
+        "median_ci95_ns": [
+          8570177.888888888,
+          8633071.75
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/1": {
+        "median_ns": 5729381.293333333,
+        "median_ci95_ns": [
+          5669847.35079365,
+          5738274.15
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/2": {
+        "median_ns": 14551038.5,
+        "median_ci95_ns": [
+          14460380.25,
+          15258051.0
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/63": {
+        "median_ns": 34232912.08333333,
+        "median_ci95_ns": [
+          34169211.0,
+          34317779.92361111
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/64": {
+        "median_ns": 34571496.18055555,
+        "median_ci95_ns": [
+          34364124.56428571,
+          34928998.33333333
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/65": {
+        "median_ns": 38487021.0,
+        "median_ci95_ns": [
+          38408510.0,
+          38555478.666666664
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/0": {
+        "median_ns": 1105524.7408854165,
+        "median_ci95_ns": [
+          1098644.5190972222,
+          1112042.925
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/1": {
+        "median_ns": 1243313.37372449,
+        "median_ci95_ns": [
+          1237933.863095238,
+          1247658.6071428573
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/2": {
+        "median_ns": 2257495.9444444445,
+        "median_ci95_ns": [
+          2220170.972222222,
+          2315625.5709876544
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/63": {
+        "median_ns": 20337097.39285714,
+        "median_ci95_ns": [
+          20290898.425,
+          20400634.55
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/64": {
+        "median_ns": 20195193.023809522,
+        "median_ci95_ns": [
+          20127841.95,
+          20297940.625
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/65": {
+        "median_ns": 22563327.444444444,
+        "median_ci95_ns": [
+          22393537.0,
+          23235406.85
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/0": {
+        "median_ns": 405601070.0,
+        "median_ci95_ns": [
+          404128698.0,
+          406141831.5
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/1": {
+        "median_ns": 408512337.5,
+        "median_ci95_ns": [
+          407742976.5,
+          409174648.0
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/2": {
+        "median_ns": 813202136.0,
+        "median_ci95_ns": [
+          811257281.5,
+          815847805.5
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/0": {
+        "median_ns": 6765261.333333333,
+        "median_ci95_ns": [
+          6699771.416666667,
+          6816172.738888889
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/1": {
+        "median_ns": 7548614.683333334,
+        "median_ci95_ns": [
+          7524534.633333333,
+          7585722.388888889
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/2": {
+        "median_ns": 14075215.222222222,
+        "median_ci95_ns": [
+          14045248.775,
+          14137435.238095239
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/0": {
+        "median_ns": 180509.39603960398,
+        "median_ci95_ns": [
+          180374.89900990098,
+          182389.18371837185
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/1": {
+        "median_ns": 484912.42763157893,
+        "median_ci95_ns": [
+          483889.0789473684,
+          487419.71271929826
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/2": {
+        "median_ns": 779506.9229166666,
+        "median_ci95_ns": [
+          778925.7583333333,
+          780042.5517939816
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/63": {
+        "median_ns": 15161929.71875,
+        "median_ci95_ns": [
+          15154031.142857144,
+          15173706.916666668
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/64": {
+        "median_ns": 15305778.370535715,
+        "median_ci95_ns": [
+          15275252.875,
+          15325988.85
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/65": {
+        "median_ns": 16771242.075,
+        "median_ci95_ns": [
+          16764440.0,
+          16901254.1875
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/0": {
+        "median_ns": 184004.27623906705,
+        "median_ci95_ns": [
+          183911.7899659864,
+          184083.4013605442
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/1": {
+        "median_ns": 502455.152027027,
+        "median_ci95_ns": [
+          502233.25225225225,
+          507517.8573573574
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/2": {
+        "median_ns": 803331.6168478262,
+        "median_ci95_ns": [
+          802178.6413043479,
+          804690.4391304348
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/63": {
+        "median_ns": 15594490.299107142,
+        "median_ci95_ns": [
+          15563329.5,
+          15679876.055555556
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/64": {
+        "median_ns": 15494467.013888888,
+        "median_ci95_ns": [
+          15465100.71875,
+          15525992.375
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/65": {
+        "median_ns": 17193990.1,
+        "median_ci95_ns": [
+          17162065.01785714,
+          17258418.666666668
+        ]
+      }
+    },
+    "c10cand-r1": {
+      "verified_bare_group_reads/local-packed/readers_1/1": {
+        "median_ns": 3464428.01,
+        "median_ci95_ns": [
+          3350829.1500000004,
+          3636442.645238095
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16383": {
+        "median_ns": 4203486.370833334,
+        "median_ci95_ns": [
+          4193290.196666667,
+          4209755.185714286
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16384": {
+        "median_ns": 3071403.1319444445,
+        "median_ci95_ns": [
+          2877803.113756614,
+          3165711.5666666664
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16385": {
+        "median_ns": 10805914.357142858,
+        "median_ci95_ns": [
+          10800291.055555556,
+          10827988.541666666
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/32768": {
+        "median_ns": 12433948.6,
+        "median_ci95_ns": [
+          12410376.75,
+          12460640.222222222
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/1": {
+        "median_ns": 668736.1141975308,
+        "median_ci95_ns": [
+          667619.2055555555,
+          671547.8209876544
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16383": {
+        "median_ns": 2149342.75308642,
+        "median_ci95_ns": [
+          2148082.185185185,
+          2152240.111111111
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16384": {
+        "median_ns": 1407984.5294871796,
+        "median_ci95_ns": [
+          1405280.8956043955,
+          1411374.1025641025
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16385": {
+        "median_ns": 2236466.1875,
+        "median_ci95_ns": [
+          2229231.109375,
+          2251383.625
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/32768": {
+        "median_ns": 2932123.6785714286,
+        "median_ci95_ns": [
+          2897600.777777778,
+          2935972.020408163
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_1/16384": {
+        "median_ns": 274178481.0,
+        "median_ci95_ns": [
+          272001596.0,
+          275144681.0
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_1/16385": {
+        "median_ns": 544962344.0,
+        "median_ci95_ns": [
+          543089279.0,
+          545688999.5
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_64/16384": {
+        "median_ns": 6193088.30952381,
+        "median_ci95_ns": [
+          6167705.822222222,
+          6234890.25
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_64/16385": {
+        "median_ns": 10622498.857142858,
+        "median_ci95_ns": [
+          10613251.1875,
+          10675887.666666666
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/1": {
+        "median_ns": 226699.93515625002,
+        "median_ci95_ns": [
+          226554.04761904763,
+          227372.775
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16383": {
+        "median_ns": 1453226.701923077,
+        "median_ci95_ns": [
+          1452871.0333333332,
+          1453814.2240384617
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16384": {
+        "median_ns": 830395.8775252525,
+        "median_ci95_ns": [
+          830219.9477272728,
+          830540.4772727273
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16385": {
+        "median_ns": 988095.8333333334,
+        "median_ci95_ns": [
+          987555.317361111,
+          988361.5972222222
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/32768": {
+        "median_ns": 1622544.5779220778,
+        "median_ci95_ns": [
+          1621885.5,
+          1623039.8257575757
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/1": {
+        "median_ns": 238545.0899122807,
+        "median_ci95_ns": [
+          238284.6157894737,
+          238939.14309210525
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16383": {
+        "median_ns": 1464826.9423076925,
+        "median_ci95_ns": [
+          1464274.912087912,
+          1465303.314102564
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16384": {
+        "median_ns": 843272.1547619049,
+        "median_ci95_ns": [
+          842515.6833333333,
+          854730.9904761905
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16385": {
+        "median_ns": 1003514.0907407408,
+        "median_ci95_ns": [
+          1002140.0166666667,
+          1004547.0347222222
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/32768": {
+        "median_ns": 1644886.0045454544,
+        "median_ci95_ns": [
+          1644436.8977272727,
+          1646273.3051948054
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/0": {
+        "median_ns": 8649785.177777778,
+        "median_ci95_ns": [
+          8631784.018518519,
+          8660658.5
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/1": {
+        "median_ns": 3446581.208333333,
+        "median_ci95_ns": [
+          2940621.814814815,
+          3716221.978571429
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/2": {
+        "median_ns": 14377449.875,
+        "median_ci95_ns": [
+          14296105.5,
+          14457067.898809524
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/63": {
+        "median_ns": 34505660.61607143,
+        "median_ci95_ns": [
+          34299872.4,
+          34873299.5
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/64": {
+        "median_ns": 34371797.70833333,
+        "median_ci95_ns": [
+          33942304.1,
+          34679390.666666664
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/65": {
+        "median_ns": 38850658.16666667,
+        "median_ci95_ns": [
+          38618596.333333336,
+          39021525.833333336
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/0": {
+        "median_ns": 1122168.8616071427,
+        "median_ci95_ns": [
+          1101112.9444444445,
+          1130079.5885416665
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/1": {
+        "median_ns": 1038321.0114379085,
+        "median_ci95_ns": [
+          1036857.487394958,
+          1045149.8627450981
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/2": {
+        "median_ns": 2264312.857638889,
+        "median_ci95_ns": [
+          2217672.84375,
+          2297934.71875
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/63": {
+        "median_ns": 20507437.5,
+        "median_ci95_ns": [
+          20479186.958333336,
+          20595573.5
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/64": {
+        "median_ns": 20377517.655555554,
+        "median_ci95_ns": [
+          20339294.25,
+          20479973.833333336
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/65": {
+        "median_ns": 22494819.873015873,
+        "median_ci95_ns": [
+          22395497.8,
+          23302314.5
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/0": {
+        "median_ns": 406047486.0,
+        "median_ci95_ns": [
+          404714717.0,
+          408081639.5
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/1": {
+        "median_ns": 272953338.5,
+        "median_ci95_ns": [
+          271859954.5,
+          274063233.0
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/2": {
+        "median_ns": 811079719.0,
+        "median_ci95_ns": [
+          809905507.0,
+          813701492.5
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/0": {
+        "median_ns": 6800844.1875,
+        "median_ci95_ns": [
+          6735432.527777778,
+          6856095.577380952
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/1": {
+        "median_ns": 5316177.6375,
+        "median_ci95_ns": [
+          5281902.482142857,
+          5338465.53125
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/2": {
+        "median_ns": 14058666.083333332,
+        "median_ci95_ns": [
+          13966841.833333334,
+          14138386.5
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/0": {
+        "median_ns": 179436.75247524754,
+        "median_ci95_ns": [
+          179324.59653465345,
+          179810.14957567185
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/1": {
+        "median_ns": 469461.7636752137,
+        "median_ci95_ns": [
+          469212.7845695971,
+          469668.9145299145
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/2": {
+        "median_ns": 773157.4208333334,
+        "median_ci95_ns": [
+          772387.3055555555,
+          774564.7135416666
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/63": {
+        "median_ns": 15374326.206349205,
+        "median_ci95_ns": [
+          15362916.65,
+          15533373.20625
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/64": {
+        "median_ns": 15360660.25,
+        "median_ci95_ns": [
+          15351949.104166668,
+          15387256.0
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/65": {
+        "median_ns": 16653076.170634922,
+        "median_ci95_ns": [
+          16642128.833333334,
+          16712441.95
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/0": {
+        "median_ns": 185096.22103583702,
+        "median_ci95_ns": [
+          184981.81214203895,
+          185501.03865979382
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/1": {
+        "median_ns": 487813.37609649124,
+        "median_ci95_ns": [
+          487606.04495614034,
+          487908.9657894737
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/2": {
+        "median_ns": 801357.4482401656,
+        "median_ci95_ns": [
+          799826.829710145,
+          804465.2801932367
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/63": {
+        "median_ns": 15581447.183333334,
+        "median_ci95_ns": [
+          15566313.78125,
+          15600412.0
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/64": {
+        "median_ns": 15518646.367857143,
+        "median_ci95_ns": [
+          15506921.9,
+          15528754.652777776
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/65": {
+        "median_ns": 17348894.583333336,
+        "median_ci95_ns": [
+          17315212.9,
+          17429898.40625
+        ]
+      }
+    },
+    "c10cand-r2": {
+      "verified_bare_group_reads/local-packed/readers_1/1": {
+        "median_ns": 4252978.208333333,
+        "median_ci95_ns": [
+          3997196.797222222,
+          4271256.766666667
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16383": {
+        "median_ns": 3944915.95,
+        "median_ci95_ns": [
+          3927633.303571428,
+          3977619.1555555556
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16384": {
+        "median_ns": 3258671.335978836,
+        "median_ci95_ns": [
+          3215128.25,
+          3266166.545138889
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16385": {
+        "median_ns": 12849267.7,
+        "median_ci95_ns": [
+          11310436.5,
+          12984505.458333332
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/32768": {
+        "median_ns": 12345323.32142857,
+        "median_ci95_ns": [
+          11882510.805555556,
+          12429938.833333332
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/1": {
+        "median_ns": 677309.175,
+        "median_ci95_ns": [
+          671967.3894767783,
+          678422.8888888889
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16383": {
+        "median_ns": 2026089.9490740742,
+        "median_ci95_ns": [
+          2021217.4,
+          2027793.0238095238
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16384": {
+        "median_ns": 1524509.5208333335,
+        "median_ci95_ns": [
+          1503023.5925925926,
+          1527518.5520833335
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16385": {
+        "median_ns": 2218781.4107142854,
+        "median_ci95_ns": [
+          2177046.325,
+          2223361.5
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/32768": {
+        "median_ns": 2826986.345238095,
+        "median_ci95_ns": [
+          2804852.0826530615,
+          2860542.0714285714
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_1/16384": {
+        "median_ns": 272675166.5,
+        "median_ci95_ns": [
+          271417213.0,
+          274827455.0
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_1/16385": {
+        "median_ns": 545925305.5,
+        "median_ci95_ns": [
+          543976396.0,
+          546646886.5
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_64/16384": {
+        "median_ns": 6212541.0981481485,
+        "median_ci95_ns": [
+          6178454.666666667,
+          6258237.666666667
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_64/16385": {
+        "median_ns": 10637800.8,
+        "median_ci95_ns": [
+          10614152.527777778,
+          10660243.0
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/1": {
+        "median_ns": 222794.20782520325,
+        "median_ci95_ns": [
+          222529.44146341464,
+          223595.8780487805
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16383": {
+        "median_ns": 1448969.358974359,
+        "median_ci95_ns": [
+          1448637.6849816851,
+          1453321.15
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16384": {
+        "median_ns": 823000.3590909091,
+        "median_ci95_ns": [
+          822247.0113636364,
+          823160.7946969697
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16385": {
+        "median_ns": 979398.7684210526,
+        "median_ci95_ns": [
+          979068.6842105263,
+          980744.7631578947
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/32768": {
+        "median_ns": 1609097.4792207791,
+        "median_ci95_ns": [
+          1608546.7,
+          1609659.253787879
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/1": {
+        "median_ns": 236908.80098684208,
+        "median_ci95_ns": [
+          236654.06798245615,
+          237414.72575187968
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16383": {
+        "median_ns": 1462870.362179487,
+        "median_ci95_ns": [
+          1462540.6703296704,
+          1463835.935897436
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16384": {
+        "median_ns": 837718.9292929294,
+        "median_ci95_ns": [
+          836667.5772727273,
+          839409.6875
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16385": {
+        "median_ns": 1001491.3592592592,
+        "median_ci95_ns": [
+          1000292.899382716,
+          1002145.9047619049
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/32768": {
+        "median_ns": 1624068.0916305915,
+        "median_ci95_ns": [
+          1622905.1818181819,
+          1626129.3636363635
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/0": {
+        "median_ns": 8781587.451388888,
+        "median_ci95_ns": [
+          8772576.922619049,
+          8809345.055555556
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/1": {
+        "median_ns": 2696760.385714286,
+        "median_ci95_ns": [
+          2659074.3333333335,
+          2742248.1428571427
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/2": {
+        "median_ns": 14200122.910714285,
+        "median_ci95_ns": [
+          14185069.6,
+          14283457.0625
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/63": {
+        "median_ns": 34480380.5,
+        "median_ci95_ns": [
+          34120468.875,
+          34731611.2
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/64": {
+        "median_ns": 33792837.9,
+        "median_ci95_ns": [
+          33656636.25,
+          34368306.64583333
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/65": {
+        "median_ns": 39282636.333333336,
+        "median_ci95_ns": [
+          38850860.666666664,
+          39493953.666666664
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/0": {
+        "median_ns": 1092913.1113445377,
+        "median_ci95_ns": [
+          1088806.2588235294,
+          1095335.973856209
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/1": {
+        "median_ns": 1158121.79921875,
+        "median_ci95_ns": [
+          1156916.6875,
+          1164500.5
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/2": {
+        "median_ns": 2251949.6071428573,
+        "median_ci95_ns": [
+          2219709.1666666665,
+          2297585.4814814813
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/63": {
+        "median_ns": 20680768.333333336,
+        "median_ci95_ns": [
+          20586830.714285713,
+          20777265.263888888
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/64": {
+        "median_ns": 20628487.45,
+        "median_ci95_ns": [
+          20565781.75,
+          20758464.25
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/65": {
+        "median_ns": 22765700.0,
+        "median_ci95_ns": [
+          22687469.2,
+          23055880.5
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/0": {
+        "median_ns": 407236415.0,
+        "median_ci95_ns": [
+          406109446.0,
+          408614505.0
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/1": {
+        "median_ns": 273596219.5,
+        "median_ci95_ns": [
+          270766515.0,
+          273888209.0
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/2": {
+        "median_ns": 817295151.0,
+        "median_ci95_ns": [
+          814836695.0,
+          818031852.0
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/0": {
+        "median_ns": 6859817.715277778,
+        "median_ci95_ns": [
+          6745110.605555556,
+          6998755.958333333
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/1": {
+        "median_ns": 5350804.291666666,
+        "median_ci95_ns": [
+          5300624.583333333,
+          5393365.3125
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/2": {
+        "median_ns": 14054139.425,
+        "median_ci95_ns": [
+          13999853.5,
+          14142226.666666666
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/0": {
+        "median_ns": 179365.88571428572,
+        "median_ci95_ns": [
+          179206.39,
+          179483.38166666665
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/1": {
+        "median_ns": 465606.93621794874,
+        "median_ci95_ns": [
+          464120.1794871795,
+          469555.20146520145
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/2": {
+        "median_ns": 773249.1861111112,
+        "median_ci95_ns": [
+          772597.3472222222,
+          773762.4583333334
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/63": {
+        "median_ns": 15165171.25,
+        "median_ci95_ns": [
+          15156352.270833332,
+          15205133.222222222
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/64": {
+        "median_ns": 15421298.982142858,
+        "median_ci95_ns": [
+          15392879.25,
+          15458462.5
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/65": {
+        "median_ns": 16607955.11904762,
+        "median_ci95_ns": [
+          16590676.125,
+          16808071.3
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/0": {
+        "median_ns": 183863.10112973762,
+        "median_ci95_ns": [
+          183765.51224489795,
+          183986.70153061225
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/1": {
+        "median_ns": 483989.5944548872,
+        "median_ci95_ns": [
+          483811.5153508772,
+          484655.21345029236
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/2": {
+        "median_ns": 806192.8357487923,
+        "median_ci95_ns": [
+          804684.4720496894,
+          806801.6086956522
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/63": {
+        "median_ns": 15602859.799107142,
+        "median_ci95_ns": [
+          15592187.9,
+          15648614.4375
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/64": {
+        "median_ns": 15467216.489583332,
+        "median_ci95_ns": [
+          15430721.8,
+          15595913.6
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/65": {
+        "median_ns": 17183154.0,
+        "median_ci95_ns": [
+          17155384.25,
+          17204776.214285713
+        ]
+      }
+    },
+    "c10cand-r3": {
+      "verified_bare_group_reads/local-packed/readers_1/1": {
+        "median_ns": 4286352.845,
+        "median_ci95_ns": [
+          4274560.652380953,
+          4294089.2
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16383": {
+        "median_ns": 4199904.741666667,
+        "median_ci95_ns": [
+          4195725.780952381,
+          4213216.109999999
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16384": {
+        "median_ns": 3550496.173611111,
+        "median_ci95_ns": [
+          3536125.576388889,
+          3555457.2976190476
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16385": {
+        "median_ns": 13024387.25,
+        "median_ci95_ns": [
+          13002240.25,
+          13059569.9875
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/32768": {
+        "median_ns": 12390690.975,
+        "median_ci95_ns": [
+          12363248.583333332,
+          12460074.76984127
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/1": {
+        "median_ns": 673106.0254629629,
+        "median_ci95_ns": [
+          668923.7530864198,
+          678900.2514403292
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16383": {
+        "median_ns": 2151885.436111111,
+        "median_ci95_ns": [
+          2148788.587301587,
+          2156422.944444444
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16384": {
+        "median_ns": 1524566.7416666667,
+        "median_ci95_ns": [
+          1493318.3912037038,
+          1528723.15625
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16385": {
+        "median_ns": 2201412.979166667,
+        "median_ci95_ns": [
+          2192555.2698412696,
+          2217280.765432099
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/32768": {
+        "median_ns": 2864054.8367346935,
+        "median_ci95_ns": [
+          2855314.130952381,
+          2875548.2817460317
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_1/16384": {
+        "median_ns": 274064787.0,
+        "median_ci95_ns": [
+          273000939.0,
+          274699649.0
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_1/16385": {
+        "median_ns": 544026572.0,
+        "median_ci95_ns": [
+          542474110.0,
+          545131845.5
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_64/16384": {
+        "median_ns": 6208819.4801587295,
+        "median_ci95_ns": [
+          6174394.75,
+          6259051.666666667
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_64/16385": {
+        "median_ns": 10626077.166666668,
+        "median_ci95_ns": [
+          10584773.05,
+          10646856.833333334
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/1": {
+        "median_ns": 236116.05256410257,
+        "median_ci95_ns": [
+          235991.1076923077,
+          236319.06837606838
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16383": {
+        "median_ns": 1453209.1884615384,
+        "median_ci95_ns": [
+          1452846.5213675213,
+          1454303.2307692308
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16384": {
+        "median_ns": 838789.6287878788,
+        "median_ci95_ns": [
+          838397.696969697,
+          840507.5909090908
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16385": {
+        "median_ns": 991524.6851851852,
+        "median_ci95_ns": [
+          991276.9341269841,
+          992038.5555555555
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/32768": {
+        "median_ns": 1640076.1,
+        "median_ci95_ns": [
+          1639444.7045454546,
+          1646397.2045454546
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/1": {
+        "median_ns": 239044.04761904763,
+        "median_ci95_ns": [
+          238681.9927849928,
+          239419.29924242425
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16383": {
+        "median_ns": 1467665.701923077,
+        "median_ci95_ns": [
+          1467126.8901098901,
+          1471544.294871795
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16384": {
+        "median_ns": 852281.75,
+        "median_ci95_ns": [
+          851022.7380952381,
+          858396.9924414209
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16385": {
+        "median_ns": 1012262.0416666666,
+        "median_ci95_ns": [
+          1011695.086419753,
+          1013303.8611111111
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/32768": {
+        "median_ns": 1651168.3459595959,
+        "median_ci95_ns": [
+          1650201.7272727273,
+          1653438.2613636362
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/0": {
+        "median_ns": 6346477.583333333,
+        "median_ci95_ns": [
+          5918466.111111111,
+          7920211.652777778
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/1": {
+        "median_ns": 2881308.21875,
+        "median_ci95_ns": [
+          2872490.136111111,
+          2920653.6875
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/2": {
+        "median_ns": 13070881.833333332,
+        "median_ci95_ns": [
+          12914731.1,
+          14505807.555555556
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/63": {
+        "median_ns": 34178891.08333333,
+        "median_ci95_ns": [
+          34058870.0,
+          34318233.4625
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/64": {
+        "median_ns": 34344972.96666667,
+        "median_ci95_ns": [
+          33974528.66666667,
+          34679856.75
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/65": {
+        "median_ns": 38566877.5,
+        "median_ci95_ns": [
+          38498249.5,
+          38656892.0
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/0": {
+        "median_ns": 1118388.84375,
+        "median_ci95_ns": [
+          1104490.71875,
+          1144491.0416666667
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/1": {
+        "median_ns": 1163841.8208333333,
+        "median_ci95_ns": [
+          1162963.671875,
+          1167006.09375
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/2": {
+        "median_ns": 2269762.770833333,
+        "median_ci95_ns": [
+          2202541.1666666665,
+          2320550.0803571427
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/63": {
+        "median_ns": 20541632.388888888,
+        "median_ci95_ns": [
+          20466610.375,
+          20584389.5
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/64": {
+        "median_ns": 20400035.535714284,
+        "median_ci95_ns": [
+          20337057.333333332,
+          20467690.8
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/65": {
+        "median_ns": 23499241.25,
+        "median_ci95_ns": [
+          22836718.3,
+          24455771.111111112
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/0": {
+        "median_ns": 405709505.5,
+        "median_ci95_ns": [
+          404691186.5,
+          407238917.0
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/1": {
+        "median_ns": 272949120.5,
+        "median_ci95_ns": [
+          270563899.0,
+          273665441.0
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/2": {
+        "median_ns": 815896189.5,
+        "median_ci95_ns": [
+          813246795.0,
+          817502789.5
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/0": {
+        "median_ns": 6786257.5047619045,
+        "median_ci95_ns": [
+          6685554.444444444,
+          6815914.240740741
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/1": {
+        "median_ns": 5385154.583333334,
+        "median_ci95_ns": [
+          5300822.725,
+          5435835.84375
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/2": {
+        "median_ns": 14052327.675,
+        "median_ci95_ns": [
+          14031577.527777778,
+          14080561.05357143
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/0": {
+        "median_ns": 188233.68262411345,
+        "median_ci95_ns": [
+          187984.68971631204,
+          191696.5768321513
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/1": {
+        "median_ns": 467794.0491452991,
+        "median_ci95_ns": [
+          467550.28205128206,
+          468920.6666666667
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/2": {
+        "median_ns": 768346.0104166667,
+        "median_ci95_ns": [
+          767608.175925926,
+          768998.4761904762
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/63": {
+        "median_ns": 15498145.06875,
+        "median_ci95_ns": [
+          15490232.042857144,
+          15574150.958333334
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/64": {
+        "median_ns": 15262150.1875,
+        "median_ci95_ns": [
+          15256559.416666668,
+          15269580.402777778
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/65": {
+        "median_ns": 16603092.458333332,
+        "median_ci95_ns": [
+          16583083.457142856,
+          16846929.0
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/0": {
+        "median_ns": 185005.05034722222,
+        "median_ci95_ns": [
+          184842.671875,
+          185562.03125
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/1": {
+        "median_ns": 484798.2105263158,
+        "median_ci95_ns": [
+          484283.7039473684,
+          485110.5447368421
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/2": {
+        "median_ns": 806031.1413043479,
+        "median_ci95_ns": [
+          804262.0062111801,
+          810498.7956521739
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/63": {
+        "median_ns": 15616489.979166668,
+        "median_ci95_ns": [
+          15593248.735714287,
+          15653879.263888888
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/64": {
+        "median_ns": 15549685.388888888,
+        "median_ci95_ns": [
+          15533544.2875,
+          15598748.5625
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/65": {
+        "median_ns": 17211712.141666666,
+        "median_ci95_ns": [
+          17189059.0,
+          17240144.17777778
+        ]
+      }
+    },
+    "c10cand-r4": {
+      "verified_bare_group_reads/local-packed/readers_1/1": {
+        "median_ns": 4302614.16,
+        "median_ci95_ns": [
+          4212952.509722223,
+          4333810.0600000005
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16383": {
+        "median_ns": 4188773.758333334,
+        "median_ci95_ns": [
+          4186357.8,
+          4192931.54
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16384": {
+        "median_ns": 2872715.4958333336,
+        "median_ci95_ns": [
+          2858082.8404761907,
+          3004746.611111111
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/16385": {
+        "median_ns": 13189735.166666668,
+        "median_ci95_ns": [
+          11948568.7,
+          13579751.92857143
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_1/32768": {
+        "median_ns": 9189490.775,
+        "median_ci95_ns": [
+          9163494.1875,
+          9213872.222222222
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/1": {
+        "median_ns": 661449.6964285714,
+        "median_ci95_ns": [
+          659358.6845238095,
+          664341.8931051587
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16383": {
+        "median_ns": 2148790.5555555555,
+        "median_ci95_ns": [
+          2142594.8722222224,
+          2178576.6049382715
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16384": {
+        "median_ns": 1516448.9527777778,
+        "median_ci95_ns": [
+          1514152.75,
+          1518155.8402777778
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/16385": {
+        "median_ns": 2194248.8386243386,
+        "median_ci95_ns": [
+          2167492.8722222224,
+          2223710.5944444444
+        ]
+      },
+      "verified_bare_group_reads/local-packed/readers_64/32768": {
+        "median_ns": 2808150.177777778,
+        "median_ci95_ns": [
+          2800641.095238095,
+          2814006.1785714286
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_1/16384": {
+        "median_ns": 272680473.5,
+        "median_ci95_ns": [
+          271174217.0,
+          274036740.0
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_1/16385": {
+        "median_ns": 543519155.0,
+        "median_ci95_ns": [
+          542069869.0,
+          546788667.0
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_64/16384": {
+        "median_ns": 6174383.195238095,
+        "median_ci95_ns": [
+          6133212.185185186,
+          6221981.888888889
+        ]
+      },
+      "verified_bare_group_reads/memory-get-1ms/readers_64/16385": {
+        "median_ns": 10632487.486111112,
+        "median_ci95_ns": [
+          10614750.25,
+          10670289.875
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/1": {
+        "median_ns": 224354.38797909408,
+        "median_ci95_ns": [
+          224228.0381097561,
+          225083.75934959349
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16383": {
+        "median_ns": 1446926.730769231,
+        "median_ci95_ns": [
+          1446625.1132478632,
+          1447549.5576923075
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16384": {
+        "median_ns": 824821.4556277057,
+        "median_ci95_ns": [
+          824582.3545454545,
+          825109.2130681819
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/16385": {
+        "median_ns": 979916.8184210525,
+        "median_ci95_ns": [
+          978979.9160401003,
+          982768.6118421053
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_1/32768": {
+        "median_ns": 1605279.4772727273,
+        "median_ci95_ns": [
+          1604596.6181818182,
+          1608200.7727272727
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/1": {
+        "median_ns": 237567.4935064935,
+        "median_ci95_ns": [
+          237189.55194805196,
+          237711.03896103895
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16383": {
+        "median_ns": 1459717.8557692308,
+        "median_ci95_ns": [
+          1458922.8070818072,
+          1460479.0615384616
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16384": {
+        "median_ns": 836648.474025974,
+        "median_ci95_ns": [
+          835335.9393939395,
+          839573.7904040404
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/16385": {
+        "median_ns": 996130.5520833334,
+        "median_ci95_ns": [
+          995547.1419753087,
+          996680.5
+        ]
+      },
+      "verified_bare_group_reads/memory-loose/readers_64/32768": {
+        "median_ns": 1621807.8420454545,
+        "median_ci95_ns": [
+          1619665.878787879,
+          1629122.9545454546
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/0": {
+        "median_ns": 8254968.884920634,
+        "median_ci95_ns": [
+          8247710.666666667,
+          8382533.699999999
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/1": {
+        "median_ns": 4287453.842857143,
+        "median_ci95_ns": [
+          4275411.994444445,
+          4295909.0725
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/2": {
+        "median_ns": 14388049.25,
+        "median_ci95_ns": [
+          14336669.03888889,
+          14412094.25
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/63": {
+        "median_ns": 34593347.75,
+        "median_ci95_ns": [
+          34472076.16666667,
+          34741149.5
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/64": {
+        "median_ns": 34079467.1,
+        "median_ci95_ns": [
+          33919380.125,
+          34430126.0
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_1/65": {
+        "median_ns": 38918683.5,
+        "median_ci95_ns": [
+          38661435.0,
+          39260916.5
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/0": {
+        "median_ns": 1101228.107638889,
+        "median_ci95_ns": [
+          1091806.65,
+          1126529.0020833332
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/1": {
+        "median_ns": 1161784.765625,
+        "median_ci95_ns": [
+          1159224.4,
+          1164901.203125
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/2": {
+        "median_ns": 2302525.265625,
+        "median_ci95_ns": [
+          2264457.3875,
+          2348976.5
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/63": {
+        "median_ns": 20457168.9,
+        "median_ci95_ns": [
+          20386008.666666668,
+          20618903.222222224
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/64": {
+        "median_ns": 20271028.8,
+        "median_ci95_ns": [
+          20229802.083333336,
+          20418474.541666664
+        ]
+      },
+      "verified_manifest_reads/local-packed/readers_64/65": {
+        "median_ns": 22790720.25,
+        "median_ci95_ns": [
+          22555201.214285716,
+          23800157.75
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/0": {
+        "median_ns": 406116533.0,
+        "median_ci95_ns": [
+          405285077.0,
+          407783453.0
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/1": {
+        "median_ns": 273847066.0,
+        "median_ci95_ns": [
+          273109370.0,
+          274539167.5
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_1/2": {
+        "median_ns": 814895900.0,
+        "median_ci95_ns": [
+          813334114.0,
+          816979442.5
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/0": {
+        "median_ns": 6822777.4375,
+        "median_ci95_ns": [
+          6789020.714285715,
+          6878948.5
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/1": {
+        "median_ns": 5306910.847222222,
+        "median_ci95_ns": [
+          5296275.4375,
+          5396340.458333334
+        ]
+      },
+      "verified_manifest_reads/memory-get-1ms/readers_64/2": {
+        "median_ns": 14042212.778571427,
+        "median_ci95_ns": [
+          13981480.825,
+          14088068.25
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/0": {
+        "median_ns": 178515.8498349835,
+        "median_ci95_ns": [
+          178443.00551626593,
+          178681.73817381737
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/1": {
+        "median_ns": 471656.2205128205,
+        "median_ci95_ns": [
+          471325.10256410256,
+          472548.29615384614
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/2": {
+        "median_ns": 772239.0239583333,
+        "median_ci95_ns": [
+          772024.0916666667,
+          772707.5595238095
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/63": {
+        "median_ns": 15467398.4375,
+        "median_ci95_ns": [
+          15459506.483333334,
+          15472356.98125
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/64": {
+        "median_ns": 15383575.313492063,
+        "median_ci95_ns": [
+          15359368.875,
+          15404900.675
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_1/65": {
+        "median_ns": 16567408.347222222,
+        "median_ci95_ns": [
+          16558219.25,
+          16578255.142857144
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/0": {
+        "median_ns": 190684.46875,
+        "median_ci95_ns": [
+          190378.89285714284,
+          191231.47163120567
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/1": {
+        "median_ns": 485537.3789473684,
+        "median_ci95_ns": [
+          484876.8278508772,
+          486419.5394736842
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/2": {
+        "median_ns": 801256.231884058,
+        "median_ci95_ns": [
+          798978.1385869565,
+          807266.7119565217
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/63": {
+        "median_ns": 15569399.892857142,
+        "median_ci95_ns": [
+          15564653.35,
+          15582161.4375
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/64": {
+        "median_ns": 15468524.5875,
+        "median_ci95_ns": [
+          15451400.59375,
+          15508582.666666666
+        ]
+      },
+      "verified_manifest_reads/memory-loose/readers_64/65": {
+        "median_ns": 17105453.151785716,
+        "median_ci95_ns": [
+          17088023.95,
+          17125212.375
+        ]
+      }
+    }
+  }
+}
