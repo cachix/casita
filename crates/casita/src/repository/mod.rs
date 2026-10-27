@@ -337,6 +337,8 @@ mod closure_benchmarks;
 mod collection_benchmark;
 #[cfg(test)]
 mod fsck_benchmark;
+#[cfg(all(test, feature = "s3"))]
+mod wal3_publication_benchmark;
 
 #[cfg(test)]
 mod tests;

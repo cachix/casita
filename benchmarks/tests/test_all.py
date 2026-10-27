@@ -11,6 +11,19 @@ from benchmarks import all as runner
 from benchmarks import cli
 
 class AllSuiteTests(unittest.TestCase):
+    def test_wal3_checkpoint_probe_builds_and_receives_the_library_probe(self):
+        commands = runner.build_commands(["wal3-publication-checkpoints"], pathlib.Path("/build"))
+        self.assertEqual(len(commands), 1)
+        self.assertIn("--lib", commands[0])
+        arguments = runner.suite_arguments("wal3-publication-checkpoints", pathlib.Path("/binaries"), "smoke", 1)
+        self.assertIn("/binaries/casita-lib-test", arguments)
+        # Smoke keeps one multi-block corpus; the default adds a multi-shard one.
+        self.assertEqual(arguments[arguments.index("--checkpoint-corpora") + 1], "8192")
+        arguments = runner.suite_arguments("wal3-publication-checkpoints", pathlib.Path("/binaries"), "standard", 1)
+        self.assertNotIn("--checkpoint-corpora", arguments)
+        entry, = [entry for entry in cli.entrypoints() if entry["id"] == "wal3-publication-checkpoints"]
+        self.assertEqual(entry["default_arguments"], ["--probe", "wal3-publication-checkpoints"])
+
     def test_git_closure_import_builds_and_receives_its_integration_probe(self):
         commands = runner.build_commands(["git-closure-import"], pathlib.Path("/build"))
         self.assertEqual(len(commands), 1)
