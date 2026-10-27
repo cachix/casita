@@ -205,15 +205,14 @@ async fn generic_caller_preserves_reports_and_round_trips_across_formats() {
     .await
     .unwrap();
 
-    let mut builder = tokio_tar::Builder::new(Vec::new());
-    let mut header = tokio_tar::Header::new_ustar();
+    let mut builder = ::tar::Builder::new(Vec::new());
+    let mut header = ::tar::Header::new_ustar();
     header.set_size(14);
     header.set_mode(0o644);
     builder
         .append_data(&mut header, "hello", &b"shared content"[..])
-        .await
         .unwrap();
-    let tar = builder.into_inner().await.unwrap();
+    let tar = builder.into_inner().unwrap();
     assert!(
         repository
             .import(TarImport::new(&tar[..], name("too-small")).with_limits(

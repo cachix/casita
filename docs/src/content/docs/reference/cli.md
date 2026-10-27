@@ -131,13 +131,15 @@ casita [--repository PATH] import [-i tar] FILE|- --root NAME \
 Streams one already-decompressed POSIX tar archive into the canonical
 filesystem model without extracting it to disk. A tar file is detected from
 its first valid header; use `-i tar` for standard input. The command accepts regular
-files, directories, symlinks, hard links, and old-GNU sparse files; PAX GNU
-sparse members are rejected. `FILE` may be `-` for standard input.
+files, directories, symlinks, and hard links in POSIX ustar/pax or GNU archives
+with UTF-8 paths and link targets. Legacy v7, mixed-format streams, and sparse
+members are rejected. `FILE` may be `-` for standard input.
 
 The root name is required and is committed only after complete validation.
 Defaults bound raw archive bytes (1 TiB), entries (1,000,000), path bytes
-(4096), individual files (256 GiB), total file bytes (1 TiB), and sparse-hole
-expansion (256 GiB). The corresponding flags override those bounds.
+(4096), individual files (256 GiB), and total file bytes (1 TiB). The
+corresponding flags override those bounds. The sparse-expansion flag remains
+available for compatibility; sparse files are rejected regardless of its value.
 
 ### `object show`
 

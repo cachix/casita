@@ -584,13 +584,13 @@ pub(super) struct TarImportArgs {
     /// Maximum byte length of one archive pathname.
     #[arg(long = "tar-max-path-bytes", value_name = "BYTES", default_value_t = CLI_MAX_TAR_PATH_BYTES)]
     pub(super) max_path_bytes: usize,
-    /// Maximum logical bytes in one regular file after sparse expansion.
+    /// Maximum bytes in one regular file.
     #[arg(long = "tar-max-file-bytes", value_name = "BYTES", default_value_t = CLI_MAX_TAR_FILE_BYTES)]
     pub(super) max_file_bytes: u64,
     /// Maximum aggregate logical regular-file bytes.
     #[arg(long = "tar-max-total-file-bytes", value_name = "BYTES", default_value_t = CLI_MAX_TAR_TOTAL_FILE_BYTES)]
     pub(super) max_total_file_bytes: u64,
-    /// Maximum aggregate zero-filled bytes from old-GNU sparse entries.
+    /// Reserved for compatibility. Sparse tar entries are rejected.
     #[arg(
         long = "tar-max-sparse-expansion-bytes",
         value_name = "BYTES",

@@ -7,11 +7,10 @@ use std::task::{Context, Poll};
 
 use async_compression::tokio::bufread::{GzipDecoder, ZstdDecoder};
 use bytes::Bytes;
-use futures::StreamExt;
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
+use tar_codec::{Archive as _, Member, MemberPayload as _, TarArchive};
 use tokio::io::{AsyncRead, BufReader, ReadBuf};
-use tokio_tar::{Archive, EntryType};
 
 use super::{OciImportError, blob_node, check_limit, digest_name};
 use crate::blob::BlobStore;
@@ -83,6 +82,16 @@ struct Tree {
     archive_bytes: u64,
     entry_count: usize,
     file_bytes: u64,
+}
+
+fn layer_decode_error(error: tar_codec::DecodeError) -> OciImportError {
+    match crate::tar::decode_error(error) {
+        crate::tar::TarImportError::UnsupportedPaxSparse => {
+            OciImportError::Unsupported("sparse layer files".into())
+        }
+        crate::tar::TarImportError::Tar(error) => OciImportError::Io(error),
+        error => invalid(format!("invalid layer tar: {error}")),
+    }
 }
 
 fn invalid(message: impl Into<String>) -> OciImportError {
@@ -246,14 +255,13 @@ impl Tree {
                 .max_total_archive_bytes
                 .saturating_sub(self.archive_bytes),
         );
-        let reader = Measured {
+        let mut reader = Measured {
             inner: reader,
             hash: Sha256::new(),
             seen: 0,
             max,
         };
-        let mut archive = Archive::new(reader);
-        let mut records = archive.entries()?;
+        let mut archive = TarArchive::new(&mut reader);
         let mut updates = BTreeMap::new();
         let mut seen = BTreeSet::new();
         let mut whiteouts = Vec::new();
@@ -262,8 +270,7 @@ impl Tree {
         if batch == 0 {
             return Err(invalid("repository mutation batch limit must be positive"));
         }
-        while let Some(record) = records.next().await {
-            let mut record = record?;
+        while let Some(record) = archive.next_member().await.map_err(layer_decode_error)? {
             self.entry_count = self
                 .entry_count
                 .checked_add(1)
@@ -273,28 +280,20 @@ impl Tree {
                 self.entry_count as u64,
                 limits.max_entries as u64,
             )?;
-            if crate::tar::contains_pax_gnu_sparse(&mut record)
-                .await
-                .map_err(|error| invalid(format!("invalid layer extensions: {error}")))?
-                || record.header().entry_type() == EntryType::GNUSparse
-            {
-                return Err(OciImportError::Unsupported("sparse layer files".into()));
-            }
-            let pathname = path(&record.path_bytes()?, limits.max_path_bytes)?;
+            let pathname = path(record.metadata().path.as_bytes(), limits.max_path_bytes)?;
             if !seen.insert(pathname.clone()) {
                 return Err(invalid("duplicate path in one OCI layer"));
             }
-            let kind = record.header().entry_type();
-            let size = record.header().size()?;
+            let directory = matches!(record, Member::Directory { .. });
             if pathname.is_empty() {
-                if kind != EntryType::Directory || size != 0 {
+                if !directory {
                     return Err(invalid("layer root entry must be an empty directory"));
                 }
                 continue;
             }
             let (name, parent) = pathname.split_last().expect("nonempty path");
             if let Some(target) = name.as_bytes().strip_prefix(b".wh.") {
-                if kind != EntryType::Regular || size != 0 {
+                if !matches!(record, Member::File { size: 0, .. }) {
                     return Err(invalid("whiteout must be an empty regular file"));
                 }
                 if name.as_bytes() == b".wh..wh..opq" {
@@ -308,9 +307,14 @@ impl Tree {
                 }
                 continue;
             }
-            check_conflict(&updates, &pathname, kind == EntryType::Directory)?;
-            let entry = match kind {
-                EntryType::Regular => {
+            check_conflict(&updates, &pathname, directory)?;
+            let entry = match record {
+                Member::File {
+                    size,
+                    executable,
+                    mut payload,
+                    ..
+                } => {
                     check_limit("filesystem file bytes", size, limits.max_file_bytes)?;
                     self.file_bytes = self
                         .file_bytes
@@ -321,8 +325,21 @@ impl Tree {
                         self.file_bytes,
                         limits.max_total_file_bytes,
                     )?;
-                    let executable = record.header().mode()? & 0o111 != 0;
-                    let object = mutation.stage_blob_reader(&mut record).await?;
+                    let chunks = async_stream::stream! {
+                        let mut buffer = Vec::new();
+                        loop {
+                            match payload.next_chunk(&mut buffer, 64 * 1024).await {
+                                Ok(true) => yield Ok::<_, io::Error>(Bytes::copy_from_slice(&buffer)),
+                                Ok(false) => break,
+                                Err(error) => {
+                                    yield Err(io::Error::new(io::ErrorKind::InvalidData, error));
+                                    break;
+                                }
+                            }
+                        }
+                    };
+                    let mut body = tokio_util::io::StreamReader::new(Box::pin(chunks));
+                    let object = mutation.stage_blob_reader(&mut body).await?;
                     if object.record().payload_size() != size {
                         return Err(invalid("layer file size mismatch"));
                     }
@@ -339,56 +356,47 @@ impl Tree {
                     }
                     Entry::Leaf(node)
                 }
-                EntryType::Directory => {
-                    if size != 0 {
-                        return Err(invalid("layer directory has data"));
-                    }
-                    Entry::Directory
-                }
-                EntryType::Symlink => {
-                    if size != 0 {
-                        return Err(invalid("layer symlink has data"));
-                    }
-                    let target = record
-                        .link_name_bytes()?
-                        .ok_or_else(|| invalid("missing symlink target"))?;
-                    let target = SymlinkTarget::try_from(Bytes::copy_from_slice(&target))
+                Member::Directory { .. } => Entry::Directory,
+                Member::SymbolicLink { target, .. } => {
+                    let target = target.as_bytes();
+                    let target = SymlinkTarget::try_from(Bytes::copy_from_slice(target))
                         .map_err(|_| invalid("invalid symlink target"))?;
                     Entry::Leaf(Node::Symlink { target })
                 }
-                EntryType::Link => {
+                Member::HardLink {
+                    target,
+                    size,
+                    payload,
+                    ..
+                } => {
                     if size != 0 {
                         return Err(invalid("layer hardlink has data"));
                     }
-                    let target = record
-                        .link_name_bytes()?
-                        .ok_or_else(|| invalid("missing hardlink target"))?;
-                    let target = path(&target, limits.max_path_bytes)?;
+                    payload.skip().await.map_err(layer_decode_error)?;
+                    let target = target.as_bytes();
+                    let target = path(target, limits.max_path_bytes)?;
                     if target.is_empty() {
                         return Err(invalid("hardlink target is the root directory"));
                     }
                     Entry::Hardlink(target)
                 }
-                other => {
+                Member::Special { kind, .. } => {
                     return Err(OciImportError::Unsupported(format!(
-                        "layer entry type {other:?}"
+                        "layer entry type {kind:?}"
                     )));
                 }
             };
             updates.insert(pathname, entry);
         }
-        drop(records);
-        let mut tail = archive
-            .into_inner()
-            .map_err(|_| invalid("layer reader remains borrowed"))?;
-        tokio::io::copy(&mut tail, &mut tokio::io::sink()).await?;
-        let actual = format!("sha256:{:x}", tail.hash.finalize());
+        drop(archive);
+        tokio::io::copy(&mut reader, &mut tokio::io::sink()).await?;
+        let actual = format!("sha256:{:x}", reader.hash.finalize());
         if actual != diff_id {
             return Err(invalid(format!(
                 "uncompressed layer digest mismatch: expected {diff_id}, got {actual}"
             )));
         }
-        self.archive_bytes += tail.seen;
+        self.archive_bytes += reader.seen;
         flush(mutation, &mut staged).await?;
 
         // Whiteouts affect only the previous layer's tree, irrespective of tar order.

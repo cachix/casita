@@ -93,7 +93,7 @@ gix-packetline = { version = "0.21", default-features = false, features = ["bloc
 # buffers each compressed object before writing it.
 gix-hash = { version = "0.25", default-features = false, features = ["sha1", "sha256"], optional = true }
 gix-pack = { version = "0.72", default-features = false, features = ["sha1", "sha256"], optional = true }
-astral-tokio-tar = { version = "=0.6.4", default-features = false, optional = true }
+tar-codec = { version = "=0.0.15", optional = true }
 clap = { version = "4", features = ["derive"], optional = true }
 gix = { version = "0.85", default-features = false, features = ["revision", "sha1", "sha256", "parallel", "pack-cache-lru-dynamic"], optional = true }
 oci-client = { version = "0.18", default-features = false, features = ["rustls-tls"], optional = true }
@@ -140,7 +140,7 @@ native = [
   "dep:cap-fs-ext",
   "dep:bao-tree",
   "dep:iroh-io",
-  "dep:astral-tokio-tar",
+  "dep:tar-codec",
   "dep:libc",
   "dep:rustix",
   "dep:getrandom",
@@ -218,6 +218,7 @@ name = "gix_casita_odb"
 required-features = ["git", "experimental"]
 
 [dev-dependencies]
+tar = "0.4.46"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry"] }
 proptest = "1"
 tempfile = "3"

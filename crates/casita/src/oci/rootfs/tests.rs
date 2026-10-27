@@ -1,7 +1,7 @@
 use std::io::Cursor;
 
+use ::tar::{Builder, EntryType, Header};
 use tokio::io::AsyncWriteExt;
-use tokio_tar::{Builder, Header};
 
 use super::*;
 use crate::repository::Repository;
@@ -32,9 +32,9 @@ async fn tar(items: &[Item<'_>]) -> Vec<u8> {
         if let Some(target) = target {
             header.set_link_name(target).unwrap();
         }
-        builder.append_data(&mut header, path, body).await.unwrap();
+        builder.append_data(&mut header, path, body).unwrap();
     }
-    builder.into_inner().await.unwrap()
+    builder.into_inner().unwrap()
 }
 
 fn diff_id(bytes: &[u8]) -> String {
@@ -209,8 +209,8 @@ async fn rejects_invalid_layer_structure_and_uncompressed_digests() {
     unsafe_header.as_mut_bytes()[..10].copy_from_slice(b"../outside");
     unsafe_header.set_cksum();
     let mut builder = Builder::new(Vec::new());
-    builder.append(&unsafe_header, &[][..]).await.unwrap();
-    let unsafe_tar = builder.into_inner().await.unwrap();
+    builder.append(&unsafe_header, &[][..]).unwrap();
+    let unsafe_tar = builder.into_inner().unwrap();
     assert!(
         Tree::default()
             .apply(
@@ -289,15 +289,12 @@ async fn rejects_pax_sparse_files_instead_of_storing_sparse_payload_as_content()
     header.set_path("PaxHeaders/sparse").unwrap();
     header.set_size(extension.len() as u64);
     header.set_cksum();
-    builder.append(&header, &extension[..]).await.unwrap();
+    builder.append(&header, &extension[..]).unwrap();
     let mut header = Header::new_ustar();
     header.set_size(0);
     header.set_mode(0o644);
-    builder
-        .append_data(&mut header, "sparse", &[][..])
-        .await
-        .unwrap();
-    let bytes = builder.into_inner().await.unwrap();
+    builder.append_data(&mut header, "sparse", &[][..]).unwrap();
+    let bytes = builder.into_inner().unwrap();
     let error = Tree::default()
         .apply(
             &mutation,
