@@ -230,14 +230,13 @@ async fn writes_publish_verified_content_without_preparation() {
         let child = filesystem.object(&root).await.unwrap().unwrap().links()[0].clone();
         verify(&filesystem, &child, &bytes).await;
 
-        let mut tar = tokio_tar::Builder::new(Vec::new());
-        let mut header = tokio_tar::Header::new_ustar();
+        let mut tar = ::tar::Builder::new(Vec::new());
+        let mut header = ::tar::Header::new_ustar();
         header.set_size(bytes.len() as u64);
         header.set_mode(0o644);
         tar.append_data(&mut header, "file", bytes.as_slice())
-            .await
             .unwrap();
-        let archive = tar.into_inner().await.unwrap();
+        let archive = tar.into_inner().unwrap();
         let destination = Repository::local(work.path().join("tar")).await.unwrap();
         let report = destination
             .import(casita::import::TarImport::new(

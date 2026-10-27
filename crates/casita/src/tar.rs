@@ -1,12 +1,12 @@
 //! Bounded asynchronous import of POSIX tar archives into canonical filesystem
 //! graphs.
 //!
-//! Regular file bodies stream directly from `astral-tokio-tar` into the
+//! Regular file bodies stream directly from `tar-codec` into the
 //! repository blob store; no extraction directory or whole-file buffer is
 //! created. A bounded pipeline finalizes earlier files while the next body is
-//! read. GNU PAX sparse files are deliberately rejected for now: upstream
-//! parses their metadata but does not reconstruct their logical contents. See
-//! <https://github.com/astral-sh/tokio-tar/issues/109>.
+//! read. The decoder accepts POSIX ustar/pax and GNU archives with UTF-8
+//! paths and link targets. Legacy v7, mixed-format streams, and sparse files
+//! are rejected by the decoder.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -19,10 +19,10 @@ use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use futures::StreamExt;
+use tar_codec::{Archive as _, Member, MemberPayload as _, SpecialKind, TarArchive};
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
-use tokio_tar::{Archive, EntryType};
 
 use crate::directory::Directory;
 use crate::node::Node;
@@ -48,12 +48,11 @@ pub struct TarImportLimits {
     pub max_in_flight_files: usize,
     /// Maximum byte length of one archive pathname.
     pub max_path_bytes: usize,
-    /// Maximum logical bytes in one regular file after old-GNU sparse
-    /// expansion.
+    /// Maximum bytes in one regular file.
     pub max_file_bytes: u64,
     /// Maximum aggregate logical regular-file bytes.
     pub max_total_file_bytes: u64,
-    /// Maximum aggregate zero-filled holes from old-GNU sparse entries.
+    /// Reserved sparse expansion bound. Sparse archives are rejected.
     pub max_sparse_expansion_bytes: u64,
 }
 
@@ -90,7 +89,7 @@ pub struct TarImportReport {
     pub hardlinks: usize,
     /// Aggregate logical regular-file bytes.
     pub file_bytes: u64,
-    /// Aggregate old-GNU sparse holes materialized as zeroes.
+    /// Sparse expansion bytes, always zero because sparse archives are rejected.
     pub sparse_expansion_bytes: u64,
 }
 
@@ -123,15 +122,12 @@ pub enum TarImportError {
     /// A hard link does not ultimately name a regular file.
     #[error("tar hard link does not resolve to a regular file")]
     InvalidHardlink,
-    /// GNU PAX sparse metadata is present. `astral-tokio-tar` parses this
-    /// metadata but cannot yet reconstruct the entry's logical byte stream.
-    #[error(
-        "PAX GNU sparse files are not supported; see https://github.com/astral-sh/tokio-tar/issues/109"
-    )]
+    /// GNU PAX sparse metadata is unsupported by the decoder.
+    #[error("PAX GNU sparse files are not supported")]
     UnsupportedPaxSparse,
     /// The archive declares an unsupported filesystem object.
     #[error("tar entry type is unsupported: {0:?}")]
-    UnsupportedEntry(EntryType),
+    UnsupportedEntry(SpecialKind),
     /// A configured resource limit was exceeded.
     #[error("tar import {field} {actual} exceeds limit {limit}")]
     LimitExceeded {
@@ -252,10 +248,9 @@ where
 {
     /// Stream a decompressed tar archive into the canonical filesystem graph.
     ///
-    /// The importer accepts regular files, directories, symlinks, hard links,
-    /// and old-GNU sparse files. It rejects PAX GNU sparse files until
-    /// [`astral-tokio-tar#109`](https://github.com/astral-sh/tokio-tar/issues/109)
-    /// provides logical sparse expansion.
+    /// Accepts regular files, directories, symlinks, and hard links in
+    /// POSIX ustar/pax or GNU archives with UTF-8 paths and link targets.
+    /// Legacy v7, mixed-format streams, and sparse files are rejected.
     #[tracing::instrument(name = "tar.import", skip_all)]
     pub(crate) async fn import_tar<R>(
         &self,
@@ -287,14 +282,13 @@ where
             );
         }
         let observed = Arc::new(AtomicU64::new(0));
-        let reader = LimitedReader {
+        let mut reader = LimitedReader {
             inner: reader,
             max: limits.max_archive_bytes,
             seen: 0,
             observed: observed.clone(),
         };
-        let mut archive = Archive::new(reader);
-        let mut entries = archive.entries().map_err(TarImportError::Tar)?;
+        let mut archive = TarArchive::new(&mut reader);
         let mutation = self.mutation_session().await?;
         let batch = self.limits().max_batch_objects;
         if batch == 0 {
@@ -324,24 +318,19 @@ where
         let admission = Arc::new(Semaphore::new(concurrency));
         let (sender, receiver) = mpsc::channel(concurrency);
         let produce = async {
-            while let Some(item) = entries.next().await {
-                let mut entry = item.map_err(TarImportError::Tar)?;
+            while let Some(entry) = archive.next_member().await.map_err(decode_error)? {
                 increment_limit("entry count", &mut report.entries, limits.max_entries)?;
-                if contains_pax_gnu_sparse(&mut entry).await? {
-                    return Err(TarImportError::UnsupportedPaxSparse);
-                }
-                let path = canonical_path(
-                    &entry.path_bytes().map_err(TarImportError::Tar)?,
-                    limits.max_path_bytes,
-                )?;
-                let kind = entry.header().entry_type();
+                let path = canonical_path(entry.metadata().path.as_bytes(), limits.max_path_bytes)?;
                 insert_parent_directories(&mut directory_paths, &path);
-                ensure_no_conflict(&tree, &path, kind)?;
+                ensure_no_conflict(&tree, &path, matches!(entry, Member::Directory { .. }))?;
 
-                let source = match kind {
-                    EntryType::Regular | EntryType::GNUSparse => {
-                        let size = entry.header().size().map_err(TarImportError::Tar)?;
-                        let stored = entry.header().entry_size().map_err(TarImportError::Tar)?;
+                let source = match entry {
+                    Member::File {
+                        size,
+                        executable,
+                        mut payload,
+                        ..
+                    } => {
                         check_limit("file bytes", size, limits.max_file_bytes)?;
                         add_limit(
                             "total file bytes",
@@ -349,30 +338,24 @@ where
                             size,
                             limits.max_total_file_bytes,
                         )?;
-                        let expansion = size.checked_sub(stored).ok_or_else(|| {
-                            TarImportError::Tar(io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                "tar sparse entry has more stored data than logical bytes",
-                            ))
-                        })?;
-                        add_limit(
-                            "sparse expansion bytes",
-                            &mut report.sparse_expansion_bytes,
-                            expansion,
-                            limits.max_sparse_expansion_bytes,
-                        )?;
-
                         let permit = admission
                             .clone()
                             .acquire_owned()
                             .await
                             .expect("tar admission stays open");
-                        let executable =
-                            entry.header().mode().map_err(TarImportError::Tar)? & 0o100 != 0;
                         let mut writer = mutation.repository().payloads().open_write().await;
-                        let copied = tokio::io::copy(&mut entry, &mut writer)
+                        let mut copied = 0;
+                        let mut buffer = Vec::new();
+                        while payload
+                            .next_chunk(&mut buffer, 64 * 1024)
                             .await
-                            .map_err(TarImportError::Io)?;
+                            .map_err(decode_error)?
+                        {
+                            tokio::io::AsyncWriteExt::write_all(&mut writer, &buffer)
+                                .await
+                                .map_err(TarImportError::Io)?;
+                            copied += buffer.len() as u64;
+                        }
                         if copied != size {
                             return Err(TarImportError::Tar(io::Error::new(
                                 io::ErrorKind::UnexpectedEof,
@@ -397,52 +380,42 @@ where
                         report.files += 1;
                         SourceEntry::File
                     }
-                    EntryType::Directory => {
-                        if entry.header().size().map_err(TarImportError::Tar)? != 0 {
-                            return Err(TarImportError::Tar(io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                "tar directory has data",
-                            )));
-                        }
+                    Member::Directory { .. } => {
                         directory_paths.insert(path.clone());
                         report.directories += 1;
                         SourceEntry::Directory
                     }
-                    EntryType::Symlink => {
-                        if entry.header().size().map_err(TarImportError::Tar)? != 0 {
-                            return Err(TarImportError::Tar(io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                "tar symlink has data",
-                            )));
-                        }
-                        let target = entry
-                            .link_name_bytes()
-                            .map_err(TarImportError::Tar)?
-                            .ok_or(TarImportError::InvalidLink)?;
-                        validate_symlink_target(&path, &target)?;
+                    Member::SymbolicLink { target, .. } => {
+                        let target = target.as_bytes();
+                        validate_symlink_target(&path, target)?;
                         report.symlinks += 1;
                         SourceEntry::Symlink(Node::Symlink {
-                            target: SymlinkTarget::try_from(Bytes::copy_from_slice(&target))
+                            target: SymlinkTarget::try_from(Bytes::copy_from_slice(target))
                                 .map_err(|_| TarImportError::InvalidLink)?,
                         })
                     }
-                    EntryType::Link => {
-                        if entry.header().size().map_err(TarImportError::Tar)? != 0 {
+                    Member::HardLink {
+                        target,
+                        size,
+                        payload,
+                        ..
+                    } => {
+                        if size != 0 {
                             return Err(TarImportError::Tar(io::Error::new(
                                 io::ErrorKind::InvalidData,
                                 "tar hard link has data",
                             )));
                         }
-                        let target = entry
-                            .link_name_bytes()
-                            .map_err(TarImportError::Tar)?
-                            .ok_or(TarImportError::InvalidLink)?;
-                        let target = canonical_path(&target, limits.max_path_bytes)
+                        payload.skip().await.map_err(decode_error)?;
+                        let target = target.as_bytes();
+                        let target = canonical_path(target, limits.max_path_bytes)
                             .map_err(|_| TarImportError::InvalidLink)?;
                         report.hardlinks += 1;
                         SourceEntry::Hardlink(target)
                     }
-                    other => return Err(TarImportError::UnsupportedEntry(other)),
+                    Member::Special { kind, .. } => {
+                        return Err(TarImportError::UnsupportedEntry(kind));
+                    }
                 };
 
                 if tree.insert(path, source).is_some() {
@@ -508,12 +481,9 @@ where
             .write_scope()
             .run(async { tokio::try_join!(produce, consume) })
             .await?;
-        drop(entries);
-        // Consume padding and verify any decoding wrapper before publication.
-        let mut tail = archive
-            .into_inner()
-            .map_err(|_| TarImportError::Tar(io::Error::other("tar reader still borrowed")))?;
-        tokio::io::copy(&mut tail, &mut tokio::io::sink())
+        // Release the archive borrow, then validate transport trailers and limits.
+        drop(archive);
+        tokio::io::copy(&mut reader, &mut tokio::io::sink())
             .await
             .map_err(TarImportError::Tar)?;
 
@@ -586,22 +556,27 @@ where
     }
 }
 
-pub(crate) async fn contains_pax_gnu_sparse<R>(
-    entry: &mut tokio_tar::Entry<R>,
-) -> Result<bool, TarImportError>
-where
-    R: AsyncRead + Unpin,
-{
-    let Some(extensions) = entry.pax_extensions().await.map_err(TarImportError::Tar)? else {
-        return Ok(false);
-    };
-    for extension in extensions {
-        let extension = extension.map_err(TarImportError::Tar)?;
-        if extension.key_bytes().starts_with(b"GNU.sparse.") {
-            return Ok(true);
+pub(crate) fn decode_error(error: tar_codec::DecodeError) -> TarImportError {
+    if matches!(&error, tar_codec::DecodeError::PolicyViolation {
+        violation: tar_codec::DecodePolicyViolation::PaxVendorExtension { vendor, name }, ..
+    } if vendor == "GNU" && name.starts_with("sparse."))
+    {
+        return TarImportError::UnsupportedPaxSparse;
+    }
+    // Keep transport failures distinct from malformed archives.
+    let mut cause: &dyn std::error::Error = &error;
+    let mut kind = io::ErrorKind::InvalidData;
+    loop {
+        if let Some(io) = cause.downcast_ref::<io::Error>() {
+            kind = io.kind();
+            break;
+        }
+        match cause.source() {
+            Some(source) => cause = source,
+            None => break,
         }
     }
-    Ok(false)
+    TarImportError::Tar(io::Error::new(kind, error))
 }
 
 fn validate_limits(limits: TarImportLimits) -> Result<(), TarImportError> {
@@ -713,7 +688,7 @@ fn insert_parent_directories(directories: &mut BTreeSet<PathKey>, path: &[PathCo
 fn ensure_no_conflict(
     tree: &BTreeMap<PathKey, SourceEntry>,
     path: &[PathComponent],
-    kind: EntryType,
+    directory: bool,
 ) -> Result<(), TarImportError> {
     if tree.contains_key(path) {
         return Err(TarImportError::DuplicatePath);
@@ -726,7 +701,7 @@ fn ensure_no_conflict(
             return Err(TarImportError::ConflictingPath);
         }
     }
-    if kind != EntryType::Directory
+    if !directory
         && tree
             .keys()
             .any(|other| other.starts_with(path) && other.len() > path.len())
@@ -792,7 +767,7 @@ mod pipeline_tests;
 mod tests {
     use std::io::Cursor;
 
-    use tokio_tar::{Builder, Header};
+    use ::tar::{Builder, EntryType, Header};
 
     use super::*;
     use crate::{MemoryBlobStore, MemoryMetadataStore};
@@ -803,9 +778,9 @@ mod tests {
             let mut header = Header::new_ustar();
             header.set_size(body.len() as u64);
             header.set_mode(*mode);
-            builder.append_data(&mut header, path, *body).await.unwrap();
+            builder.append_data(&mut header, path, *body).unwrap();
         }
-        builder.into_inner().await.unwrap()
+        builder.into_inner().unwrap()
     }
 
     async fn repository() -> Repository<MemoryBlobStore, MemoryMetadataStore> {
@@ -889,7 +864,7 @@ mod tests {
         file.set_size(5);
         file.set_mode(0o644);
         file.set_cksum();
-        builder.append(&file, &b"tool\n"[..]).await.unwrap();
+        builder.append(&file, &b"tool\n"[..]).unwrap();
 
         let mut hardlink = Header::new_ustar();
         hardlink.set_entry_type(EntryType::Link);
@@ -898,7 +873,7 @@ mod tests {
         hardlink.set_size(0);
         hardlink.set_mode(0o644);
         hardlink.set_cksum();
-        builder.append(&hardlink, &[][..]).await.unwrap();
+        builder.append(&hardlink, &[][..]).unwrap();
 
         let mut symlink = Header::new_ustar();
         symlink.set_entry_type(EntryType::Symlink);
@@ -907,12 +882,12 @@ mod tests {
         symlink.set_size(0);
         symlink.set_mode(0o777);
         symlink.set_cksum();
-        builder.append(&symlink, &[][..]).await.unwrap();
+        builder.append(&symlink, &[][..]).unwrap();
 
         let repository = repository().await;
         let root = repository
             .import_tar(
-                Cursor::new(builder.into_inner().await.unwrap()),
+                Cursor::new(builder.into_inner().unwrap()),
                 RootName::try_from("tar/links").unwrap(),
                 TarImportLimits::default(),
             )
@@ -940,12 +915,12 @@ mod tests {
         directory.set_size(0);
         directory.set_mode(0o755);
         directory.set_cksum();
-        builder.append(&directory, &[][..]).await.unwrap();
+        builder.append(&directory, &[][..]).unwrap();
 
         let repository = repository().await;
         let report = repository
             .import_tar(
-                Cursor::new(builder.into_inner().await.unwrap()),
+                Cursor::new(builder.into_inner().unwrap()),
                 RootName::try_from("tar/empty").unwrap(),
                 TarImportLimits::default(),
             )
@@ -983,12 +958,12 @@ mod tests {
         symlink.set_size(0);
         symlink.set_mode(0o777);
         symlink.set_cksum();
-        links.append(&symlink, &[][..]).await.unwrap();
+        links.append(&symlink, &[][..]).unwrap();
         assert!(matches!(
             repository()
                 .await
                 .import_tar(
-                    Cursor::new(links.into_inner().await.unwrap()),
+                    Cursor::new(links.into_inner().unwrap()),
                     RootName::try_from("tar/link").unwrap(),
                     TarImportLimits::default(),
                 )
@@ -1038,13 +1013,13 @@ mod tests {
         pax.set_path("PaxHeaders/sparse").unwrap();
         pax.set_size(record.len() as u64);
         pax.set_cksum();
-        builder.append(&pax, &record[..]).await.unwrap();
+        builder.append(&pax, &record[..]).unwrap();
         let mut file = Header::new_ustar();
         file.set_path("sparse").unwrap();
         file.set_size(0);
         file.set_cksum();
-        builder.append(&file, &[][..]).await.unwrap();
-        let input = builder.into_inner().await.unwrap();
+        builder.append(&file, &[][..]).unwrap();
+        let input = builder.into_inner().unwrap();
 
         let error = repository()
             .await
@@ -1056,6 +1031,84 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(error, TarImportError::UnsupportedPaxSparse));
+    }
+
+    #[tokio::test]
+    async fn pax_paths_and_executable_files_round_trip() {
+        use tar_codec::{ArchiveBuilder as _, EntryMetadata, FilePayload, TarEncoder};
+        let path = format!("{}file", "directory/".repeat(20));
+        let mut input = Vec::new();
+        let mut encoder = TarEncoder::new(&mut input).builder();
+        encoder
+            .add_file(
+                &path,
+                FilePayload::new(11, Cursor::new(b"pax content")),
+                EntryMetadata::default().executable(true),
+            )
+            .await
+            .unwrap();
+        encoder.finish().await.unwrap();
+        let repository = repository().await;
+        let report = repository
+            .import_tar(
+                Cursor::new(input),
+                RootName::try_from("tar/pax").unwrap(),
+                TarImportLimits::default(),
+            )
+            .await
+            .unwrap();
+        let output = tempfile::tempdir().unwrap();
+        repository
+            .checkout(&report.root, output.path())
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read(output.path().join(path)).unwrap(),
+            b"pax content"
+        );
+        assert_eq!(report.file_bytes, 11);
+    }
+
+    #[tokio::test]
+    async fn invalid_framing_and_non_utf8_paths_do_not_publish_roots() {
+        let valid = raw_archive(b"file", b'0', b"content");
+        let mut checksum = valid.clone();
+        checksum[0] ^= 1;
+        let mut legacy = valid.clone();
+        legacy[257..265].fill(0);
+        legacy[148..156].fill(b' ');
+        let sum: u32 = legacy[..512].iter().map(|byte| u32::from(*byte)).sum();
+        legacy[148..156].copy_from_slice(format!("{sum:06o}\0 ").as_bytes());
+        for input in [
+            checksum,
+            legacy,
+            valid[..515].to_vec(),
+            raw_archive(b"non-utf8-\xff", b'0', b""),
+            raw_archive(b"directory", b'5', b"unexpected body"),
+        ] {
+            let repository = repository().await;
+            let name = RootName::try_from("tar/invalid").unwrap();
+            let error = repository
+                .import_tar(Cursor::new(input), name.clone(), TarImportLimits::default())
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.category(),
+                RepositoryErrorCategory::InvalidData,
+                "{error}"
+            );
+            assert!(
+                repository
+                    .metadata()
+                    .snapshot()
+                    .await
+                    .unwrap()
+                    .root(&name)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
     }
 
     fn pax_record(key: &str, value: &str) -> Vec<u8> {

@@ -50,13 +50,12 @@ async fn fixture_with_options(
         "layers": [{"mediaType": "application/vnd.oci.image.layer.v1.tar", "digest": layer_digest, "size": layer.len()}]
     })).unwrap();
     let manifest_digest = sha256(&manifest);
-    let mut builder = tokio_tar::Builder::new(Vec::new());
-    let mut header = tokio_tar::Header::new_ustar();
+    let mut builder = ::tar::Builder::new(Vec::new());
+    let mut header = ::tar::Header::new_ustar();
     header.set_size(8);
     header.set_mode(0o644);
     builder
         .append_data(&mut header, "etc/message", &b"arm root"[..])
-        .await
         .unwrap();
     let mut bulk = vec![0u8; 256 * 1024];
     let mut state = 0x9e37_79b9u32;
@@ -66,14 +65,13 @@ async fn fixture_with_options(
         state ^= state << 5;
         *byte = state as u8;
     }
-    let mut header = tokio_tar::Header::new_ustar();
+    let mut header = ::tar::Header::new_ustar();
     header.set_size(bulk.len() as u64);
     header.set_mode(0o644);
     builder
         .append_data(&mut header, "data/bulk", &bulk[..])
-        .await
         .unwrap();
-    let arm_raw = builder.into_inner().await.unwrap();
+    let arm_raw = builder.into_inner().unwrap();
     let mut gzip = async_compression::tokio::write::GzipEncoder::new(Vec::new());
     gzip.write_all(&arm_raw).await.unwrap();
     gzip.shutdown().await.unwrap();
