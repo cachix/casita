@@ -31,6 +31,11 @@ repository bookkeeping, not part of an object's content identity. See
 
 ## Conditional publication
 
+Scripts can use `root set NAME TARGET --if-absent` to claim an unregistered
+name, or `root set NAME TARGET --if-target KEY` to replace a value they read
+earlier. A failed condition changes neither the root nor its retention policy
+and exits nonzero. See [`root set`](../../reference/cli/#root-set).
+
 `MutationSession::publish_if_roots_match` can publish staged objects and root
 changes only while every watched name still has its expected target, including
 expected absence. An unrelated state change is retried; a watched name change
