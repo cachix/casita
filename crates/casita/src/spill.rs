@@ -721,6 +721,14 @@ impl<K: SpillKey> FrozenSpillSet<K> {
         self.inner.contains(key).await
     }
 
+    /// Membership in caller order, sharing connections across bounded batches.
+    pub(crate) async fn contains_batch<Q: Borrow<K> + Sync>(
+        &self,
+        keys: &[Q],
+    ) -> Result<Vec<bool>, Error> {
+        self.inner.contains_batch(keys).await
+    }
+
     /// At most `limit` keys strictly after `after`, in canonical order.
     pub(crate) async fn page(&self, after: Option<K>, limit: usize) -> Result<Vec<K>, Error> {
         if self.inner.storage.is_none() {
@@ -1450,6 +1458,14 @@ mod tests {
             for _ in 0..2 {
                 assert_eq!(set.contains_batch(&queries).await.unwrap(), answers);
             }
+            assert!(
+                set.contains_batch(&[] as &[ObjectKey])
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            let set = set.freeze().await.unwrap();
+            assert_eq!(set.contains_batch(&queries).await.unwrap(), answers);
             assert!(
                 set.contains_batch(&[] as &[ObjectKey])
                     .await
