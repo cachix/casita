@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use super::MetadataError;
+use super::{EntropySource, MetadataError, system_entropy};
 use crate::{BlobId, ChunkId, ObjectKey};
 
 mod codec;
@@ -59,9 +59,12 @@ pub struct PinToken([u8; 32]);
 
 impl PinToken {
     fn fresh() -> Result<Self, MetadataError> {
+        Self::fresh_with_entropy(system_entropy().as_ref())
+    }
+
+    fn fresh_with_entropy(entropy: &dyn EntropySource) -> Result<Self, MetadataError> {
         let mut bytes = [0; 32];
-        getrandom::fill(&mut bytes)
-            .map_err(|error| MetadataError::RevisionEntropy(error.to_string()))?;
+        entropy.fill(&mut bytes)?;
         Ok(Self(bytes))
     }
 }
@@ -321,9 +324,26 @@ pub trait PinStore: Send + Sync {
 }
 
 /// Shared pin ledger for ephemeral storage. Clones share the same inventory.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct MemoryPinStore {
+    entropy: Arc<dyn EntropySource>,
     state: Arc<tokio::sync::Mutex<PinInventory>>,
+}
+
+impl Default for MemoryPinStore {
+    fn default() -> Self {
+        Self::new_with_entropy(system_entropy())
+    }
+}
+
+impl MemoryPinStore {
+    /// Create an empty ledger with a scoped source for ownership identities.
+    pub fn new_with_entropy(entropy: Arc<dyn EntropySource>) -> Self {
+        Self {
+            state: Arc::default(),
+            entropy,
+        }
+    }
 }
 
 pub(crate) enum LogicalPinConflict {
@@ -471,7 +491,7 @@ impl PinStore for MemoryPinStore {
         if state.revision != revision || state.collector != previous {
             return Ok(None);
         }
-        let token = PinToken::fresh()?;
+        let token = PinToken::fresh_with_entropy(self.entropy.as_ref())?;
         state.advance()?;
         state.collector = Some(token.clone());
         Ok(Some(token))
@@ -485,7 +505,7 @@ impl PinStore for MemoryPinStore {
         if state.collector != previous {
             return Ok(None);
         }
-        let token = PinToken::fresh()?;
+        let token = PinToken::fresh_with_entropy(self.entropy.as_ref())?;
         state.advance()?;
         state.collector = Some(token.clone());
         Ok(Some(token))
@@ -517,7 +537,7 @@ impl PinStore for MemoryPinStore {
         {
             return Ok(None);
         }
-        let token = PinToken::fresh()?;
+        let token = PinToken::fresh_with_entropy(self.entropy.as_ref())?;
         state.advance()?;
         state.pins.insert(token.clone(), pin);
         Ok(Some(token))
@@ -587,7 +607,7 @@ impl PinStore for MemoryPinStore {
         {
             return Ok(None);
         }
-        let token = PinToken::fresh()?;
+        let token = PinToken::fresh_with_entropy(self.entropy.as_ref())?;
         state.advance()?;
         state.deletions.insert(token.clone(), resources);
         Ok(Some(token))
@@ -603,7 +623,7 @@ impl PinStore for MemoryPinStore {
         if !state.can_claim_validated(collector, &resources, &checked_blobs)? {
             return Ok(None);
         }
-        let token = PinToken::fresh()?;
+        let token = PinToken::fresh_with_entropy(self.entropy.as_ref())?;
         state.advance()?;
         state.deletions.insert(token.clone(), resources);
         Ok(Some(token))
@@ -628,7 +648,7 @@ impl PinStore for MemoryPinStore {
         {
             return Ok(None);
         }
-        let token = PinToken::fresh()?;
+        let token = PinToken::fresh_with_entropy(self.entropy.as_ref())?;
         state.advance()?;
         state.deletions.insert(token.clone(), resources);
         Ok(Some(token))
@@ -659,7 +679,7 @@ impl PinStore for MemoryPinStore {
         {
             return Ok(None);
         }
-        let token = PinToken::fresh()?;
+        let token = PinToken::fresh_with_entropy(self.entropy.as_ref())?;
         state.advance()?;
         state.logical_prune = Some(token.clone());
         Ok(Some(token))
@@ -678,7 +698,7 @@ impl PinStore for MemoryPinStore {
             return Ok(None);
         }
         let inventory = state.clone();
-        let token = PinToken::fresh()?;
+        let token = PinToken::fresh_with_entropy(self.entropy.as_ref())?;
         state.advance()?;
         state.logical_prune = Some(token.clone());
         Ok(Some((token, inventory)))

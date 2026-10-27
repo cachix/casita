@@ -184,7 +184,7 @@ where
         if state_commit.is_none() {
             return Ok(None);
         }
-        let mut retry = publication::PublicationRetry::new();
+        let mut retry = publication::PublicationRetry::new(self.state.entropy_source());
         loop {
             let _attempt = CollectionPhase::new("catalog_commit_attempt");
             let revision = match expected.take() {
@@ -1205,7 +1205,7 @@ where
                 // retain every closure a walk reaches, so a retry against a
                 // newer revision reuses the proofs instead of walking again.
                 let mut newly_verified = None;
-                let mut retry = publication::PublicationRetry::new();
+                let mut retry = publication::PublicationRetry::new(self.repository.state.entropy_source());
                 loop {
                     #[cfg(test)]
                     let phase = self.repository.time_publication_phase(1);
