@@ -13,6 +13,15 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Added
 
+- `MetadataError::ForeignSqliteLock` and `MetadataError::DatabaseReplaced`
+  report the two local-database conditions only the user can resolve: a
+  SQLite client to close, or processes to restart. The new
+  `RepositoryErrorCategory::RestartRequired` (`restart_required`) classifies
+  the second, and `MetadataError::retry_disposition` gives retry guidance for
+  any state failure. `RepositoryError` now reports a state failure as
+  `RepositoryError::Metadata` even when a payload or I/O operation carried it,
+  so its category and retry guidance no longer depend on where it surfaced.
+
 - `GitClosureImport` imports selected native Git closures without named views or
   per-revision inventories. It reuses verified subtrees and returns a retained
   reader protecting the result until application roots are published. A
@@ -256,6 +265,26 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Fixed
 
+- Opening a running repository's `casita.sqlite` with an ordinary SQLite
+  client, such as `sqlite3` or DB Browser for SQLite, can no longer roll the
+  repository back and leave it referencing deleted payloads. When such a client
+  closed, it folded only the frames it had read into the database file and
+  deleted the write-ahead log Casita was still writing. The next process to
+  open the repository then lost every later commit, while online collection
+  had already deleted payloads the restored state needed. Writing,
+  checkpointing, exclusive locking mode and leaving WAL mode did the same. On
+  Linux and macOS each process now holds SQLite's own locks against all of
+  these from before it opens the database until it closes it, including on a
+  full filesystem where SQLite's WAL index cannot be created, so such a client
+  fails with `database is locked` or `locking protocol`. A client already
+  holding the database exclusively makes opening and committing fail with the
+  retryable `MetadataError::ForeignSqliteLock` until it closes. On every
+  platform, a process checks that its database and log are still the files it
+  opened when it opens, commits and deletes payloads. Once it finds them
+  removed or replaced, it stops acknowledging commits, deleting payloads and
+  serving reads, including from snapshots it already held, failing each with
+  `MetadataError::DatabaseReplaced` (category `RestartRequired`, never
+  retryable) until it restarts.
 - NAR intake no longer stalls when Tokio's blocking pool is exhausted. The
   archive decoder occupied a blocking worker while waiting on the consumer,
   which needs that pool to store the archive; with one worker, a 32 MiB file

@@ -27,6 +27,10 @@ use turso::{Builder, Connection, Database};
 
 use crate::error::Error;
 
+mod files;
+pub(crate) use files::DatabaseFiles;
+use files::DurabilityError;
+
 /// Accumulated lock-wait budget.
 pub(crate) const BUSY_TIMEOUT_MS: u64 = 30_000;
 /// Bound idle connections, not live snapshots: readers never wait for a slot.
@@ -37,6 +41,16 @@ const IDLE_READ_CONNECTIONS: usize = 8;
 pub(crate) struct ReadConnection {
     connection: Option<Connection>,
     idle: Arc<Mutex<Vec<Connection>>>,
+    files: Arc<DatabaseFiles>,
+}
+
+impl ReadConnection {
+    /// Before each read of a retained snapshot: fail once this process found
+    /// the files it reads replaced, since what it would read is no longer
+    /// durable.
+    pub(crate) fn before_read(&self) -> Result<(), crate::metadata::MetadataError> {
+        self.files.before_read()
+    }
 }
 
 impl Deref for ReadConnection {
@@ -134,6 +148,7 @@ const REPOSITORY_USER_VERSION: i64 = 6;
 /// small pool of independent Turso connections and may proceed concurrently.
 pub struct TursoDb {
     path: PathBuf,
+    files: Arc<DatabaseFiles>,
     database: Database,
     writer: Arc<tokio::sync::Mutex<Connection>>,
     idle_readers: Arc<Mutex<Vec<Connection>>>,
@@ -142,6 +157,10 @@ pub struct TursoDb {
 impl TursoDb {
     pub(crate) fn path(&self) -> &Path {
         &self.path
+    }
+    /// The database and WAL this handle commits through.
+    pub(crate) fn files(&self) -> &Arc<DatabaseFiles> {
+        &self.files
     }
     /// Open or create the SQLite-format database at `path`, enable Turso's
     /// multi-process WAL, and apply the repository schema.
@@ -164,6 +183,11 @@ impl TursoDb {
             ))
         })?;
 
+        // Hold SQLite's locks before the engine touches the files, so no
+        // client interferes with opening or initializing them. Turso's
+        // multi-process WAL opens the database without a lock of its own
+        // (`OpenFlags::NoLock`); if it took one, every open here would fail.
+        let locked = DatabaseFiles::lock(&path)?;
         let (database, writer) = futures::executor::block_on(async {
             let builder = Builder::new_local(path_str);
             // Windows coordinates the shared WAL through the IOCP backend:
@@ -192,9 +216,11 @@ impl TursoDb {
             writer.execute_batch("PRAGMA synchronous = FULL;").await?;
             Ok::<_, Error>((database, writer))
         })?;
+        let files = Arc::new(locked.opened()?);
 
         Ok(Arc::new(Self {
             path,
+            files,
             database,
             writer: Arc::new(tokio::sync::Mutex::new(writer)),
             idle_readers: Arc::new(Mutex::new(Vec::new())),
@@ -235,13 +261,19 @@ impl TursoDb {
         let this = self.clone();
         tokio::task::spawn_blocking(move || {
             futures::executor::block_on(async move {
+                // Never write while a SQLite client could roll the write back,
+                // or to a WAL a new process would not read.
+                this.files.before_change()?;
                 let result = f(&mut guard).await;
                 let ended = end_transaction(&guard).await;
                 if ended.is_err() {
                     // Dropping the old connection releases its locks.
                     *guard = this.connect_writer().await?;
                 }
-                result
+                // Nor report a write that reached such a WAL meanwhile.
+                let value = result?;
+                this.files.after_commit()?;
+                Ok(value)
             })
         })
         .await?
@@ -300,6 +332,9 @@ impl TursoDb {
     }
 
     async fn begin_read_transaction(self: &Arc<Self>) -> Result<ReadConnection, Error> {
+        // What this handle would read is no longer durable once its files
+        // were replaced.
+        self.files.before_read().map_err(DurabilityError::from)?;
         let cached = self
             .idle_readers
             .lock()
@@ -318,6 +353,7 @@ impl TursoDb {
         let connection = ReadConnection {
             connection: Some(connection),
             idle: self.idle_readers.clone(),
+            files: self.files.clone(),
         };
         connection
             .execute_batch("BEGIN DEFERRED TRANSACTION;")
