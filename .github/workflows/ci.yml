@@ -130,6 +130,12 @@ jobs:
           CARGO_TARGET_DIR=target cargo test --manifest-path tests/tls_connectors/Cargo.toml
           cargo fmt --manifest-path tests/tls_connectors/Cargo.toml --check
           cargo clippy --manifest-path tests/tls_connectors/Cargo.toml --all-targets -- -D warnings
+          CARGO_TARGET_DIR=target cargo test --manifest-path tests/zstd_seekable/Cargo.toml
+          CARGO_TARGET_DIR=target cargo test --manifest-path tests/zstd_parquet/Cargo.toml
+          cargo fmt --manifest-path tests/zstd_seekable/Cargo.toml --check
+          cargo fmt --manifest-path tests/zstd_parquet/Cargo.toml --check
+          cargo clippy --manifest-path tests/zstd_seekable/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path tests/zstd_parquet/Cargo.toml --all-targets -- -D warnings
           cargo test
           cargo build --no-default-features
           cargo test --no-default-features
@@ -207,6 +213,8 @@ jobs:
           cache-on-failure: true
       - run: cargo test --all-features
       - run: cargo test --manifest-path tests/tls_connectors/Cargo.toml --target-dir target
+      - run: cargo test --manifest-path tests/zstd_seekable/Cargo.toml --target-dir target
+      - run: cargo test --manifest-path tests/zstd_parquet/Cargo.toml --target-dir target
       - run: cargo build --no-default-features
       - run: cargo test --no-default-features
       - run: cargo test --no-default-features --features experimental

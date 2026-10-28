@@ -21,6 +21,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.0
       - name: Independently resolved TLS dependency regressions
         run: python3 .github/scripts/check_tls_dependencies.py
+      - name: Complete zstd dependency security floors
+        run: |
+          cargo generate-lockfile
+          python3 tests/check_zstd_dependencies.py
       - uses: EmbarkStudios/cargo-deny-action@v2.1.1
         with:
           rust-version: "1.96.0"

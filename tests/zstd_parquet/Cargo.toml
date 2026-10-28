@@ -1,0 +1,14 @@
+# Isolated WAL/codec compatibility checks; no cloud services or credentials.
+[package]
+name = "casita-zstd-parquet-tests"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+arrow = "55.2.0"
+bytes = "1"
+parquet = "55.2.0"
+wal3 = { version = "=0.1.0", git = "https://github.com/domenkozar/chroma", rev = "0c870b88a3b93dd67e60acf49c7e49ba2016de3c" }

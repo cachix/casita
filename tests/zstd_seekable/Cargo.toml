@@ -1,0 +1,12 @@
+# Separate workspace: exercising the dependency's optional seekable API must
+# not enable it in Casita or alter the portable/default feature graph.
+[package]
+name = "casita-zstd-seekable-tests"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+zstd-safe = { version = "8.2.0", default-features = false, features = ["std", "seekable"] }
