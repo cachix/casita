@@ -57,6 +57,18 @@ $ casita --repository ./cache cat casita.blob.v1:...
 and closure status. `tree list` interprets a canonical directory; `cat` writes
 a blob's bytes to standard output.
 
+To compare two imports, keep both directory keys and run:
+
+```console
+$ casita --repository ./cache tree diff casita.directory.v1:OLD casita.directory.v1:NEW
+$ casita --repository ./cache tree diff casita.directory.v1:OLD casita.directory.v1:NEW --json
+```
+
+The recursive diff reports added and removed paths, changed file contents or
+executable bits, symlink targets, and entry-kind changes without materializing
+either tree. `--json` emits one change per line for scripts. Keep both snapshots
+under named roots if they must remain available across garbage collection.
+
 ## Restore safely
 
 ```console
