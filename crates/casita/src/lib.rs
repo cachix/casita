@@ -182,6 +182,9 @@ mod repository;
 #[cfg(feature = "native")]
 mod spill;
 
+#[cfg(all(test, feature = "native"))]
+#[path = "../benches/bench_util/gc_timing.rs"]
+mod benchmark_timing;
 #[cfg(feature = "native")]
 mod metadata;
 #[cfg(all(test, feature = "native"))]
@@ -237,8 +240,8 @@ pub use path::{PathComponent, PathComponentError, SymlinkTarget, SymlinkTargetEr
 mod api;
 #[cfg(feature = "native")]
 pub use api::{
-    CollectionReport, Error, IntegrityReport, MetadataReader, Reader, Repository, RetainedReader,
-    VerifiedReader,
+    CollectionReport, Error, ImportSession, IntegrityReport, MetadataReader, Reader, Repository,
+    RetainedReader, VerifiedReader,
 };
 #[cfg(feature = "native")]
 pub use metadata::{
