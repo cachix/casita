@@ -50,6 +50,7 @@ pub(super) struct CachedReaders {
     // Keep the inode alive so replacement cannot recycle its identity.
     _file: std::fs::File,
     identity: ReaderFileIdentity,
+    fingerprint: blake3::Hash,
     state: ReaderState,
 }
 
@@ -152,6 +153,7 @@ impl FilePinStore {
                     state.valid_reader_records().then(|| CachedReaders {
                         _file: published,
                         identity,
+                        fingerprint: blake3::hash(&bytes),
                         state: state.clone(),
                     })
                 });
@@ -174,15 +176,6 @@ impl FilePinStore {
         let file = std::fs::File::open(self.reader_path()).map_err(backend)?;
         #[cfg(unix)]
         let identity = ReaderFileIdentity::of(&file)?;
-        #[cfg(unix)]
-        {
-            if let Ok(local) = self.local()
-                && let Ok(cache) = local.reader_cache.lock()
-                && let Some(cached) = cache.as_ref().filter(|cached| cached.identity == identity)
-            {
-                return Ok(cached.state.clone());
-            }
-        }
         if file.metadata().map_err(backend)?.len() > codec::MAX_BYTES as u64 {
             return Err(backend("oversized reader inventory"));
         }
@@ -191,6 +184,24 @@ impl FilePinStore {
             .take(codec::MAX_BYTES as u64 + 1)
             .read_to_end(&mut bytes)
             .map_err(backend)?;
+        if bytes.len() > codec::MAX_BYTES {
+            return Err(backend("oversized reader inventory"));
+        }
+        // Same-inode writes can share both timestamps. Only reuse parsed
+        // state when this bounded snapshot matches previously verified bytes.
+        #[cfg(unix)]
+        let fingerprint = blake3::hash(&bytes);
+        #[cfg(unix)]
+        {
+            if let Ok(local) = self.local()
+                && let Ok(cache) = local.reader_cache.lock()
+                && let Some(cached) = cache.as_ref().filter(|cached| {
+                    cached.identity == identity && cached.fingerprint == fingerprint
+                })
+            {
+                return Ok(cached.state.clone());
+            }
+        }
         let state = ReaderState::decode(&bytes)?;
         #[cfg(unix)]
         {
@@ -200,6 +211,7 @@ impl FilePinStore {
                 *cache = Some(CachedReaders {
                     _file: file,
                     identity,
+                    fingerprint,
                     state: state.clone(),
                 });
             }
@@ -1109,3 +1121,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, unix))]
+mod regression_tests;

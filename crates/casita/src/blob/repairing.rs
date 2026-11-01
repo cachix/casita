@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt, AsyncWrite};
-use tokio::sync::{Mutex, Notify, OwnedRwLockReadGuard, RwLock};
+use tokio::sync::{Notify, OwnedRwLockReadGuard, RwLock};
 
 use super::{
     BlobBatchGuard, BlobGc, BlobIntegrityError, BlobReader, BlobStore, BlobStreamReader,
@@ -69,7 +69,9 @@ impl BlobRepairError {
 pub struct RepairingBlobStore {
     near: ChunkedBlobStore,
     far: ChunkedBlobStore,
-    repairs: Arc<Mutex<HashMap<BlobId, Arc<RepairFlight>>>>,
+    // Registry critical sections contain no I/O or awaits. Cancellation must
+    // unlink its flight in Drop, without relying on another task being polled.
+    repairs: Arc<StdMutex<HashMap<BlobId, Arc<RepairFlight>>>>,
     gate: Arc<RwLock<()>>,
 }
 
@@ -79,7 +81,7 @@ impl RepairingBlobStore {
         Self {
             near,
             far,
-            repairs: Arc::new(Mutex::new(HashMap::new())),
+            repairs: Arc::new(StdMutex::new(HashMap::new())),
             gate: Arc::new(RwLock::new(())),
         }
     }
@@ -98,7 +100,7 @@ impl RepairingBlobStore {
     pub(crate) async fn repair_waiters(&self, digest: &BlobId) -> usize {
         self.repairs
             .lock()
-            .await
+            .expect("repair registry mutex poisoned")
             .get(digest)
             .map_or(0, |flight| flight.waiters.load(Ordering::SeqCst))
     }
@@ -159,7 +161,7 @@ impl RepairingBlobStore {
     #[tracing::instrument(name = "blob.repairing.repair", skip_all, fields(blob = %digest))]
     async fn repair_once(&self, digest: BlobId, near: String) -> Result<(), Error> {
         let (flight, leader) = {
-            let mut repairs = self.repairs.lock().await;
+            let mut repairs = self.repairs.lock().expect("repair registry mutex poisoned");
             match repairs.get(&digest) {
                 Some(flight) => (flight.clone(), false),
                 None => {
@@ -176,7 +178,7 @@ impl RepairingBlobStore {
                 RepairLeader::new(digest, near.clone(), flight.clone(), self.repairs.clone());
             let outcome = self.perform_repair(digest, near).await;
             flight.complete(outcome.clone());
-            remove_flight(&self.repairs, digest, &flight).await;
+            remove_flight(&self.repairs, digest, &flight);
             completion.disarm();
             return outcome.map_err(|error| Error::Backend(Box::new(error)));
         }
@@ -629,12 +631,12 @@ impl Drop for RepairWaiter<'_> {
     }
 }
 
-async fn remove_flight(
-    repairs: &Mutex<HashMap<BlobId, Arc<RepairFlight>>>,
+fn remove_flight(
+    repairs: &StdMutex<HashMap<BlobId, Arc<RepairFlight>>>,
     digest: BlobId,
     flight: &Arc<RepairFlight>,
 ) {
-    let mut repairs = repairs.lock().await;
+    let mut repairs = repairs.lock().expect("repair registry mutex poisoned");
     if repairs
         .get(&digest)
         .is_some_and(|current| Arc::ptr_eq(current, flight))
@@ -647,7 +649,7 @@ struct RepairLeader {
     digest: BlobId,
     near: String,
     flight: Arc<RepairFlight>,
-    repairs: Arc<Mutex<HashMap<BlobId, Arc<RepairFlight>>>>,
+    repairs: Arc<StdMutex<HashMap<BlobId, Arc<RepairFlight>>>>,
     armed: bool,
 }
 
@@ -656,7 +658,7 @@ impl RepairLeader {
         digest: BlobId,
         near: String,
         flight: Arc<RepairFlight>,
-        repairs: Arc<Mutex<HashMap<BlobId, Arc<RepairFlight>>>>,
+        repairs: Arc<StdMutex<HashMap<BlobId, Arc<RepairFlight>>>>,
     ) -> Self {
         Self {
             digest,
@@ -677,19 +679,14 @@ impl Drop for RepairLeader {
         if !self.armed {
             return;
         }
+        // Retire the registration before waking existing waiters so a new
+        // reader can lead a repair even without a running executor.
+        remove_flight(&self.repairs, self.digest, &self.flight);
         self.flight.complete(Err(BlobRepairError {
             digest: self.digest,
             near: self.near.clone(),
             repair: "repair was cancelled before publication completed".to_owned(),
         }));
-        let repairs = self.repairs.clone();
-        let flight = self.flight.clone();
-        let digest = self.digest;
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(async move {
-                remove_flight(&repairs, digest, &flight).await;
-            });
-        }
     }
 }
 
@@ -763,3 +760,6 @@ impl BlobWriter for GuardedWriter {
         self.inner.close().await
     }
 }
+
+#[cfg(test)]
+mod tests;
