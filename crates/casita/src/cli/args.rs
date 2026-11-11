@@ -629,6 +629,16 @@ pub(super) enum TreeCommand {
         /// Generic directory key, or its short `blake3-...` digest.
         key: String,
     },
+    /// Recursively compare two canonical directory objects without checkout.
+    Diff {
+        /// Old directory key, or its short `blake3-...` digest.
+        old: String,
+        /// New directory key, or its short `blake3-...` digest.
+        new: String,
+        /// Emit one JSON object per changed entry (NDJSON).
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
