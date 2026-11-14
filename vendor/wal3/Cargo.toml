@@ -1,0 +1,36 @@
+[package]
+name = "wal3"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+arrow = "60.1.0"
+async-trait = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+google-cloud-spanner = { workspace = true }
+google-cloud-gax = { workspace = true }
+opentelemetry = { workspace = true }
+# Keep the default codecs, including ZSTD, for historical WAL fragments.
+parquet = { version = "60.1.0", features = ["async"] }
+prost-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+setsum = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time"] }
+tonic = { workspace = true }
+tracing = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+uuid = { workspace = true }
+
+chroma-storage = { workspace = true }
+chroma-error = { workspace = true }
+chroma-config = { workspace = true }
+chroma-types = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["net"] }
+guacamole = { version = "0.11", default-features = false }
+proptest = { workspace = true }
+rand = { workspace = true }
