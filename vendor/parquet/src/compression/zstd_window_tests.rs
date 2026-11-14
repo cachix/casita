@@ -1,3 +1,4 @@
+// Added for Casita's bounded ZSTD page repair. See vendor/README.md.
 //! A valid historical ZSTD window must remain readable with bounded page output.
 
 use super::*;

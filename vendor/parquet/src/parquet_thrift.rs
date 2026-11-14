@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// Modified for Casita: bound allocations while decoding untrusted Thrift
+// metadata. See vendor/README.md.
+
 //! Structs used for encoding and decoding Parquet Thrift objects.
 //!
 //! These include:

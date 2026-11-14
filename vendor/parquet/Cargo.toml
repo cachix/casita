@@ -423,31 +423,31 @@ harness = false
 required-features = ["arrow"]
 
 [dependencies.arrow-array]
-version = "60.1.0"
+version = "=60.1.0"
 optional = true
 
 [dependencies.arrow-buffer]
-version = "60.1.0"
+version = "=60.1.0"
 optional = true
 
 [dependencies.arrow-csv]
-version = "60.1.0"
+version = "=60.1.0"
 optional = true
 
 [dependencies.arrow-data]
-version = "60.1.0"
+version = "=60.1.0"
 optional = true
 
 [dependencies.arrow-ipc]
-version = "60.1.0"
+version = "=60.1.0"
 optional = true
 
 [dependencies.arrow-schema]
-version = "60.1.0"
+version = "=60.1.0"
 optional = true
 
 [dependencies.arrow-select]
-version = "60.1.0"
+version = "=60.1.0"
 optional = true
 
 [dependencies.base64]

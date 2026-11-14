@@ -1,7 +1,8 @@
 //! Historical fragments must remain readable without workspace feature unification.
 #![forbid(unsafe_code)]
 
-use wal3::{interfaces::checksum_parquet, Error, LogPosition, Setsum};
+use wal3::interfaces::checksum_parquet;
+use wal3::{Error, LogPosition, Setsum};
 
 const BASE: u64 = 987;
 const EPOCH: u64 = 123456;

@@ -5428,6 +5428,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn snapshot_rejects_a_truncated_current_fragment_as_corruption() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Arc::new(chroma_storage::Storage::Local(
+            chroma_storage::local::LocalStorage::new(directory.path().to_str().unwrap()),
+        ));
+        let store = Wal3MetadataStore::open(storage, "state", "reader")
+            .await
+            .unwrap();
+        let fragment = directory
+            .path()
+            .join("state")
+            .join(wal3::unprefixed_fragment_path(
+                wal3::FragmentSeqNo::BEGIN.into(),
+            ));
+        let bytes = std::fs::read(&fragment).unwrap();
+        assert!(bytes.len() > 8);
+        std::fs::write(&fragment, &bytes[..bytes.len() - 8]).unwrap();
+
+        for _ in 0..2 {
+            assert!(matches!(
+                store.snapshot().await,
+                Err(MetadataError::Corruption(_))
+            ));
+        }
+    }
+
+    #[tokio::test]
     async fn rustfs_metadata_handles_share_online_pins_without_logical_commits() {
         let _lock = rustfs_test_lock().lock().await;
         let rustfs = Rustfs::start();

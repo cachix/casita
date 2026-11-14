@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// Modified for Casita: bound decompression of untrusted Parquet pages and
+// preserve large-window ZSTD compatibility. See vendor/README.md.
+
 //! Contains codec interface and supported codec implementations.
 //!
 //! See [`Compression`](crate::basic::Compression) enum for all available compression
