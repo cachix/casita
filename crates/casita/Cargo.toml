@@ -213,6 +213,16 @@ name = "casita"
 path = "src/main.rs"
 required-features = ["cli"]
 
+[[bin]]
+name = "wal-allocation-reproducer"
+path = "tests/wal_allocation/src/main.rs"
+required-features = ["s3"]
+
+[[test]]
+name = "wal_allocation"
+path = "tests/wal_allocation/tests/allocation.rs"
+required-features = ["s3"]
+
 [[example]]
 name = "gix_casita_odb"
 required-features = ["git", "experimental"]
