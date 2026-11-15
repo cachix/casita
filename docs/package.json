@@ -16,7 +16,7 @@
     "@astrojs/markdown-satteri": "0.4.1",
     "@astrojs/mdx": "^8.0.1",
     "@astrojs/starlight": "^0.42.1",
-    "@cachix/site-kit": "https://codeload.github.com/cachix/site-kit/tar.gz/1e9bb1e181430d4a8d632bc8c1487e16de946091",
+    "@cachix/site-kit": "https://codeload.github.com/cachix/site-kit/tar.gz/2ad59aacdbfc86cd772da9815051bdb04bab554e",
     "astro": "^7.3.3",
     "hast-util-select": "^6.0.4",
     "rehype-parse": "^9.0.1",
@@ -31,6 +31,7 @@
   },
   "devDependencies": {
     "@astrojs/check": "0.9.9",
+    "astro-vtbot": "3.1.0",
     "typescript": "6.0.3"
   }
 }
