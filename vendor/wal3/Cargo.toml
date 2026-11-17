@@ -1,0 +1,43 @@
+[package]
+name = "wal3"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+# Standalone manifest for the local source mirror. Chroma's workspace-inherited
+# dependencies are spelled out here with the versions, features, and sources of
+# Chroma's workspace manifest, so this package resolves outside that workspace.
+
+[dependencies]
+arrow = "=60.1.0"
+async-trait = "0.1"
+bytes = "1.10"
+futures = "0.3"
+google-cloud-spanner = { version = "=1.8.0", git = "https://github.com/yoshidan/google-cloud-rust", tag = "v20260319", package = "gcloud-spanner", features = ["trace"] }
+google-cloud-gax = { version = "=1.4.0", git = "https://github.com/yoshidan/google-cloud-rust", tag = "v20260319", package = "gcloud-gax" }
+opentelemetry = { version = "0.27.0", default-features = false, features = ["trace", "metrics"] }
+# Keep the default codecs, including ZSTD, for historical WAL fragments.
+parquet = { version = "60.1.0", path = "../parquet", features = ["async"] }
+prost-types = "0.14"
+serde = { version = "1.0.215", features = ["derive", "rc"] }
+serde_json = "1.0.133"
+setsum = "0.7"
+thiserror = "1.0.69"
+tokio = { version = "1.41", features = ["fs", "macros", "rt-multi-thread", "time", "io-util", "signal", "sync"] }
+tonic = "0.14"
+tracing = "0.1"
+tracing-opentelemetry = "0.28.0"
+uuid = { version = "1.11.0", features = ["v4", "v7", "fast-rng", "macro-diagnostics", "serde"] }
+
+# Sibling Chroma crates stay on the exact Git revision Casita pins, so this
+# package and Casita share one copy of each.
+chroma-storage = { version = "=0.1.0", git = "https://github.com/domenkozar/chroma", rev = "0c870b88a3b93dd67e60acf49c7e49ba2016de3c", package = "chroma-storage" }
+chroma-error = { version = "=0.15.0", git = "https://github.com/domenkozar/chroma", rev = "0c870b88a3b93dd67e60acf49c7e49ba2016de3c", package = "chroma-error" }
+chroma-config = { version = "=0.1.0", git = "https://github.com/domenkozar/chroma", rev = "0c870b88a3b93dd67e60acf49c7e49ba2016de3c", package = "chroma-config" }
+chroma-types = { version = "=0.15.0", git = "https://github.com/domenkozar/chroma", rev = "0c870b88a3b93dd67e60acf49c7e49ba2016de3c", package = "chroma-types" }
+
+[dev-dependencies]
+tokio = { version = "1.41", features = ["fs", "macros", "rt-multi-thread", "time", "io-util", "signal", "sync", "net"] }
+guacamole = { version = "0.11", default-features = false }
+proptest = "1.6.0"
+rand = "0.8.5"

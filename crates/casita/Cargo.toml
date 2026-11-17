@@ -42,12 +42,10 @@ tokio = { version = "1", features = [
 ], optional = true }
 object_store = { version = "0.14", optional = true }
 # Chroma's object-store WAL is not yet released as the non-placeholder crate
-# on crates.io. Pin wal3-conditional-manifest-refresh from domenkozar/chroma
-# to an exact integration revision containing
-# chroma-core/chroma#7644, #7645, and #7658 plus typed append outcomes so the
-# durable wire, contention, and storage timing contracts cannot drift.
-# Also includes domenkozar/chroma#1 to select the modern AWS HTTPS connector.
-wal3 = { version = "=0.1.0", git = "https://github.com/domenkozar/chroma", rev = "0c870b88a3b93dd67e60acf49c7e49ba2016de3c", package = "wal3", optional = true }
+# on crates.io. Keep the local WAL3 source mirror with the Parquet 60 repair;
+# its production code matches the Chroma integration revision below. The
+# sibling Chroma crates stay pinned to that reachable revision.
+wal3 = { version = "=0.1.0", path = "../../vendor/wal3", optional = true }
 chroma-storage = { version = "=0.1.0", git = "https://github.com/domenkozar/chroma", rev = "0c870b88a3b93dd67e60acf49c7e49ba2016de3c", package = "chroma-storage", optional = true }
 chroma-config = { version = "=0.1.0", git = "https://github.com/domenkozar/chroma", rev = "0c870b88a3b93dd67e60acf49c7e49ba2016de3c", package = "chroma-config", optional = true }
 aws-sdk-s3 = { version = "=1.144.0", default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"], optional = true }
@@ -212,6 +210,21 @@ s3 = [
 name = "casita"
 path = "src/main.rs"
 required-features = ["cli"]
+
+[[bin]]
+name = "wal-allocation-reproducer"
+path = "tests/wal_allocation/src/main.rs"
+required-features = ["s3"]
+
+[[test]]
+name = "wal_allocation"
+path = "tests/wal_allocation/tests/allocation.rs"
+required-features = ["s3"]
+
+[[test]]
+name = "wal_legacy_codecs"
+path = "tests/wal_legacy_codecs.rs"
+required-features = ["s3"]
 
 [[example]]
 name = "gix_casita_odb"
