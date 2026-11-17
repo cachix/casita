@@ -50,6 +50,9 @@ pub(super) struct CachedReaders {
     // Keep the inode alive so replacement cannot recycle its identity.
     _file: std::fs::File,
     identity: ReaderFileIdentity,
+    // Only these exact validated bytes may reuse the decoded state. File
+    // timestamps can alias across same-inode, same-length in-place writes.
+    bytes: Vec<u8>,
     state: ReaderState,
 }
 
@@ -152,6 +155,7 @@ impl FilePinStore {
                     state.valid_reader_records().then(|| CachedReaders {
                         _file: published,
                         identity,
+                        bytes,
                         state: state.clone(),
                     })
                 });
@@ -170,19 +174,11 @@ impl FilePinStore {
 
     pub(super) fn read_reader_inventory(&self) -> Result<ReaderState, MetadataError> {
         // Callers hold the ledger lock. Cooperating publishers therefore cannot
-        // replace this file between the identity check and using cached state.
+        // replace this file between reading it and using cached state. Metadata
+        // alone cannot prove its contents: in-place writes can share timestamps.
         let file = std::fs::File::open(self.reader_path()).map_err(backend)?;
         #[cfg(unix)]
         let identity = ReaderFileIdentity::of(&file)?;
-        #[cfg(unix)]
-        {
-            if let Ok(local) = self.local()
-                && let Ok(cache) = local.reader_cache.lock()
-                && let Some(cached) = cache.as_ref().filter(|cached| cached.identity == identity)
-            {
-                return Ok(cached.state.clone());
-            }
-        }
         if file.metadata().map_err(backend)?.len() > codec::MAX_BYTES as u64 {
             return Err(backend("oversized reader inventory"));
         }
@@ -191,6 +187,17 @@ impl FilePinStore {
             .take(codec::MAX_BYTES as u64 + 1)
             .read_to_end(&mut bytes)
             .map_err(backend)?;
+        #[cfg(unix)]
+        {
+            if let Ok(local) = self.local()
+                && let Ok(cache) = local.reader_cache.lock()
+                && let Some(cached) = cache
+                    .as_ref()
+                    .filter(|cached| cached.identity == identity && cached.bytes == bytes)
+            {
+                return Ok(cached.state.clone());
+            }
+        }
         let state = ReaderState::decode(&bytes)?;
         #[cfg(unix)]
         {
@@ -200,6 +207,7 @@ impl FilePinStore {
                 *cache = Some(CachedReaders {
                     _file: file,
                     identity,
+                    bytes,
                     state: state.clone(),
                 });
             }
@@ -624,7 +632,7 @@ mod tests {
         let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
         file.seek(SeekFrom::Start(8)).unwrap();
         file.write_all(&[valid[8] ^ 1]).unwrap();
-        // Same inode and length: timestamps must invalidate the cached state.
+        // Same inode and length: contents must be checked even if timestamps alias.
         assert!(store.inventory().await.is_err());
         std::fs::write(&path, &valid).unwrap();
         assert!(store.inventory().await.unwrap().pins.contains_key(&token));
@@ -1109,3 +1117,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, unix))]
+mod cache_tests;
