@@ -90,6 +90,7 @@ SMOKE = {
     "metadata-primitives": ["--profile", "smoke"],
     "metadata-batch": ["--profile", "smoke"],
     "fsck": ["--profile", "smoke"],
+    "physical-fsck": ["--profile", "smoke"],
     "metadata-scan": ["--profile", "smoke"],
     "metadata-collection": ["--profile", "smoke"],
     "held-catalog-gc": ["--profile", "smoke"],

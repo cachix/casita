@@ -861,7 +861,7 @@ def normalize_result(path: pathlib.Path) -> dict[str, Any]:
             if paired:
                 observation["implementation"] = f"casita-{variant}"
         return normalized
-    if result_schema in {"casita.metadata-primitives.v1", "casita.metadata-kv.v1", "casita.object-reads.v1", "casita.reader-coordination.v1", "casita.durable-ledger.v1", "casita.ledger-boundaries.v1", "casita.snapshot-connections.v1"}:
+    if result_schema in {"casita.physical-fsck.v1", "casita.metadata-primitives.v1", "casita.metadata-kv.v1", "casita.object-reads.v1", "casita.reader-coordination.v1", "casita.durable-ledger.v1", "casita.ledger-boundaries.v1", "casita.snapshot-connections.v1"}:
         if result.get("complete") is not True:
             raise ValueError("incomplete primitive matrix cannot be compared")
         return normalize_lifecycle_result(path, result)

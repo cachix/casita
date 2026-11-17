@@ -732,12 +732,11 @@ impl PlannedReader {
         let requests = plan(&needs, self.window);
         let work: Vec<_> = requests
             .iter()
-            .cloned()
             .map(|request| {
                 let reader = self.clone();
                 async move {
                     let _request = reader.requests.clone().acquire_owned().await.unwrap();
-                    reader.fetch(&request).await
+                    reader.fetch(request).await
                 }
                 .boxed()
             })

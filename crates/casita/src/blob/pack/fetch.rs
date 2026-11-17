@@ -413,7 +413,6 @@ impl Context {
         let requests = plan(&needs, WINDOW_BYTES);
         let work: Vec<_> = requests
             .iter()
-            .cloned()
             .map(|request| {
                 let context = self.clone();
                 async move {
@@ -928,6 +927,10 @@ mod tests {
         assert_eq!(Arc::strong_count(&owner), 1);
     }
 }
+
+#[cfg(test)]
+#[path = "tests/fetch_requests.rs"]
+mod fetch_requests;
 
 #[cfg(test)]
 #[path = "tests/seek_replay.rs"]

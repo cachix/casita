@@ -3110,3 +3110,16 @@ upload concurrency, memory admission, and the inline-hashing boundary. It runs
 in `benchmark all`. See the
 [cases, correctness gates, and measurement notes](chunk-hash-batch.md)
 for reproducible commands and retained paired reports.
+
+### Full physical fsck latency
+
+`python -m benchmarks.cli run physical-fsck --profile standard --output benchmarks/results/physical-fsck.json`
+measures complete physical byte, digest, and size verification over synthetic
+packed payloads with zero or one millisecond of modeled storage wait per read.
+Standard cases cover 6/7/8/9/166/840 files, including both sides of the bounded
+read window; these file counts are not Relay revision counts. Each sample also
+requires exact payload counts, a clean full logical audit, and rejection of
+subsequent physical pack corruption. Those audits are outside timing. The suite
+is included in `benchmark all` and accepts an immutable `--probe-binary` with
+`--no-build`. This controlled wait model is not a paced Relay, cold-cache,
+provider-capacity, or device/network qualification.

@@ -2520,8 +2520,45 @@ async fn fsck_repair_repairs_a_corrupt_chunk_from_a_verified_replica() {
     );
 }
 
-#[tokio::test]
-async fn fsck_repair_rebuilds_an_existing_corrupt_outboard() {
+// Keep preview and repair usable on libtest's ordinary Windows stack. Use
+// the same smaller Unix stack as the CLI regression: debug MSVC frames are
+// larger, so an oversized inline future must also fail on other platforms.
+#[test]
+fn fsck_repair_rebuilds_an_existing_corrupt_outboard() {
+    const STACK_BYTES: usize = if cfg!(windows) { 2 << 20 } else { 3 << 19 };
+    std::thread::Builder::new()
+        .stack_size(STACK_BYTES)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(fsck_repair_rebuilds_an_existing_corrupt_outboard_case())
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn fsck_repair_entry_futures_fit_on_standard_stacks() {
+    // Inspect the future's type without constructing an oversized value on
+    // the very stack this regression protects.
+    fn future_bytes<F: std::future::Future>(_: impl FnOnce() -> F) -> usize {
+        std::mem::size_of::<F>()
+    }
+
+    let (store, _dir) = small_chunked_store();
+    let repository = Repository::new(store, MemoryMetadataStore::new().unwrap());
+    let preview = future_bytes(|| repository.preview_fsck_repair(None));
+    let repair = future_bytes(|| repository.fsck_repair(None));
+    assert!(
+        preview < 4096 && repair < 4096,
+        "physical fsck state must not be embedded in callers: preview={preview}, repair={repair}"
+    );
+}
+
+async fn fsck_repair_rebuilds_an_existing_corrupt_outboard_case() {
     let (store, _dir) = small_chunked_store();
     let repository = Repository::new(store.clone(), MemoryMetadataStore::new().unwrap());
     let mutation = repository.mutation_session().await.unwrap();
