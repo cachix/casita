@@ -2658,6 +2658,61 @@ async fn conditional_publication_retries_an_unrelated_revision_race() {
 }
 
 #[tokio::test]
+async fn conditional_root_set_retries_unrelated_revisions_and_checks_retention_support() {
+    let stale_once = Arc::new(AtomicBool::new(false));
+    let state = StaleOnceMetadataStore {
+        inner: MemoryMetadataStore::new().unwrap(),
+        stale_once: stale_once.clone(),
+    };
+    // This wrapper intentionally does not opt into root-retention records.
+    let repository = Repository::new(MemoryBlobStore::new(), state);
+    let session = repository.mutation_session().await.unwrap();
+    let object = session.stage_blob(b"conditional target").await.unwrap();
+    let key = object.record().key().clone();
+    session.publish(vec![object], Vec::new()).await.unwrap();
+    let name = RootName::try_from("releases/current").unwrap();
+    stale_once.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        repository
+            .set_root_if_matches(name.clone(), key.clone(), None, None)
+            .await
+            .unwrap(),
+        ConditionalPublishResult::Committed(_)
+    ));
+    assert!(!stale_once.load(Ordering::SeqCst));
+    let before = repository.metadata().snapshot().await.unwrap();
+    assert_eq!(before.root(&name).await.unwrap(), Some(key.clone()));
+    assert!(matches!(
+        repository
+            .set_root_if_matches(
+                name.clone(),
+                key.clone(),
+                Some(key.clone()),
+                Some(RootRetention::Evictable),
+            )
+            .await,
+        Err(RepositoryError::Metadata(
+            MetadataError::UnsupportedMetadata
+        ))
+    ));
+    assert_eq!(
+        repository.metadata().snapshot().await.unwrap().revision(),
+        before.revision()
+    );
+    assert!(matches!(
+        repository
+            .set_root_if_matches(name, key.clone(), None, None)
+            .await
+            .unwrap(),
+        ConditionalPublishResult::RootMismatch {
+            expected: None,
+            actual: Some(actual),
+            ..
+        } if actual == key
+    ));
+}
+
+#[tokio::test]
 async fn conditional_publication_reports_a_concurrent_root_change() {
     #[derive(Clone)]
     struct RepointOnceMetadataStore {

@@ -1,6 +1,8 @@
 //! Root publication, retention, removal, and listing.
 
-use casita::experimental::{BlobId, Digest, DirectoryId, ObjectKey, RootChange, RootName};
+use casita::experimental::{
+    BlobId, ConditionalPublishResult, Digest, DirectoryId, ObjectKey, RootChange, RootName,
+};
 use futures::{StreamExt, TryStreamExt};
 
 use super::{Error, scoped_root, workspace::Workspace};
@@ -52,10 +54,38 @@ where
             name,
             target,
             retention,
+            if_target,
+            if_absent,
         } => {
             let name = scoped_root(workspace, name)?;
             let target = resolve_root_target(repository, &target).await?;
-            if let Some(retention) = retention {
+            if if_target.is_some() || if_absent {
+                let expected = if_target.map(|value| value.parse()).transpose()?;
+                match repository
+                    .set_root_if_matches(name, target, expected, retention.map(Into::into))
+                    .await?
+                {
+                    ConditionalPublishResult::Committed(_) => {}
+                    ConditionalPublishResult::RootMismatch {
+                        name,
+                        expected,
+                        actual,
+                    } => {
+                        let describe = |key: Option<ObjectKey>| {
+                            key.map_or_else(|| "absent".to_owned(), |key| key.to_string())
+                        };
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::AlreadyExists,
+                            format!(
+                                "root {name} changed: expected {}, found {}; nothing published",
+                                describe(expected),
+                                describe(actual),
+                            ),
+                        )
+                        .into());
+                    }
+                }
+            } else if let Some(retention) = retention {
                 repository
                     .set_root_with_retention(name, target, retention.into())
                     .await?;
@@ -148,4 +178,53 @@ where
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use casita::experimental::{
+        MemoryBlobStore, MemoryMetadataStore, MetadataStore as _, Repository,
+    };
+
+    #[tokio::test]
+    async fn conditional_root_set_compares_only_the_scoped_workspace_name() {
+        let repository =
+            Repository::new(MemoryBlobStore::new(), MemoryMetadataStore::new().unwrap());
+        let session = repository.mutation_session().await.unwrap();
+        let object = session.stage_blob(b"build").await.unwrap();
+        let key = object.record().key().clone();
+        let raw_name = RootName::try_from("build/current").unwrap();
+        session
+            .publish_rooted(vec![object], raw_name.clone(), key.clone())
+            .await
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = Workspace::create_at(directory.path()).unwrap();
+        let command = || RootCommand::Set {
+            name: raw_name.to_string(),
+            target: key.to_string(),
+            retention: None,
+            if_target: None,
+            if_absent: true,
+        };
+        generic_root(&repository, command(), Some(&workspace))
+            .await
+            .unwrap();
+        let scoped = workspace.root_name(raw_name.as_str()).unwrap();
+        let before = repository.metadata().snapshot().await.unwrap();
+        assert_eq!(before.root(&raw_name).await.unwrap(), Some(key.clone()));
+        assert_eq!(before.root(&scoped).await.unwrap(), Some(key.clone()));
+        let error = generic_root(&repository, command(), Some(&workspace))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            crate::cli::stable_error_category(error.as_ref()),
+            casita::experimental::RepositoryErrorCategory::DestinationConflict
+        );
+        assert_eq!(
+            repository.metadata().snapshot().await.unwrap().revision(),
+            before.revision()
+        );
+    }
 }

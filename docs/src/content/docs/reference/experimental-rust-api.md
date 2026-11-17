@@ -142,6 +142,12 @@ resulting closure is complete and valid. Unrelated revision races can be
 retried; an observed root mismatch is returned as
 `ConditionalPublishResult::RootMismatch` without overwriting the changed name.
 
+`Repository::set_root_if_matches(name, target, expected, retention)` provides
+the same conditional publication for one existing target, with an optional
+retention-policy change in the same commit. `expected: None` requires absence;
+`retention: None` preserves the policy. An explicit policy requires a backend
+that supports root retention.
+
 `publish_closures` verifies staged or existing targets with normal format and
 link checks before atomically publishing records and requested witnesses.
 Staged-object and target counts are each limited by `max_batch_objects`.
