@@ -419,7 +419,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let unflushable = directory.path().join("missing/casita.sqlite");
         let barrier = crate::blob::deletion_barrier::DeletionBarrier::default();
-        barrier.order_after(crate::blob::CommitDurability::for_database(&unflushable).unwrap());
+        barrier.order_after(crate::blob::CommitDurability::new(&unflushable));
         let inner = Arc::new(object_store::memory::InMemory::new());
         let store = PinnedObjectStore::wrap(inner.clone(), PinBindings::default(), barrier);
         let path = Path::from("payload");

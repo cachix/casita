@@ -306,7 +306,8 @@ impl Error {
             | ErrorKind::ImmutableConflict
             | ErrorKind::DestinationConflict
             | ErrorKind::Unsupported
-            | ErrorKind::Corrupt => RetryDisposition::Never,
+            | ErrorKind::Corrupt
+            | ErrorKind::RestartRequired => RetryDisposition::Never,
             ErrorKind::Busy | ErrorKind::StaleRevision => RetryDisposition::Retry,
             _ => RetryDisposition::Unknown,
         };

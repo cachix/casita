@@ -26,6 +26,7 @@ CLI.
 | `Corrupt` | `corrupt` | Committed state violates a repository invariant |
 | `CollectedDuringRead` | `collected_during_read` | An unheld best-effort read raced collection of unrooted data |
 | `Backend` | `backend` | I/O, storage, state-engine, or other operational infrastructure failed |
+| `RestartRequired` | `restart_required` | This process lost its hold on the repository's durable state, for example because its database files were replaced; nothing it does can be durable until it restarts |
 
 The enum is non-exhaustive. Include a fallback arm when matching it.
 
@@ -45,6 +46,17 @@ return a non-exhaustive `RetryDisposition`:
 throttling, selected network I/O errors, and storage-full state may be
 retryable. Invalid identities, immutable conflicts, malformed input, and
 missing data normally are not.
+
+Two state conditions need the user rather than a retry loop, and are typed
+so an application can tell them apart from ordinary failures:
+
+| Condition | Category | Retry | What to do |
+|---|---|---|---|
+| `MetadataError::ForeignSqliteLock { path }` | `Busy` | `Retry` | A SQLite client such as `sqlite3` or a database browser holds a lock on the local database. Ask the user to close it; retries succeed once they do |
+| `MetadataError::DatabaseReplaced { path }` | `RestartRequired` | `Never` | The local database or write-ahead log was removed or replaced while the process had it open, found when it opened, committed or deleted a payload. Commits since are not durable, and every later operation of the process fails the same way, including reads of snapshots it already held. Restart every process using the repository |
+
+`RepositoryError` reports both as `RepositoryError::Metadata` even when a
+payload operation, such as a deletion, met them.
 
 A retry disposition does not make a non-idempotent application operation safe
 to repeat blindly. Observe the operation's commit result, root expectation, or

@@ -364,9 +364,63 @@ pub enum MetadataError {
     /// A temporary state-backend failure that may succeed after bounded retry.
     #[error("transient state backend failure: {0}")]
     Transient(String),
+    /// A SQLite client outside Casita, such as `sqlite3` or a database
+    /// browser, holds a lock on the local database. Casita cannot keep that
+    /// client from deleting the write-ahead log when it closes, so it neither
+    /// opens nor commits until the client closes. Retrying succeeds once it
+    /// has; tell the user to close it.
+    #[error(
+        "a SQLite client holds a lock on {path}; close it so Casita can continue \
+         (it could otherwise delete the write-ahead log Casita commits to)"
+    )]
+    ForeignSqliteLock {
+        /// The database file or WAL index the client locks.
+        path: std::path::PathBuf,
+    },
+    /// The local database or its write-ahead log was removed or replaced
+    /// while this process had it open, typically by a SQLite client that
+    /// deleted the log. Commits this process made since then are not durable,
+    /// and nothing it does can be until it restarts. Every later operation on
+    /// the handle fails the same way.
+    #[error(
+        "{path} was removed or replaced while this process had it open; commits \
+         since are not durable. Restart every process using this repository"
+    )]
+    DatabaseReplaced {
+        /// The file that is no longer the one this process opened.
+        path: std::path::PathBuf,
+    },
     /// A backend-specific failure.
     #[error("state backend failed: {0}")]
     Backend(String),
+}
+
+impl MetadataError {
+    /// Typed retry guidance for this logical-state failure.
+    pub fn retry_disposition(&self) -> crate::RetryDisposition {
+        use crate::RetryDisposition;
+
+        match self {
+            Self::Busy(_)
+            | Self::MaintenanceFenced
+            | Self::Transient(_)
+            | Self::StaleRevision { .. }
+            | Self::StorageFull
+            | Self::ForeignSqliteLock { .. } => RetryDisposition::Retry,
+            Self::Backend(_) | Self::Poisoned => RetryDisposition::Unknown,
+            Self::RootVerificationRequired
+            | Self::InvalidMetadata(_)
+            | Self::CheckFailed { .. }
+            | Self::UnsupportedMetadata
+            | Self::ImmutableConflict(_)
+            | Self::MissingObject { .. }
+            | Self::InvalidRetainedSet(_)
+            | Self::MixedCollectionMutation
+            | Self::Corruption(_)
+            | Self::RevisionEntropy(_)
+            | Self::DatabaseReplaced { .. } => RetryDisposition::Never,
+        }
+    }
 }
 
 /// Immutable, internally consistent logical-state view.
