@@ -288,16 +288,15 @@ async fn archive_wire_imports_enforce_limits_and_conflicts() {
     let mut client = BufReader::new(client);
     initialize(&mut client).await;
     let work = tempfile::tempdir().unwrap();
-    let mut builder = tokio_tar::Builder::new(Vec::new());
-    let mut header = tokio_tar::Header::new_ustar();
+    let mut builder = ::tar::Builder::new(Vec::new());
+    let mut header = ::tar::Header::new_ustar();
     header.set_size(7);
     header.set_mode(0o644);
     builder
         .append_data(&mut header, "hello", &b"content"[..])
-        .await
         .unwrap();
     let path = work.path().join("input.tar");
-    std::fs::write(&path, builder.into_inner().await.unwrap()).unwrap();
+    std::fs::write(&path, builder.into_inner().unwrap()).unwrap();
     let imported = call(
         &mut client,
         "artifact.import",
@@ -474,15 +473,14 @@ async fn unsupported_imports_are_classified_before_any_mutation() {
 }
 
 async fn tar_fixture() -> Vec<u8> {
-    let mut builder = tokio_tar::Builder::new(Vec::new());
-    let mut header = tokio_tar::Header::new_ustar();
+    let mut builder = ::tar::Builder::new(Vec::new());
+    let mut header = ::tar::Header::new_ustar();
     header.set_size(7);
     header.set_mode(0o755);
     builder
         .append_data(&mut header, "hello", &b"content"[..])
-        .await
         .unwrap();
-    builder.into_inner().await.unwrap()
+    builder.into_inner().unwrap()
 }
 
 async fn gzip_fixture(bytes: &[u8]) -> Vec<u8> {

@@ -146,10 +146,11 @@ For example:
 | `max_path_bytes` | 4096 | Bytes in one archive pathname |
 | `max_file_bytes` | 256 GiB (274877906944) | Logical bytes in one regular file |
 | `max_total_file_bytes` | 1 TiB (1099511627776) | Total logical regular-file bytes |
-| `max_sparse_expansion_bytes` | 256 GiB (274877906944) | Total materialized sparse holes |
+| `max_sparse_expansion_bytes` | 256 GiB (274877906944) | Reserved for compatibility; sparse files are rejected |
 
 The result includes the imported object and counts of consumed archive bytes,
-accepted entries by type, logical file bytes, and materialized sparse holes.
+accepted entries by type, and logical file bytes. `sparse_expansion_bytes` is
+always zero because sparse files are rejected.
 
 ### Casitar
 

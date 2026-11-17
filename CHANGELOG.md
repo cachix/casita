@@ -121,6 +121,14 @@ and will use [Semantic Versioning](https://semver.org/) for tagged releases.
 
 ### Changed
 
+- Tar and OCI filesystem imports use `tar-codec` instead of `astral-tokio-tar`.
+  The decoder requires UTF-8 paths and link targets and rejects legacy v7,
+  mixed POSIX/GNU framing, sparse files, and unknown PAX vendor extensions.
+  Any execute bit marks a regular file executable. Sparse expansion limits
+  remain available for compatibility, and reported sparse expansion is zero.
+  The experimental `TarImportError::UnsupportedEntry` now carries
+  `tar_codec::SpecialKind`.
+
 - Bounded metadata reads during verification size their scratch buffer from
   the payload's length hint instead of always allocating 64 KiB.
 - Chunk hashing batches up to four chunks and 1 MiB per blocking job;

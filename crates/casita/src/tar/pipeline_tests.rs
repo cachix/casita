@@ -411,8 +411,8 @@ async fn streaming_and_finalization_share_a_tiny_chunk_budget_without_deadlock()
 }
 
 #[tokio::test]
-async fn forward_hardlinks_and_old_gnu_sparse_entries_keep_their_meaning() {
-    use tokio_tar::{Builder, Header};
+async fn forward_hardlinks_keep_their_meaning() {
+    use ::tar::{Builder, EntryType, Header};
     let mut builder = Builder::new(Vec::new());
     for (path, target) in [("copy", "alias"), ("alias", "file")] {
         let mut header = Header::new_ustar();
@@ -421,37 +421,21 @@ async fn forward_hardlinks_and_old_gnu_sparse_entries_keep_their_meaning() {
         header.set_link_name(target).unwrap();
         header.set_size(0);
         header.set_cksum();
-        builder.append(&header, &[][..]).await.unwrap();
+        builder.append(&header, &[][..]).unwrap();
     }
     let mut header = Header::new_ustar();
     header.set_size(5);
     header.set_mode(0o755);
     builder
         .append_data(&mut header, "file", &b"hello"[..])
-        .await
         .unwrap();
 
-    // One stored byte after a 4096-byte hole, with no extraction fixture.
-    let mut header = Header::new_gnu();
-    header.set_entry_type(EntryType::GNUSparse);
-    header.set_path("sparse").unwrap();
-    header.set_mode(0o644);
-    header.set_size(1);
-    let gnu = header.as_gnu_mut().unwrap();
-    gnu.realsize.copy_from_slice(b"00000010001\0");
-    gnu.sparse[0].offset.copy_from_slice(b"00000010000\0");
-    gnu.sparse[0].numbytes.copy_from_slice(b"00000000001\0");
-    header.set_cksum();
-    builder.append(&header, &b"x"[..]).await.unwrap();
-    let input = builder.into_inner().await.unwrap();
-    let mut sparse = vec![0; 4096];
-    sparse.push(b'x');
+    let input = builder.into_inner().unwrap();
     let mut expected = Directory::new();
     for (path, bytes, executable) in [
         ("copy", b"hello".as_slice(), true),
         ("alias", b"hello".as_slice(), true),
         ("file", b"hello".as_slice(), true),
-        ("sparse", sparse.as_slice(), false),
     ] {
         expected
             .add(
@@ -469,7 +453,7 @@ async fn forward_hardlinks_and_old_gnu_sparse_entries_keep_their_meaning() {
         let report = repository
             .import_tar(
                 std::io::Cursor::new(&input),
-                RootName::try_from("tar/links-and-sparse").unwrap(),
+                RootName::try_from("tar/forward-links").unwrap(),
                 TarImportLimits {
                     max_in_flight_files: concurrency,
                     ..Default::default()
@@ -485,35 +469,48 @@ async fn forward_hardlinks_and_old_gnu_sparse_entries_keep_their_meaning() {
                 report.file_bytes,
                 report.sparse_expansion_bytes
             ),
-            (2, 2, 4102, 4096)
+            (1, 2, 5, 0)
         );
-        assert_eq!(
-            repository
-                .payloads()
-                .read_to_vec(&BlobId::new(blake3::hash(&sparse).into()))
-                .await
-                .unwrap()
-                .unwrap(),
-            sparse
-        );
-        let error = repository
-            .import_tar(
-                std::io::Cursor::new(&input),
-                RootName::try_from("tar/sparse-limit").unwrap(),
-                TarImportLimits {
-                    max_in_flight_files: concurrency,
-                    max_sparse_expansion_bytes: 4095,
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            TarImportError::LimitExceeded {
-                field: "sparse expansion bytes",
-                ..
-            }
-        ));
     }
+}
+
+#[tokio::test]
+async fn old_gnu_sparse_entries_are_rejected_without_publishing_a_root() {
+    use ::tar::{Builder, EntryType, Header};
+    let mut builder = Builder::new(Vec::new());
+    // One stored byte after a 4096-byte hole, with no extraction fixture.
+    let mut header = Header::new_gnu();
+    header.set_entry_type(EntryType::GNUSparse);
+    header.set_path("sparse").unwrap();
+    header.set_mode(0o644);
+    header.set_size(1);
+    let gnu = header.as_gnu_mut().unwrap();
+    gnu.realsize.copy_from_slice(b"00000010001\0");
+    gnu.sparse[0].offset.copy_from_slice(b"00000010000\0");
+    gnu.sparse[0].numbytes.copy_from_slice(b"00000000001\0");
+    header.set_cksum();
+    builder.append(&header, &b"x"[..]).unwrap();
+    let input = builder.into_inner().unwrap();
+    let repository = Repository::memory().unwrap();
+    let name = RootName::try_from("tar/sparse").unwrap();
+    let error = repository
+        .import_tar(
+            std::io::Cursor::new(input),
+            name.clone(),
+            TarImportLimits::default(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, TarImportError::Tar(_)), "{error}");
+    assert!(
+        repository
+            .metadata()
+            .snapshot()
+            .await
+            .unwrap()
+            .root(&name)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

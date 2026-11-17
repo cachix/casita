@@ -291,15 +291,14 @@ async fn detects_filesystem_git_tar_and_casitar_inputs() {
     );
 
     let tar = temp.path().join("archive.tar");
-    let mut archive = tokio_tar::Builder::new(Vec::new());
-    let mut header = tokio_tar::Header::new_ustar();
+    let mut archive = ::tar::Builder::new(Vec::new());
+    let mut header = ::tar::Header::new_ustar();
     header.set_size(0);
     header.set_mode(0o644);
     archive
-        .append_data(&mut header, "empty", tokio::io::empty())
-        .await
+        .append_data(&mut header, "empty", std::io::empty())
         .unwrap();
-    std::fs::write(&tar, archive.into_inner().await.unwrap()).unwrap();
+    std::fs::write(&tar, archive.into_inner().unwrap()).unwrap();
     assert_eq!(
         commands::detect_importer(&tar).await.unwrap(),
         ImporterKind::Tar
@@ -837,15 +836,14 @@ async fn tar_cli_import_publishes_a_complete_evictable_root() {
     let temp = tempfile::tempdir().unwrap();
     let repository_dir = temp.path().join("repository");
     let archive_path = temp.path().join("release.tar");
-    let mut archive = tokio_tar::Builder::new(Vec::new());
-    let mut header = tokio_tar::Header::new_ustar();
+    let mut archive = ::tar::Builder::new(Vec::new());
+    let mut header = ::tar::Header::new_ustar();
     header.set_size(5);
     header.set_mode(0o644);
     archive
         .append_data(&mut header, "README", b"hello".as_slice())
-        .await
         .unwrap();
-    std::fs::write(&archive_path, archive.into_inner().await.unwrap()).unwrap();
+    std::fs::write(&archive_path, archive.into_inner().unwrap()).unwrap();
 
     commands::run(
         Cli::try_parse_from([

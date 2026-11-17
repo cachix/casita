@@ -5,9 +5,11 @@ description: Stream a tar archive directly into a verified canonical filesystem 
 
 The tar importer creates the same canonical filesystem object model as a
 filesystem import, without extracting untrusted paths to disk first. It accepts
-regular files, directories, symlinks, hard links, and old-GNU sparse files.
-PAX GNU sparse members are rejected because their logical expansion is not yet
-available in the underlying async tar reader.
+regular files, directories, symlinks, and hard links in POSIX ustar/pax or GNU
+archives. The `tar-codec` decoder requires UTF-8 paths and link targets and rejects
+legacy v7 archives, streams mixing POSIX and GNU framing, and sparse files.
+Other extensions follow `tar-codec`'s default decode policy, which rejects unknown
+PAX vendor extensions. Any execute bit marks a regular file executable.
 
 ## CLI
 
@@ -24,11 +26,12 @@ $ gzip -cd release.tar.gz | casita --repository ./cache import -i tar - \
 ```
 
 The command defaults to the same finite archive, entry, pathname, file-byte,
-total-file-byte, and sparse-expansion limits as `TarImportLimits`. Override
+and total-file-byte limits as `TarImportLimits`. Override
 them with `--tar-max-archive-bytes`, `--tar-max-entries`,
 `--tar-max-path-bytes`, `--tar-max-file-bytes`,
-`--tar-max-total-file-bytes`, and `--tar-max-sparse-expansion-bytes` for a
-stricter deployment policy.
+and `--tar-max-total-file-bytes` for a stricter deployment policy.
+`--tar-max-sparse-expansion-bytes` remains available for compatibility; sparse
+files are rejected regardless of its value.
 
 File finalization is pipelined while the next tar body is read. At most 16
 files are being copied, queued, finalized, or verified at once. Set
@@ -64,6 +67,6 @@ println!("{} entries in {}", report.entries, report.root);
 ```
 
 `TarImportLimits` bounds archive bytes, entries, one file, total file bytes,
-sparse expansion, and in-flight files (`max_in_flight_files`, default 16).
+and in-flight files (`max_in_flight_files`, default 16).
 Set lower deployment-specific limits before accepting
 untrusted archives.

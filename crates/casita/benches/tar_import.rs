@@ -3,6 +3,7 @@
 
 mod bench_util;
 
+use ::tar::{Builder, Header};
 use casita::{
     experimental::{
         BlobId, BlobStore, DEFAULT_AVG_CHUNK_SIZE, Directory, MemoryMetadataStore, MetadataStore,
@@ -13,7 +14,6 @@ use casita::{
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::io::Cursor;
 use std::time::{Duration, Instant};
-use tokio_tar::{Builder, Header};
 
 struct Fixture {
     archive: Vec<u8>,
@@ -34,7 +34,6 @@ async fn fixture(sizes: &[usize]) -> Fixture {
         header.set_mode(if executable { 0o755 } else { 0o644 });
         builder
             .append_data(&mut header, &path, bytes.as_slice())
-            .await
             .unwrap();
         directory
             .add(
@@ -49,7 +48,7 @@ async fn fixture(sizes: &[usize]) -> Fixture {
         files.push(bytes);
     }
     Fixture {
-        archive: builder.into_inner().await.unwrap(),
+        archive: builder.into_inner().unwrap(),
         files,
         root: ObjectKey::directory(directory.digest()),
     }
