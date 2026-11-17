@@ -1,9 +1,14 @@
 //! Operation-owned pins and write lifetimes. Durable acquisition and storage
 //! requests run to completion even when their receiving caller is cancelled.
 
+#[cfg(test)]
+#[path = "runtime/collector_regression_tests.rs"]
+mod collector_regression_tests;
+
 use super::*;
 use crate::metadata::{run_lease_task, spawn_lease_task};
 use futures::FutureExt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, Weak};
 use tracing::Instrument;
 
@@ -72,6 +77,7 @@ impl Drop for OwnedPin {
 pub(crate) struct CollectorLease {
     store: Arc<dyn PinStore>,
     token: PinToken,
+    finished: AtomicBool,
 }
 
 impl CollectorLease {
@@ -83,10 +89,13 @@ impl CollectorLease {
         previous: Option<PinToken>,
     ) -> Result<Option<Self>, MetadataError> {
         run_lease_task("collector admission", |send| async move {
-            let result = store
-                .acquire_collection(previous)
-                .await
-                .map(|token| token.map(|token| Self { store, token }));
+            let result = store.acquire_collection(previous).await.map(|token| {
+                token.map(|token| Self {
+                    store,
+                    token,
+                    finished: AtomicBool::new(false),
+                })
+            });
             drop(send.send(result));
             Ok(())
         })
@@ -94,7 +103,9 @@ impl CollectorLease {
     }
 
     pub(crate) async fn finish(&self) -> Result<(), MetadataError> {
-        self.store.finish_collection(&self.token).await
+        self.store.finish_collection(&self.token).await?;
+        self.finished.store(true, Ordering::Release);
+        Ok(())
     }
 }
 
@@ -151,6 +162,11 @@ impl PinStore for PruningPinStore {
 
 impl Drop for CollectorLease {
     fn drop(&mut self) {
+        // Acknowledged completion has already retired this exact token. Keep
+        // recovery enabled if finish failed or was cancelled before its reply.
+        if self.finished.load(Ordering::Acquire) {
+            return;
+        }
         let store = self.store.clone();
         let token = self.token.clone();
         queue_release(async move {
