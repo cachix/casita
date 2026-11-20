@@ -135,8 +135,22 @@ jobs:
           cargo test --no-default-features
           cargo test --no-default-features --features experimental
           python3 -m unittest discover -s benchmarks -p 'test_*.py'
+
+  # Build the default CLI on its own runner so the benchmark smoke checks
+  # don't compete for disk with the all-features and default test artifacts.
+  benchmark-smoke:
+    name: benchmark smoke (x86_64-linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+      - name: Install devenv
+        run: nix profile add nixpkgs#devenv
       - name: Smoke-test end-to-end benchmark adapters
-        if: runner.os == 'Linux'
         shell: devenv shell bash -- -euo pipefail {0}
         run: |
           cargo build --bin casita
@@ -156,7 +170,7 @@ jobs:
           benchmark run fault-and-recovery --casita-bin target/debug/casita --repetitions 1 \
             --output "$RUNNER_TEMP/casita-recovery-smoke.json"
       - name: Keep benchmark smoke outputs
-        if: failure() && runner.os == 'Linux'
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-smoke-${{ github.run_id }}
