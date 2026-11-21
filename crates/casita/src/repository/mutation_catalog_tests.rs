@@ -88,12 +88,30 @@ struct CatalogState {
     inner: MemoryMetadataStore,
     pins: Arc<FilePinStore>,
     gate: Option<Arc<CommitGate>>,
+    snapshot_gate: Option<Arc<SnapshotGate>>,
+    coordinate_catalog: bool,
 }
 
 #[derive(Default)]
 struct CommitGate {
     entered: tokio::sync::Notify,
     resume: tokio::sync::Notify,
+}
+
+struct SnapshotGate {
+    pause: std::sync::atomic::AtomicBool,
+    entered: tokio::sync::Notify,
+    resume: tokio::sync::Notify,
+}
+
+impl SnapshotGate {
+    fn new() -> Self {
+        Self {
+            pause: std::sync::atomic::AtomicBool::new(true),
+            entered: tokio::sync::Notify::new(),
+            resume: tokio::sync::Notify::new(),
+        }
+    }
 }
 #[async_trait]
 impl MetadataStore for CatalogState {
@@ -103,10 +121,17 @@ impl MetadataStore for CatalogState {
         self.inner.try_collection_lease().await
     }
     fn coordinates_payload_catalog(&self) -> bool {
-        self.inner.coordinates_payload_catalog()
+        self.coordinate_catalog
     }
     async fn snapshot(&self) -> Result<Arc<dyn MetadataSnapshot>, MetadataError> {
-        self.inner.snapshot().await
+        let snapshot = self.inner.snapshot().await?;
+        if let Some(gate) = &self.snapshot_gate
+            && gate.pause.swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            gate.entered.notify_one();
+            gate.resume.notified().await;
+        }
+        Ok(snapshot)
     }
     async fn commit(
         &self,
@@ -131,6 +156,8 @@ async fn catalog_boundary(count: usize) -> (u64, usize) {
         inner: MemoryMetadataStore::new().unwrap(),
         pins: pins.clone(),
         gate: None,
+        snapshot_gate: None,
+        coordinate_catalog: false,
     };
     let repository = Repository::new(MemoryBlobStore::new(), state);
     let session = repository.mutation_session().await.unwrap();
@@ -192,6 +219,8 @@ async fn cancelled_publisher_retains_catalog_until_commit_settles() {
             inner,
             pins: pins.clone(),
             gate: Some(gate.clone()),
+            snapshot_gate: None,
+            coordinate_catalog: false,
         },
     ));
     let mut publisher = {
@@ -238,6 +267,148 @@ async fn catalog_history_crosses_former_inventory_limit() {
     for count in [63, 65] {
         catalog_boundary(count).await;
     }
+}
+
+#[tokio::test]
+async fn catalog_rotation_during_initial_pin_admission_is_rechecked() {
+    let directory = tempfile::tempdir().unwrap();
+    let pins = Arc::new(FilePinStore::new(directory.path().join("pins")));
+    let inner = MemoryMetadataStore::new().unwrap();
+    let first = vec![1; 56];
+    let second = vec![2; 56];
+    let revision = inner.snapshot().await.unwrap().revision();
+    let mut mutation = MetadataMutation::new();
+    mutation.set_payload_catalog(first.clone());
+    inner.commit(&revision, mutation).await.unwrap();
+    let gate = Arc::new(SnapshotGate::new());
+    let repository = Arc::new(Repository::new(
+        MemoryBlobStore::new(),
+        CatalogState {
+            inner,
+            pins: pins.clone(),
+            gate: None,
+            snapshot_gate: Some(gate.clone()),
+            coordinate_catalog: true,
+        },
+    ));
+    let writer = {
+        let repository = repository.clone();
+        tokio::spawn(async move {
+            let session = repository.mutation_session().await.unwrap();
+            let inventory = pins.inventory().await.unwrap();
+            let pin = inventory.pins.get(session.pin.token()).unwrap();
+            assert!(pin.resources.contains(&PinResource::Catalog(first)));
+            assert!(pin.resources.contains(&PinResource::Catalog(second)));
+        })
+    };
+    gate.entered.notified().await;
+    let revision = repository.state.inner.snapshot().await.unwrap().revision();
+    let mut mutation = MetadataMutation::new();
+    mutation.set_payload_catalog(vec![2; 56]);
+    repository
+        .state
+        .inner
+        .commit(&revision, mutation)
+        .await
+        .unwrap();
+    gate.resume.notify_one();
+    writer.await.unwrap();
+    crate::metadata::flush_repository_leases().await.unwrap();
+    assert!(
+        repository
+            .state
+            .pins
+            .inventory()
+            .await
+            .unwrap()
+            .pins
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+#[ignore = "permanent mutation-pin-admission benchmark"]
+async fn benchmark_mutation_pin_admission() {
+    let bytes: usize = std::env::var("CASITA_BENCH_PIN_CATALOG_BYTES")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let iterations: usize = std::env::var("CASITA_BENCH_PIN_ITERATIONS")
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(iterations > 0);
+    let directory = tempfile::tempdir().unwrap();
+    let pins = Arc::new(FilePinStore::new(directory.path().join("pins")));
+    let inner = MemoryMetadataStore::new().unwrap();
+    let catalog = vec![7; bytes];
+    if bytes > 0 {
+        let revision = inner.snapshot().await.unwrap().revision();
+        let mut mutation = MetadataMutation::new();
+        mutation.set_payload_catalog(catalog.clone());
+        inner.commit(&revision, mutation).await.unwrap();
+    }
+    let repository = Repository::new(
+        MemoryBlobStore::new(),
+        CatalogState {
+            inner,
+            pins: pins.clone(),
+            gate: None,
+            snapshot_gate: None,
+            coordinate_catalog: true,
+        },
+    );
+    pins.inventory().await.unwrap();
+    let warmup = repository.mutation_session().await.unwrap();
+    drop(warmup);
+    crate::metadata::flush_repository_leases().await.unwrap();
+    assert!(pins.inventory().await.unwrap().pins.is_empty());
+    let mut nanos = 0_u128;
+    let mut journal_syncs = 0_u64;
+    let mut admission_operations = 0_u64;
+    for _ in 0..iterations {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let before = pins.test_stats();
+        let start = std::time::Instant::now();
+        let session = repository.mutation_session().await.unwrap();
+        nanos += start.elapsed().as_nanos();
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let after = pins.test_stats();
+            journal_syncs += after["journal_syncs"] - before["journal_syncs"];
+            admission_operations += after["operations"] - before["operations"];
+        }
+        let inventory = pins.inventory().await.unwrap();
+        let pin = inventory.pins.get(session.pin.token()).unwrap();
+        assert_eq!(
+            pin.resources
+                .contains(&PinResource::Catalog(catalog.clone())),
+            bytes > 0
+        );
+        drop(session);
+        crate::metadata::flush_repository_leases().await.unwrap();
+        assert!(pins.inventory().await.unwrap().pins.is_empty());
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        assert_eq!(admission_operations, iterations as u64);
+        assert!(journal_syncs >= iterations as u64);
+        assert!(journal_syncs <= 2 * iterations as u64);
+        if bytes <= 56 {
+            assert_eq!(journal_syncs, iterations as u64);
+        }
+    }
+    println!(
+        "mutation_pin_admission_sample {}",
+        serde_json::json!({
+            "catalog_bytes": bytes,
+            "iterations": iterations,
+            "nanos": nanos,
+            "journal_syncs": journal_syncs,
+            "admission_operations": admission_operations,
+            "correctness": "current catalog protected and empty released inventory"
+        })
+    );
 }
 
 #[tokio::test]
