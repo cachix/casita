@@ -64,7 +64,9 @@ the exact token with process logs before deciding it is abandoned.
 ## Recover an abandoned hold
 
 Holds have no TTL. A paused process can still resume and read or publish data,
-so elapsed time is never sufficient evidence that its hold is abandoned.
+so elapsed time is never sufficient evidence that its hold is abandoned. The
+[reliability contract](../../reference/reliability/) states this as clause C6,
+with the tests that check it and its current limits.
 
 1. Terminate the owning runner and prevent it from resuming. For an interrupted
    exclusive collector, stop every runner and allow outstanding backend requests
@@ -114,3 +116,8 @@ collector ownership and can run alongside ordinary readers and writers.
 Choose a grace period longer than the longest manifest-to-fragment metadata
 read. Pins protect files in use; unsettled deletion claims prevent path reuse
 until recovery. A failed collection retains its token for recovery.
+
+Unlike payload collection, WAL collection relies on the grace period for
+safety: nothing verifies that readers are gone before it deletes. The
+[reliability contract](../../reference/reliability/) tracks this as a known
+limit of clause C5.
